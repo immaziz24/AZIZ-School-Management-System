@@ -1,0 +1,17 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // schools/{schoolId}: name (string).
+    // schools/{schoolId}/members/{uid}: role (string), active (boolean).
+    // Memberships are provisioned by an administrator.
+    function isSchoolOwner(schoolId) {
+      let membership = get(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid));
+      return membership.data.active == true && membership.data.role == 'owner';
+    }
+
+    match /schools/{schoolId} {
+      allow get: if request.auth != null && isSchoolOwner(schoolId);
+    }
+  }
+}
