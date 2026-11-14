@@ -1,0 +1,73 @@
+:root {
+  font-family: "Segoe UI", sans-serif;
+  color: #14243d;
+  background: #14243d;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  margin: 0;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+main {
+  box-sizing: border-box;
+  width: min(100%, 460px);
+  padding: clamp(24px, 6vw, 48px);
+  border-top: 5px solid #b18a49;
+  border-radius: 12px;
+  background: #fffaf0;
+  box-shadow: 0 24px 60px #0004;
+}
+
+h1 {
+  margin: 0;
+  font: 700 clamp(28px, 5vw, 38px)/1.15 Georgia, serif;
+}
+
+#firebase-status {
+  margin: 16px 0 24px;
+  color: #4d5868;
+  overflow-wrap: anywhere;
+}
+
+label {
+  display: grid;
+  gap: 8px;
+  font-weight: 600;
+}
+
+input, button {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px;
+  border-radius: 6px;
+  font: inherit;
+}
+
+input {
+  border: 1px solid #828792;
+  background: #fff;
+  color: inherit;
+}
+
+button {
+  border: 1px solid #14243d;
+  background: #14243d;
+  color: #fffaf0;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: .65;
+  cursor: wait;
+}
+
+:focus-visible {
+  outline: 3px solid #8a6328;
+  outline-offset: 3px;
+}
