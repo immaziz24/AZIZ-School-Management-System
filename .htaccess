@@ -1,3 +1,5 @@
 AddType text/javascript .mjs
 RewriteEngine On
-RewriteRule ^$ public/ [R=302,L]
+RewriteRule ^public/?$ / [R=302,L]
+RewriteRule ^$ public/index.html [L]
+RewriteRule ^(sign-in\.css|sign-in\.mjs|firebase-client\.mjs)$ public/$1 [L]
