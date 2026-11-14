@@ -37,6 +37,18 @@ onAuthStateChanged(auth, async (user) => {
     schoolStatus.textContent = school.exists()
       ? 'School access confirmed: ' + school.data().name
       : 'The demo school record was not found.';
+    if (!school.exists()) return;
+
+    let isolationStatus;
+    try {
+      await getDocFromServer(doc(getFirestore(app), 'schools', 'second-demo-school'));
+      isolationStatus = 'Other school access check failed: Firestore allowed the read request.';
+    } catch (error) {
+      isolationStatus = error.code === 'permission-denied'
+        ? 'Other school access blocked by Firestore.'
+        : 'Other school access could not be checked.';
+    }
+    if (request === schoolRequest) schoolStatus.textContent += ' ' + isolationStatus;
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'
@@ -72,4 +84,3 @@ signOutButton.addEventListener('click', async () => {
     signOutButton.disabled = false;
   }
 });
-
