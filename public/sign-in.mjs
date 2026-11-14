@@ -15,10 +15,17 @@ const schoolStatus = document.createElement('p');
 schoolStatus.setAttribute('role', 'status');
 schoolStatus.hidden = true;
 signOutButton.before(schoolStatus);
+const dashboard = document.querySelector('#owner-dashboard');
+const schoolName = document.querySelector('#school-name');
+const ownerEmail = document.querySelector('#owner-email');
 let schoolRequest = 0;
 
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
+  dashboard.hidden = true;
+  schoolName.textContent = '';
+  ownerEmail.textContent = '';
+  status.hidden = false;
   form.hidden = Boolean(user);
   signOutButton.hidden = !user;
   status.textContent = user ? 'Signed in as ' + user.email : 'Sign in with your AZIZ account.';
@@ -34,21 +41,15 @@ onAuthStateChanged(auth, async (user) => {
     if (request !== schoolRequest) return;
     const school = await getDocFromServer(doc(getFirestore(app), 'schools', 'abcd-school'));
     if (request !== schoolRequest) return;
-    schoolStatus.textContent = school.exists()
-      ? 'School access confirmed: ' + school.data().name
-      : 'The demo school record was not found.';
-    if (!school.exists()) return;
-
-    let isolationStatus;
-    try {
-      await getDocFromServer(doc(getFirestore(app), 'schools', 'second-demo-school'));
-      isolationStatus = 'Other school access check failed: Firestore allowed the read request.';
-    } catch (error) {
-      isolationStatus = error.code === 'permission-denied'
-        ? 'Other school access blocked by Firestore.'
-        : 'Other school access could not be checked.';
+    if (!school.exists()) {
+      schoolStatus.textContent = 'The school record was not found.';
+      return;
     }
-    if (request === schoolRequest) schoolStatus.textContent += ' ' + isolationStatus;
+    schoolName.textContent = school.data().name;
+    ownerEmail.textContent = user.email;
+    dashboard.hidden = false;
+    status.hidden = true;
+    schoolStatus.hidden = true;
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'
@@ -84,3 +85,4 @@ signOutButton.addEventListener('click', async () => {
     signOutButton.disabled = false;
   }
 });
+
