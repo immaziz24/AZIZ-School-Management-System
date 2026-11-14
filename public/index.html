@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AZIZ School Management System</title>
+  <link rel="stylesheet" href="./sign-in.css">
+</head>
+<body>
+  <main>
+    <h1>AZIZ School Management System</h1>
+    <p id="firebase-status" role="status">Loading sign-in.</p>
+    <form id="sign-in" hidden>
+      <p><label>Email <input name="email" type="email" autocomplete="username" required></label></p>
+      <p><label>Password <input name="password" type="password" autocomplete="current-password" required></label></p>
+      <button type="submit">Sign in</button>
+    </form>
+    <button id="sign-out" type="button" hidden>Sign out</button>
+  </main>
+  <script type="module">
+    const status = document.querySelector('#firebase-status');
+    try {
+      await import('./sign-in.mjs');
+    } catch (error) {
+      status.textContent = 'Sign-in could not load. Refresh to try again.';
+      console.error(error);
+    }
+  </script>
+</body>
+</html>
