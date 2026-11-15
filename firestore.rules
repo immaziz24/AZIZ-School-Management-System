@@ -16,6 +16,24 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['name', 'contactEmail', 'phone', 'address'])
         && validProfile(request.resource.data);
+
+      // Staff profiles contain contact and job details only.
+      match /staff/{staffId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && validStaff(request.resource.data);
+      }
+    }
+
+    function validStaff(staff) {
+      return staff.keys().hasAll(['name', 'position', 'email'])
+        && staff.keys().hasOnly(['name', 'position', 'email'])
+        && staff.name is string && staff.name.size() <= 120
+        && staff.name.matches('.*[^[:space:]].*')
+        && staff.position is string && staff.position.size() <= 80
+        && staff.position.matches('.*[^[:space:]].*')
+        && staff.email is string && staff.email.size() <= 254
+        && (staff.email == '' || staff.email.matches('[^@[:space:]]+@[^@[:space:]]+'));
     }
 
     function validProfile(profile) {

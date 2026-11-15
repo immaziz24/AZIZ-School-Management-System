@@ -32,6 +32,16 @@
         <button type="submit">Save profile</button>
         <p id="profile-status" role="status"></p>
       </form>
+      <h3>Staff Directory</h3>
+      <p id="staff-status" role="status"></p>
+      <ul id="staff-list"></ul>
+      <form id="staff-form" hidden>
+        <p><label>Staff name <input name="name" required maxlength="120"></label></p>
+        <p><label>Job title <input name="position" required maxlength="80"></label></p>
+        <p><label>Work email <input name="email" type="email" maxlength="254"></label></p>
+        <button type="submit">Add staff member</button>
+        <p><button type="reset" hidden>Cancel edit</button></p>
+      </form>
     </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>

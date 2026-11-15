@@ -24,10 +24,90 @@ const saveProfile = profileForm.querySelector('button');
 const profileFields = ['name', 'contactEmail', 'phone', 'address'];
 let saveSchoolProfile;
 let schoolRequest = 0;
+const staffForm = document.querySelector('#staff-form');
+const staffStatus = document.querySelector('#staff-status');
+const staffList = document.querySelector('#staff-list');
+const staffSave = staffForm.querySelector('[type="submit"]');
+const staffCancel = staffForm.querySelector('[type="reset"]');
+const staffFields = ['name', 'position', 'email'];
+let staffDirectory;
+let staffEditingId;
+
+staffForm.addEventListener('reset', () => {
+  staffEditingId = undefined;
+  staffSave.textContent = 'Add staff member';
+  staffCancel.hidden = true;
+});
+
+async function loadStaff(directory, request) {
+  try {
+    const records = await directory.list();
+    if (request !== schoolRequest) return;
+    staffList.replaceChildren();
+    for (const record of records.docs) {
+      const profile = record.data();
+      const row = document.createElement('li');
+      row.textContent = profile.name + ' - ' + profile.position + ' ';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.textContent = 'Edit ' + profile.name;
+      edit.addEventListener('click', () => {
+        if (staffSave.disabled) return;
+        staffEditingId = record.id;
+        for (const field of staffFields) {
+          staffForm.elements.namedItem(field).value = profile[field];
+        }
+        staffSave.textContent = 'Save staff profile';
+        staffCancel.hidden = false;
+        staffForm.elements.namedItem('name').focus();
+      });
+      row.append(edit);
+      staffList.append(row);
+    }
+    staffForm.hidden = false;
+    staffStatus.textContent = records.empty ? 'No staff profiles yet.' : '';
+  } catch {
+    if (request === schoolRequest) staffStatus.textContent = 'Could not load staff profiles.';
+  }
+}
+
+staffForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!staffDirectory || staffSave.disabled) return;
+  const request = schoolRequest;
+  const directory = staffDirectory;
+  const fields = new FormData(staffForm);
+  const profile = Object.fromEntries(staffFields.map((field) => [field, fields.get(field).trim()]));
+  if (!profile.name || !profile.position) {
+    staffStatus.textContent = 'Enter a staff name and job title.';
+    return;
+  }
+  staffSave.disabled = staffCancel.disabled = true;
+  staffStatus.textContent = 'Saving staff profile.';
+  try {
+    await directory.save(staffEditingId, profile);
+    if (request !== schoolRequest) return;
+    staffForm.reset();
+    await loadStaff(directory, request);
+    if (request === schoolRequest) {
+      staffStatus.textContent = 'Staff profile saved. ' + staffStatus.textContent;
+    }
+  } catch {
+    if (request === schoolRequest) staffStatus.textContent = 'Could not save the staff profile.';
+  } finally {
+    if (request === schoolRequest) staffSave.disabled = staffCancel.disabled = false;
+  }
+});
 
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   dashboard.hidden = true;
+  staffDirectory = undefined;
+  staffForm.reset();
+  staffForm.hidden = true;
+  staffSave.disabled = staffCancel.disabled = false;
+  staffList.replaceChildren();
+  staffStatus.textContent = '';
   saveSchoolProfile = undefined;
   profileForm.reset();
   profileStatus.textContent = '';
@@ -44,7 +124,7 @@ onAuthStateChanged(auth, async (user) => {
 
   schoolStatus.textContent = 'Checking school access.';
   try {
-    const { doc, getDocFromServer, getFirestore, updateDoc } = await import(
+    const { addDoc, collection, doc, getDocFromServer, getDocsFromServer, getFirestore, updateDoc } = await import(
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
@@ -64,6 +144,13 @@ onAuthStateChanged(auth, async (user) => {
     dashboard.hidden = false;
     status.hidden = true;
     schoolStatus.hidden = true;
+    const staff = collection(schoolRef, 'staff');
+    staffDirectory = {
+      list: () => getDocsFromServer(staff),
+      save: (id, profile) => id ? updateDoc(doc(staff, id), profile) : addDoc(staff, profile),
+    };
+    staffStatus.textContent = 'Loading staff profiles.';
+    await loadStaff(staffDirectory, request);
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'
