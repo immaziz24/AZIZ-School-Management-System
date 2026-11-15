@@ -16,6 +16,8 @@ schoolStatus.setAttribute('role', 'status');
 schoolStatus.hidden = true;
 signOutButton.before(schoolStatus);
 const dashboard = document.querySelector('#owner-dashboard');
+const teacherDashboard = document.querySelector('#teacher-dashboard');
+const teacherEmail = document.querySelector('#teacher-email');
 const schoolName = document.querySelector('#school-name');
 const ownerEmail = document.querySelector('#owner-email');
 const profileForm = document.querySelector('#school-profile');
@@ -102,6 +104,8 @@ staffForm.addEventListener('submit', async (event) => {
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   dashboard.hidden = true;
+  teacherDashboard.hidden = true;
+  teacherEmail.textContent = '';
   staffDirectory = undefined;
   staffForm.reset();
   staffForm.hidden = true;
@@ -129,6 +133,15 @@ onAuthStateChanged(auth, async (user) => {
     );
     if (request !== schoolRequest) return;
     const schoolRef = doc(getFirestore(app), 'schools', 'abcd-school');
+    const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
+    if (request !== schoolRequest) return;
+    if (membership.data()?.active === true && membership.data().role === 'teacher') {
+      teacherEmail.textContent = user.email;
+      teacherDashboard.hidden = false;
+      status.hidden = true;
+      schoolStatus.hidden = true;
+      return;
+    }
     const school = await getDocFromServer(schoolRef);
     if (request !== schoolRequest) return;
     if (!school.exists()) {

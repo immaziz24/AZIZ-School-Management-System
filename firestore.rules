@@ -18,6 +18,10 @@ service cloud.firestore {
         && validProfile(request.resource.data);
 
       // Staff profiles contain contact and job details only.
+      match /members/{uid} {
+        allow get: if request.auth != null && request.auth.uid == uid;
+      }
+
       match /staff/{staffId} {
         allow get, list: if request.auth != null && isSchoolOwner(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
