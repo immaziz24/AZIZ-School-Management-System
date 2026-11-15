@@ -23,6 +23,15 @@
         <dt>Signed-in account</dt>
         <dd id="owner-email"></dd>
       </dl>
+      <h3>School Profile</h3>
+      <form id="school-profile">
+        <p><label>School name <input name="name" required maxlength="120"></label></p>
+        <p><label>Contact email <input name="contactEmail" type="email" maxlength="254"></label></p>
+        <p><label>Phone <input name="phone" type="tel" maxlength="40"></label></p>
+        <p><label>Address <input name="address" maxlength="500"></label></p>
+        <button type="submit">Save profile</button>
+        <p id="profile-status" role="status"></p>
+      </form>
     </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>

@@ -2,7 +2,7 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // schools/{schoolId}: name (string).
+    // schools/{schoolId}: name, contactEmail, phone and address (strings).
     // schools/{schoolId}/members/{uid}: role (string), active (boolean).
     // Memberships are provisioned by an administrator.
     function isSchoolOwner(schoolId) {
@@ -12,6 +12,19 @@ service cloud.firestore {
 
     match /schools/{schoolId} {
       allow get: if request.auth != null && isSchoolOwner(schoolId);
+      allow update: if request.auth != null && isSchoolOwner(schoolId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'contactEmail', 'phone', 'address'])
+        && validProfile(request.resource.data);
+    }
+
+    function validProfile(profile) {
+      return profile.name is string && profile.name.size() <= 120
+        && profile.name.matches('.*[^[:space:]].*')
+        && profile.contactEmail is string && profile.contactEmail.size() <= 254
+        && (profile.contactEmail == '' || profile.contactEmail.matches('[^@[:space:]]+@[^@[:space:]]+'))
+        && profile.phone is string && profile.phone.size() <= 40
+        && profile.address is string && profile.address.size() <= 500;
     }
   }
 }
