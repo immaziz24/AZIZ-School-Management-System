@@ -514,16 +514,18 @@ function renderExams() {
   const sorted = [...exams].sort((a, b) => a.id.localeCompare(b.id));
   for (const record of sorted) {
     const exam = record.data();
-    let button;
-    if (exam.status === 'open') {
-      button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = 'Lock ' + exam.name;
-      button.addEventListener('click', () => runSetupAction(async () => {
-        if (!confirm('Lock ' + exam.name + '? A locked exam cannot be changed or reopened.')) return false;
-        return academic.save('exams', record.id, { ...exam, status: 'locked' });
-      }, 'Exam locked.', examStatus));
-    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    const isOpen = exam.status === 'open';
+    button.textContent = (isOpen ? 'Lock ' : 'Unlock ') + exam.name;
+    button.disabled = !years.some((year) => year.id === exam.yearId && year.data().status !== 'closed');
+    button.addEventListener('click', () => runSetupAction(async () => {
+      const question = isOpen
+        ? 'Lock ' + exam.name + '? It cannot be changed while locked. You can unlock it later.'
+        : 'Unlock ' + exam.name + '? Its name and maximum marks can then be changed again.';
+      if (!confirm(question)) return false;
+      return academic.save('exams', record.id, { ...exam, status: isOpen ? 'locked' : 'open' });
+    }, isOpen ? 'Exam locked.' : 'Exam unlocked.', examStatus));
     listItem(examList, exam.name + ' - ' + nameOf(classes, exam.classId) + ' - ' + nameOf(subjects, exam.subjectId)
       + ' - max ' + exam.maxMarks + ' - ' + exam.yearId + ' - ' + exam.status, button);
   }
@@ -561,7 +563,7 @@ examForm.addEventListener('submit', (event) => {
   const id = yearId + '_' + classId + '_' + subjectId + '_' + examKey;
   const existing = examData.exams.find((record) => record.id === id)?.data();
   if (existing && existing.status === 'locked') {
-    examStatus.textContent = 'This exam is locked and cannot be changed.';
+    examStatus.textContent = 'This exam is locked. Unlock it first to change it.';
     return;
   }
   runSetupAction(async () => {

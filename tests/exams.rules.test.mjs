@@ -150,18 +150,27 @@ test('identity fields cannot change after creation', async () => {
   await denied(set('owner-a', examPath(A), exam({ yearId: '2027-28' })), 'change year');
 });
 
-test('a locked exam is frozen and cannot be reopened', async () => {
+test('a locked exam is frozen, and only the owner can reopen it', async () => {
   await allowed(set('owner-a', examPath(A), exam()), 'create');
   await allowed(set('owner-a', examPath(A), exam({ status: 'locked' })), 'lock');
   await denied(set('owner-a', examPath(A), exam({ status: 'locked', maxMarks: 80 })), 'change maximum while locked');
   await denied(set('owner-a', examPath(A), exam({ status: 'locked', name: 'Renamed' })), 'rename while locked');
-  await denied(set('owner-a', examPath(A), exam({ status: 'open' })), 'reopen');
+  await denied(set('owner-a', examPath(A), exam({ status: 'open', maxMarks: 80 })), 'reopen and change maximum in one write');
+  await denied(set('owner-a', examPath(A), exam({ status: 'open', name: 'Renamed' })), 'reopen and rename in one write');
+  await denied(set('teacher-a', examPath(A), exam({ status: 'open' })), 'teacher reopen');
+  await denied(set('inactive-owner-a', examPath(A), exam({ status: 'open' })), 'inactive owner reopen');
+  await denied(set('owner-b', examPath(A), exam({ status: 'open' })), 'other school owner reopen');
+  await allowed(set('owner-a', examPath(A), exam({ status: 'open' })), 'owner reopens');
+  await allowed(set('owner-a', examPath(A), exam({ maxMarks: 80 })), 'edit after reopening');
+  await allowed(set('owner-a', examPath(A), exam({ maxMarks: 80, status: 'locked' })), 'lock again');
 });
 
 test('exams in a closed year are frozen', async () => {
   await allowed(set(ADMIN, examPath(A, exam({ yearId: '2025-26' })), exam({ yearId: '2025-26' })), 'seed in closed year');
   await denied(set('owner-a', examPath(A, exam({ yearId: '2025-26' })), exam({ yearId: '2025-26', name: 'Edited' })), 'edit in closed year');
   await denied(set('owner-a', examPath(A, exam({ yearId: '2025-26' })), exam({ yearId: '2025-26', status: 'locked' })), 'lock in closed year');
+  await allowed(set(ADMIN, examPath(A, exam({ yearId: '2025-26', examKey: 'final' })), exam({ yearId: '2025-26', examKey: 'final', status: 'locked' })), 'seed locked exam in closed year');
+  await denied(set('owner-a', examPath(A, exam({ yearId: '2025-26', examKey: 'final' })), exam({ yearId: '2025-26', examKey: 'final', status: 'open' })), 'reopen in closed year');
 });
 
 test('exams cannot be deleted from the client and schools are isolated', async () => {

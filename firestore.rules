@@ -133,7 +133,8 @@ service cloud.firestore {
       // Exam configuration (features 040, 041). Owner only. One exam per year, class,
       // subject and exam key; the ID is yearId_classId_subjectId_examKey so duplicates
       // are impossible. The subject must be taught in the class, and the year must be
-      // open. status open -> locked; a locked exam is frozen.
+      // open. status open <-> locked: a locked exam cannot be edited, but the owner can
+      // reopen it (the reopen write may not change anything else).
       // exams/{examId}: yearId, classId, subjectId, examKey, name, maxMarks (1-1000), status.
       match /exams/{examId} {
         allow get, list: if request.auth != null && isSchoolOwner(schoolId);
@@ -146,12 +147,15 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/schools/$(schoolId)/classSubjects/$(request.resource.data.classId + '_' + request.resource.data.subjectId));
         allow update: if request.auth != null && isSchoolOwner(schoolId)
           && validExam(request.resource.data)
-          && resource.data.status == 'open'
           && request.resource.data.yearId == resource.data.yearId
           && request.resource.data.classId == resource.data.classId
           && request.resource.data.subjectId == resource.data.subjectId
           && request.resource.data.examKey == resource.data.examKey
-          && openYear(resource.data.yearId);
+          && openYear(resource.data.yearId)
+          && (resource.data.status == 'open'
+            || (resource.data.status == 'locked' && request.resource.data.status == 'open'
+              && request.resource.data.name == resource.data.name
+              && request.resource.data.maxMarks == resource.data.maxMarks));
       }
 
       // Students (features 025, 026, 027, 029). Owner only. The document ID is the
