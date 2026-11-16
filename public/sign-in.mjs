@@ -524,7 +524,7 @@ function renderReviewExams() {
   const nameOf = (records, id) => records.find((record) => record.id === id)?.data().name ?? id;
   fillSelect(reviewExam, [...exams].sort((a, b) => a.id.localeCompare(b.id)),
     (exam) => exam.name + ' - ' + nameOf(classes, exam.classId) + ' - ' + nameOf(subjects, exam.subjectId)
-      + ' - ' + exam.yearId + (exam.status === 'open' ? '' : ' - ' + exam.status));
+      + ' - ' + exam.yearId + (exam.status === 'open' ? '' : ' - ' + (exam.published ? 'published' : exam.status)));
 }
 
 const GRADE_SCALE = [[90, 'A+'], [80, 'A'], [70, 'B'], [60, 'C'], [50, 'D'], [40, 'E'], [0, 'F']];
@@ -580,17 +580,21 @@ async function renderMarksReview() {
     reviewStatus.textContent = {
       open: 'This exam is open for marks entry. Lock it when entry is finished.',
       locked: 'This exam is locked. Check the marks, then approve the results.',
-      approved: 'These results are approved and final.',
+      approved: exam.published
+        ? 'These results are approved and published.'
+        : 'These results are approved and final. Publish them when they are ready to be shared.',
     }[exam.status];
-    const action = (label, question, status, done) => {
+    const action = (label, question, status, done, publish = false) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = label;
       button.addEventListener('click', () => runSetupAction(async () => {
         if (!confirm(typeof question === 'function' ? question() : question)) return false;
-        const { approvedBy, ...rest } = exam;
+        const { approvedBy, published, ...rest } = exam;
         return academic.save('exams', examRecord.id,
-          status === 'approved' ? { ...rest, status, approvedBy: auth.currentUser.uid } : { ...rest, status });
+          status === 'approved'
+            ? { ...rest, status, approvedBy: auth.currentUser.uid, ...(publish ? { published: true } : {}) }
+            : { ...rest, status });
       }, done, reviewStatus));
       reviewActions.append(button);
     };
@@ -601,7 +605,10 @@ async function renderMarksReview() {
       action('Approve results', () => (missing
         ? missing + ' student' + (missing === 1 ? ' has' : 's have') + ' no marks yet. Approve the results anyway?'
         : 'Approve the results for ' + exam.name + '? Marks become final.'), 'approved', 'Results approved.');
+    } else if (exam.published) {
+      action('Unpublish results', 'Unpublish the results for ' + exam.name + '? They stop being shared. Marks stay approved.', 'approved', 'Results unpublished.');
     } else {
+      action('Publish results', 'Publish the results for ' + exam.name + '? They become available to share with students and parents.', 'approved', 'Results published.', true);
       action('Withdraw approval', 'Withdraw approval for ' + exam.name + '? The exam goes back to locked.', 'locked', 'Approval withdrawn.');
     }
   } catch {

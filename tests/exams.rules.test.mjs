@@ -210,3 +210,25 @@ test('an approved exam in a closed year stays frozen', async () => {
   await allowed(set(ADMIN, examPath(A, closed('approved')), closed('approved', { approvedBy: 'owner-a' })), 'seed');
   await denied(set('owner-a', examPath(A, closed('approved')), closed('locked')), 'withdraw approval in a closed year');
 });
+
+test('the owner publishes approved results, and must unpublish before withdrawing approval', async () => {
+  const approved = (over = {}) => exam({ status: 'approved', approvedBy: 'owner-a', ...over });
+  const published = (over = {}) => approved({ published: true, ...over });
+  await allowed(set('owner-a', examPath(A), exam()), 'create');
+  await denied(set('owner-a', examPath(A), published()), 'open exam cannot be published');
+  await allowed(set('owner-a', examPath(A), exam({ status: 'locked' })), 'lock');
+  await denied(set('owner-a', examPath(A), published()), 'locked exam cannot go straight to published');
+  await denied(set('owner-a', examPath(A), exam({ status: 'locked', published: true })), 'published flag on a locked exam');
+  await allowed(set('owner-a', examPath(A), approved()), 'approve');
+  await denied(set('teacher-a', examPath(A), published({ approvedBy: 'teacher-a' })), 'teacher cannot publish');
+  await denied(set('owner-b', examPath(A), published()), 'other school cannot publish');
+  await denied(set('owner-a', examPath(A), approved({ published: false })), 'published must be true or absent');
+  await denied(set('owner-a', examPath(A), published({ maxMarks: 80 })), 'publish and change the maximum in one write');
+  await allowed(set('owner-a', examPath(A), published()), 'owner publishes');
+  await allowed(get('owner-a', examPath(A)), 'published exam is readable');
+  await denied(set('owner-a', examPath(A), exam({ status: 'locked' })), 'cannot withdraw approval while published');
+  await denied(set('owner-a', examPath(A), exam({ status: 'open' })), 'cannot reopen while published');
+  await denied(set('teacher-a', examPath(A), approved()), 'teacher cannot unpublish');
+  await allowed(set('owner-a', examPath(A), approved()), 'owner unpublishes');
+  await allowed(set('owner-a', examPath(A), exam({ status: 'locked' })), 'owner withdraws approval after unpublishing');
+});

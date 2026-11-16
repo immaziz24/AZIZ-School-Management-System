@@ -199,8 +199,11 @@ service cloud.firestore {
           && request.resource.data.examKey == resource.data.examKey
           && openYear(resource.data.yearId)
           && (examUnchangedFields(resource.data, request.resource.data)
-            ? (resource.data.status == 'locked' && request.resource.data.status in ['open', 'approved'])
-              || (resource.data.status == 'approved' && request.resource.data.status == 'locked')
+            ? (resource.data.status == 'locked' && request.resource.data.status in ['open', 'approved']
+                && !request.resource.data.keys().hasAny(['published']))
+              || (resource.data.status == 'approved' && request.resource.data.status == 'approved')
+              || (resource.data.status == 'approved' && request.resource.data.status == 'locked'
+                && !resource.data.keys().hasAny(['published']))
               || (resource.data.status == 'open' && request.resource.data.status in ['open', 'locked'])
             : resource.data.status == 'open' && request.resource.data.status in ['open', 'locked']);
       }
@@ -364,7 +367,7 @@ service cloud.firestore {
     }
 
     function validExam(item) {
-      return item.keys().hasOnly(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status', 'approvedBy'])
+      return item.keys().hasOnly(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status', 'approvedBy', 'published'])
         && item.keys().hasAll(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status'])
         && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
         && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
@@ -375,7 +378,8 @@ service cloud.firestore {
         && item.status in ['open', 'locked', 'approved']
         && ((item.status == 'approved')
           ? (item.keys().hasAll(['approvedBy']) && item.approvedBy == request.auth.uid)
-          : !item.keys().hasAny(['approvedBy']));
+          : !item.keys().hasAny(['approvedBy']))
+        && (!item.keys().hasAny(['published']) || (item.status == 'approved' && item.published == true));
     }
 
     function validStudentRecord(student) {
