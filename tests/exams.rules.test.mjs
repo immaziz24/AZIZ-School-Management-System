@@ -180,3 +180,33 @@ test('exams cannot be deleted from the client and schools are isolated', async (
   await denied(set('owner-a', examPath(B), exam()), 'owner of A writing into school B');
   await denied(get('owner-a', `${B}/exams`), 'owner of A listing school B');
 });
+
+test('the owner approves a locked exam, and only the owner can withdraw approval', async () => {
+  const approved = (over = {}) => exam({ status: 'approved', approvedBy: 'owner-a', ...over });
+  await allowed(set('owner-a', examPath(A), exam()), 'create');
+  await denied(set('owner-a', examPath(A), approved()), 'open exam cannot be approved directly');
+  await allowed(set('owner-a', examPath(A), exam({ status: 'locked' })), 'lock');
+  await denied(set('teacher-a', examPath(A), approved({ approvedBy: 'teacher-a' })), 'teacher cannot approve');
+  await denied(set('owner-a', examPath(A), exam({ status: 'approved' })), 'approval must name who approved');
+  await denied(set('owner-a', examPath(A), approved({ approvedBy: 'someone-else' })), 'approval must name the approving owner');
+  await denied(set('owner-a', examPath(A), approved({ maxMarks: 80 })), 'approve and change the maximum in one write');
+  await denied(set('owner-a', examPath(A), approved({ name: 'Renamed' })), 'approve and rename in one write');
+  await denied(set('owner-a', examPath(A), exam({ status: 'locked', approvedBy: 'owner-a' })), 'approvedBy on a locked exam');
+  await allowed(set('owner-a', examPath(A), approved()), 'owner approves');
+  await allowed(get('owner-a', examPath(A)), 'approved exam stays readable');
+  await denied(set('owner-a', examPath(A), approved({ name: 'Renamed' })), 'edit while approved');
+  await denied(set('owner-a', examPath(A), approved({ maxMarks: 80 })), 'change maximum while approved');
+  await denied(set('owner-a', examPath(A), exam({ status: 'open' })), 'approved exam cannot jump to open');
+  await denied(set('teacher-a', examPath(A), exam({ status: 'locked' })), 'teacher cannot withdraw approval');
+  await denied(set('owner-b', examPath(A), exam({ status: 'locked' })), 'other school cannot withdraw approval');
+  await allowed(set('owner-a', examPath(A), exam({ status: 'locked' })), 'owner withdraws approval');
+  await allowed(set('owner-a', examPath(A), exam({ status: 'open' })), 'owner reopens');
+  await allowed(set('owner-a', examPath(A), exam({ status: 'locked' })), 'lock again');
+  await allowed(set('owner-a', examPath(A), approved()), 'approve again');
+});
+
+test('an approved exam in a closed year stays frozen', async () => {
+  const closed = (status, extra = {}) => exam({ yearId: '2025-26', status, ...extra });
+  await allowed(set(ADMIN, examPath(A, closed('approved')), closed('approved', { approvedBy: 'owner-a' })), 'seed');
+  await denied(set('owner-a', examPath(A, closed('approved')), closed('locked')), 'withdraw approval in a closed year');
+});

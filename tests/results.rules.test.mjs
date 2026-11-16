@@ -243,3 +243,17 @@ test('the owner assigns teachers by class and subject IDs', async () => {
   await allowed(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, id()), 'assign again');
   await allowed(set('teacher-unassigned', markPath('s1', A, SCIENCE), mark('s1', 40, { examId: SCIENCE, subjectId: 'science', enteredBy: 'teacher-unassigned' })), 'the new assignment takes effect immediately');
 });
+
+test('approved marks are final: the teacher can no longer save or correct them', async () => {
+  await allowed(set('teacher-a', markPath('s1'), mark('s1')), 'save while open');
+  const exam = { yearId: Y, classId: 'class-8', subjectId: 'maths', examKey: 'midterm', name: 'Mid-term', maxMarks: 50 };
+  await allowed(set(ADMIN, `${A}/exams/${EXAM}`, { ...exam, status: 'approved', approvedBy: 'owner-a' }), 'owner approves');
+  await denied(set('teacher-a', markPath('s1'), mark('s1', 41)), 'correct after approval');
+  await denied(set('teacher-a', markPath('s2'), mark('s2')), 'new mark after approval');
+  await allowed(get('teacher-a', markPath('s1')), 'teacher can still read their marks');
+  await allowed(get('teacher-a', `${A}/exams/${EXAM}`), 'teacher can still read the exam');
+  await allowed(set(ADMIN, `${A}/exams/${EXAM}`, { ...exam, status: 'locked' }), 'approval withdrawn');
+  await denied(set('teacher-a', markPath('s1'), mark('s1', 41)), 'still locked');
+  await allowed(set(ADMIN, `${A}/exams/${EXAM}`, { ...exam, status: 'open' }), 'reopened');
+  await allowed(set('teacher-a', markPath('s1'), mark('s1', 41)), 'correct after reopening');
+});

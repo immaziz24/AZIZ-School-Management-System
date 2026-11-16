@@ -81,6 +81,11 @@ service cloud.firestore {
           && exists(enrollmentPath) && get(enrollmentPath).data.classId == exam.classId;
       }
 
+      // A pure status change leaves the name and the maximum marks untouched.
+      function examUnchangedFields(before, after) {
+        return after.name == before.name && after.maxMarks == before.maxMarks;
+      }
+
       // Helpers for student placement (feature 028).
       function openYear(yearId) {
         let year = /databases/$(database)/documents/schools/$(schoolId)/academicYears/$(yearId);
@@ -173,8 +178,9 @@ service cloud.firestore {
       // Exam configuration (features 040, 041). Owner only. One exam per year, class,
       // subject and exam key; the ID is yearId_classId_subjectId_examKey so duplicates
       // are impossible. The subject must be taught in the class, and the year must be
-      // open. status open <-> locked: a locked exam cannot be edited, but the owner can
-      // reopen it (the reopen write may not change anything else).
+      // open. open -> locked -> approved. A locked exam cannot be edited but the owner can
+      // reopen it; the owner approves a locked exam, and can withdraw approval back to locked.
+      // Status changes may not change anything else. Teachers can only mark open exams.
       // exams/{examId}: yearId, classId, subjectId, examKey, name, maxMarks (1-1000), status.
       match /exams/{examId} {
         allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesExam(resource.data));
@@ -192,10 +198,11 @@ service cloud.firestore {
           && request.resource.data.subjectId == resource.data.subjectId
           && request.resource.data.examKey == resource.data.examKey
           && openYear(resource.data.yearId)
-          && (resource.data.status == 'open'
-            || (resource.data.status == 'locked' && request.resource.data.status == 'open'
-              && request.resource.data.name == resource.data.name
-              && request.resource.data.maxMarks == resource.data.maxMarks));
+          && (examUnchangedFields(resource.data, request.resource.data)
+            ? (resource.data.status == 'locked' && request.resource.data.status in ['open', 'approved'])
+              || (resource.data.status == 'approved' && request.resource.data.status == 'locked')
+              || (resource.data.status == 'open' && request.resource.data.status in ['open', 'locked'])
+            : resource.data.status == 'open' && request.resource.data.status in ['open', 'locked']);
       }
 
       // Exam marks (features 042, 043). marks/{examId}_{studentId}. Written by the teacher
@@ -357,7 +364,7 @@ service cloud.firestore {
     }
 
     function validExam(item) {
-      return item.keys().hasOnly(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status'])
+      return item.keys().hasOnly(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status', 'approvedBy'])
         && item.keys().hasAll(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status'])
         && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
         && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
@@ -365,7 +372,10 @@ service cloud.firestore {
         && item.examKey is string && item.examKey.matches('[a-z0-9-]{1,20}')
         && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
         && item.maxMarks is int && item.maxMarks >= 1 && item.maxMarks <= 1000
-        && item.status in ['open', 'locked'];
+        && item.status in ['open', 'locked', 'approved']
+        && ((item.status == 'approved')
+          ? (item.keys().hasAll(['approvedBy']) && item.approvedBy == request.auth.uid)
+          : !item.keys().hasAny(['approvedBy']));
     }
 
     function validStudentRecord(student) {

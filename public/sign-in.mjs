@@ -516,6 +516,7 @@ const reviewExam = document.querySelector('#review-exam');
 const reviewSummary = document.querySelector('#review-summary');
 const reviewBody = document.querySelector('#review-body');
 const reviewRefresh = document.querySelector('#review-refresh');
+const reviewActions = document.querySelector('#review-actions');
 let reviewRequest = 0;
 
 function renderReviewExams() {
@@ -523,7 +524,7 @@ function renderReviewExams() {
   const nameOf = (records, id) => records.find((record) => record.id === id)?.data().name ?? id;
   fillSelect(reviewExam, [...exams].sort((a, b) => a.id.localeCompare(b.id)),
     (exam) => exam.name + ' - ' + nameOf(classes, exam.classId) + ' - ' + nameOf(subjects, exam.subjectId)
-      + ' - ' + exam.yearId + (exam.status === 'locked' ? ' - locked' : ''));
+      + ' - ' + exam.yearId + (exam.status === 'open' ? '' : ' - ' + exam.status));
 }
 
 async function renderMarksReview() {
@@ -531,6 +532,7 @@ async function renderMarksReview() {
   const request = schoolRequest;
   const token = ++reviewRequest;
   reviewBody.replaceChildren();
+  reviewActions.replaceChildren();
   reviewSummary.textContent = '';
   const examRecord = examData.exams.find((record) => record.id === reviewExam.value);
   if (!tools || !examRecord) {
@@ -567,7 +569,34 @@ async function renderMarksReview() {
           + ', average ' + (Math.round(entered.reduce((sum, score) => sum + score, 0) / entered.length * 10) / 10)
           + ' (out of ' + exam.maxMarks + ').' : '.')
       : 'No students are placed in this class for ' + exam.yearId + '.';
-    reviewStatus.textContent = exam.status === 'locked' ? 'This exam is locked.' : 'This exam is open for marks entry.';
+    const missing = rows.length - entered.length;
+    reviewStatus.textContent = {
+      open: 'This exam is open for marks entry. Lock it when entry is finished.',
+      locked: 'This exam is locked. Check the marks, then approve the results.',
+      approved: 'These results are approved and final.',
+    }[exam.status];
+    const action = (label, question, status, done) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => runSetupAction(async () => {
+        if (!confirm(typeof question === 'function' ? question() : question)) return false;
+        const { approvedBy, ...rest } = exam;
+        return academic.save('exams', examRecord.id,
+          status === 'approved' ? { ...rest, status, approvedBy: auth.currentUser.uid } : { ...rest, status });
+      }, done, reviewStatus));
+      reviewActions.append(button);
+    };
+    if (exam.status === 'open') {
+      action('Lock exam', 'Lock ' + exam.name + '? Teachers can no longer enter or change marks. You can unlock it later.', 'locked', 'Exam locked.');
+    } else if (exam.status === 'locked') {
+      action('Unlock exam', 'Unlock ' + exam.name + '? Teachers can then enter and change marks again.', 'open', 'Exam unlocked.');
+      action('Approve results', () => (missing
+        ? missing + ' student' + (missing === 1 ? ' has' : 's have') + ' no marks yet. Approve the results anyway?'
+        : 'Approve the results for ' + exam.name + '? Marks become final.'), 'approved', 'Results approved.');
+    } else {
+      action('Withdraw approval', 'Withdraw approval for ' + exam.name + '? The exam goes back to locked.', 'locked', 'Approval withdrawn.');
+    }
   } catch {
     if (request === schoolRequest && token === reviewRequest) reviewStatus.textContent = 'Could not load marks. Try again.';
   }
@@ -589,18 +618,21 @@ function renderExams() {
   const sorted = [...exams].sort((a, b) => a.id.localeCompare(b.id));
   for (const record of sorted) {
     const exam = record.data();
-    const button = document.createElement('button');
-    button.type = 'button';
-    const isOpen = exam.status === 'open';
-    button.textContent = (isOpen ? 'Lock ' : 'Unlock ') + exam.name;
-    button.disabled = !years.some((year) => year.id === exam.yearId && year.data().status !== 'closed');
-    button.addEventListener('click', () => runSetupAction(async () => {
-      const question = isOpen
-        ? 'Lock ' + exam.name + '? It cannot be changed while locked. You can unlock it later.'
-        : 'Unlock ' + exam.name + '? Its name and maximum marks can then be changed again.';
-      if (!confirm(question)) return false;
-      return academic.save('exams', record.id, { ...exam, status: isOpen ? 'locked' : 'open' });
-    }, isOpen ? 'Exam locked.' : 'Exam unlocked.', examStatus));
+    let button;
+    if (exam.status !== 'approved') {
+      button = document.createElement('button');
+      button.type = 'button';
+      const isOpen = exam.status === 'open';
+      button.textContent = (isOpen ? 'Lock ' : 'Unlock ') + exam.name;
+      button.disabled = !years.some((year) => year.id === exam.yearId && year.data().status !== 'closed');
+      button.addEventListener('click', () => runSetupAction(async () => {
+        const question = isOpen
+          ? 'Lock ' + exam.name + '? It cannot be changed while locked. You can unlock it later.'
+          : 'Unlock ' + exam.name + '? Its name and maximum marks can then be changed again.';
+        if (!confirm(question)) return false;
+        return academic.save('exams', record.id, { ...exam, status: isOpen ? 'locked' : 'open' });
+      }, isOpen ? 'Exam locked.' : 'Exam unlocked.', examStatus));
+    }
     listItem(examList, exam.name + ' - ' + nameOf(classes, exam.classId) + ' - ' + nameOf(subjects, exam.subjectId)
       + ' - max ' + exam.maxMarks + ' - ' + exam.yearId + ' - ' + exam.status, button);
   }
@@ -665,10 +697,10 @@ async function loadTeacherExams(request) {
     where('classId', '==', context.classId), where('subjectId', '==', context.subjectId)));
   if (request !== schoolRequest || context !== teacherMarks) return;
   // Open exams first, so the screen opens on an exam that can be marked.
-  context.exams = snapshot.docs.sort((a, b) => (a.data().status === 'locked') - (b.data().status === 'locked')
-    || a.id.localeCompare(b.id));
+  const rank = { open: 0, locked: 1, approved: 2 };
+  context.exams = snapshot.docs.sort((a, b) => rank[a.data().status] - rank[b.data().status] || a.id.localeCompare(b.id));
   fillSelect(examMarksSelect, context.exams,
-    (exam) => exam.name + ' - ' + exam.yearId + ' (out of ' + exam.maxMarks + ')' + (exam.status === 'locked' ? ' - locked' : ''));
+    (exam) => exam.name + ' - ' + exam.yearId + ' (out of ' + exam.maxMarks + ')' + (exam.status === 'open' ? '' : ' - ' + exam.status));
   await renderTeacherMarks(request);
 }
 
@@ -704,7 +736,7 @@ async function renderTeacherMarks(request) {
       input.min = '0';
       input.max = String(exam.maxMarks);
       input.step = '1';
-      input.disabled = exam.status === 'locked';
+      input.disabled = exam.status !== 'open';
       input.dataset.student = row.studentId;
       input.dataset.original = scores.has(row.studentId) ? String(scores.get(row.studentId)) : '';
       input.value = input.dataset.original;
@@ -716,9 +748,11 @@ async function renderTeacherMarks(request) {
       }
       examMarksBody.append(tr);
     }
-    examMarksStatus.textContent = exam.status === 'locked'
-      ? 'This exam is locked. Ask the principal to unlock it to change marks.'
-      : rows.length ? '' : 'No students have been placed in your class for this year yet.';
+    examMarksStatus.textContent = exam.status === 'approved'
+      ? 'These marks are approved and final.'
+      : exam.status === 'locked'
+        ? 'This exam is locked. Ask the principal to unlock it to change marks.'
+        : rows.length ? '' : 'No students have been placed in your class for this year yet.';
   } catch {
     if (request === schoolRequest) examMarksStatus.textContent = 'Could not load students. Try again.';
   }
