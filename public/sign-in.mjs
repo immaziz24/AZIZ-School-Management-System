@@ -220,6 +220,7 @@ async function loadAcademic(request) {
     renderExams();
     renderReviewExams();
     renderMarksReview();
+    renderReportStudents();
     for (const list of Object.values(setupLists)) list.replaceChildren();
     const classRecords = classes.docs.sort((a, b) => a.data().order - b.data().order);
     const className = (id) => classRecords.find((record) => record.id === id)?.data().name ?? id;
@@ -616,6 +617,69 @@ async function renderMarksReview() {
   }
 }
 
+const reportSection = document.querySelector('#report-card');
+const reportStatus = document.querySelector('#report-status');
+const reportStudent = document.querySelector('#report-student');
+const reportBody = document.querySelector('#report-body');
+const reportTotal = document.querySelector('#report-total');
+let reportRequest = 0;
+
+function renderReportStudents() {
+  fillSelect(reportStudent, [...studentRecords].sort((a, b) => a.data().name.localeCompare(b.data().name)),
+    (student) => student.name + ' (' + student.admissionNo + ')');
+  renderReportCard();
+}
+
+// Report card (feature 047): one student, published exams only.
+async function renderReportCard() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++reportRequest;
+  reportBody.replaceChildren();
+  reportTotal.textContent = '';
+  const studentId = reportStudent.value;
+  if (!tools || !studentId) {
+    reportStatus.textContent = 'Add a student to see a report card.';
+    return;
+  }
+  reportStatus.textContent = 'Loading report card.';
+  try {
+    const saved = await tools.marksOfStudent(studentId);
+    if (request !== schoolRequest || token !== reportRequest) return;
+    const nameOf = (records, id) => records.find((record) => record.id === id)?.data().name ?? id;
+    const published = new Map(examData.exams.filter((record) => record.data().published === true)
+      .map((record) => [record.id, record.data()]));
+    const lines = saved.docs.map((record) => record.data())
+      .filter((mark) => published.has(mark.examId))
+      .map((mark) => ({ exam: published.get(mark.examId), mark }))
+      .sort((a, b) => a.exam.yearId.localeCompare(b.exam.yearId)
+        || nameOf(examData.subjects, a.exam.subjectId).localeCompare(nameOf(examData.subjects, b.exam.subjectId)));
+    let got = 0;
+    let max = 0;
+    for (const { exam, mark } of lines) {
+      const percent = Math.round(mark.score / exam.maxMarks * 1000) / 10;
+      got += mark.score;
+      max += exam.maxMarks;
+      const tr = document.createElement('tr');
+      for (const text of [exam.yearId, nameOf(examData.subjects, exam.subjectId), exam.name,
+        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeFor(percent)]) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.append(td);
+      }
+      reportBody.append(tr);
+    }
+    reportStatus.textContent = lines.length ? '' : 'No published results for this student yet.';
+    if (lines.length) {
+      const overall = Math.round(got / max * 1000) / 10;
+      reportTotal.textContent = 'Total ' + got + ' / ' + max + ' - ' + overall + '% - Grade ' + gradeFor(overall);
+    }
+  } catch {
+    if (request === schoolRequest && token === reportRequest) reportStatus.textContent = 'Could not load the report card. Try again.';
+  }
+}
+
+reportStudent.addEventListener('change', renderReportCard);
 reviewExam.addEventListener('change', renderMarksReview);
 reviewRefresh.addEventListener('click', () => { if (academic) loadAcademic(schoolRequest).then(renderMarksReview); });
 
@@ -861,6 +925,11 @@ onAuthStateChanged(auth, async (user) => {
   examData = { years: [], classes: [], subjects: [], mappings: [], exams: [] };
   examSection.hidden = true;
   reviewSection.hidden = true;
+  reportSection.hidden = true;
+  reportStatus.textContent = '';
+  reportTotal.textContent = '';
+  reportBody.replaceChildren();
+  reportStudent.replaceChildren();
   reviewStatus.textContent = '';
   reviewSummary.textContent = '';
   reviewBody.replaceChildren();
@@ -972,6 +1041,7 @@ onAuthStateChanged(auth, async (user) => {
       busy: false,
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: (name, id, data) => setDoc(doc(schoolRef, name, id), data),
+      marksOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('studentId', '==', studentId))),
       marksFor: (examId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('examId', '==', examId))),
       // A year becomes active in one batch with the pointer the rules check.
       activate: (id, year) => {
@@ -994,6 +1064,7 @@ onAuthStateChanged(auth, async (user) => {
     studentSection.hidden = false;
     examSection.hidden = false;
     reviewSection.hidden = false;
+    reportSection.hidden = false;
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
   } catch (error) {

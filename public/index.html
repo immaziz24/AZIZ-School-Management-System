@@ -137,6 +137,16 @@
         <p id="review-actions"></p>
         <button id="review-refresh" type="button">Refresh marks</button>
       </section>
+      <section id="report-card" aria-labelledby="report-title" hidden>
+        <h3 id="report-title">Report Card</h3>
+        <p id="report-status" role="status"></p>
+        <p><label>Student <select id="report-student"></select></label></p>
+        <table>
+          <thead><tr><th>Year</th><th>Subject</th><th>Exam</th><th>Marks</th><th>Percent</th><th>Grade</th></tr></thead>
+          <tbody id="report-body"></tbody>
+        </table>
+        <p id="report-total" role="status"></p>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -171,7 +181,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=marks-6');
+      await import('./sign-in.mjs?v=marks-7');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
