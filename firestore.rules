@@ -6,8 +6,8 @@ service cloud.firestore {
     // schools/{schoolId}/members/{uid}: role (string), active (boolean).
     // Memberships are provisioned by an administrator.
     function isSchoolOwner(schoolId) {
-      let membership = get(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid));
-      return membership.data.active == true && membership.data.role == 'owner';
+      let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
+      return exists(path) && get(path).data.active == true && get(path).data.role == 'owner';
     }
 
     match /schools/{schoolId} {
@@ -22,11 +22,33 @@ service cloud.firestore {
         allow get: if request.auth != null && request.auth.uid == uid;
       }
 
+      // teacherAssignments/{uid}: className and subject (strings).
+      match /teacherAssignments/{uid} {
+        function activeTeacher() {
+          let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
+          return exists(path) && get(path).data.active == true && get(path).data.role == 'teacher';
+        }
+
+        allow get: if request.auth != null && (isSchoolOwner(schoolId)
+          || (request.auth.uid == uid && activeTeacher()));
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && activeTeacher() && validAssignment(request.resource.data);
+      }
+
       match /staff/{staffId} {
         allow get, list: if request.auth != null && isSchoolOwner(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validStaff(request.resource.data);
       }
+    }
+
+    function validAssignment(assignment) {
+      return assignment.keys().hasAll(['className', 'subject'])
+        && assignment.keys().hasOnly(['className', 'subject'])
+        && assignment.className is string && assignment.className.size() <= 80
+        && assignment.className.matches('.*[^[:space:]].*')
+        && assignment.subject is string && assignment.subject.size() <= 80
+        && assignment.subject.matches('.*[^[:space:]].*');
     }
 
     function validStaff(staff) {

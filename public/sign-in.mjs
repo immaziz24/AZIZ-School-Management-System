@@ -26,6 +26,37 @@ const saveProfile = profileForm.querySelector('button');
 const profileFields = ['name', 'contactEmail', 'phone', 'address'];
 let saveSchoolProfile;
 let schoolRequest = 0;
+const assignmentForm = document.querySelector('#teacher-assignment');
+const assignmentStatus = document.querySelector('#assignment-status');
+const assignmentSummary = document.querySelector('#teacher-assignment-summary');
+const assignmentButton = assignmentForm.querySelector('button');
+let saveAssignment;
+
+assignmentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!saveAssignment || assignmentButton.disabled) return;
+  const request = schoolRequest;
+  const fields = new FormData(assignmentForm);
+  const uid = fields.get('uid').trim();
+  const className = fields.get('className').trim();
+  const subject = fields.get('subject').trim();
+  if (!className || !subject) {
+    assignmentStatus.textContent = 'Enter a class and subject.';
+    return;
+  }
+  assignmentButton.disabled = true;
+  assignmentStatus.textContent = 'Saving assignment.';
+  try {
+    await saveAssignment(uid, { className, subject });
+    if (request === schoolRequest) assignmentStatus.textContent = 'Assignment saved.';
+  } catch (error) {
+    if (request === schoolRequest) assignmentStatus.textContent = error.code === 'permission-denied'
+      ? 'Check that this UID belongs to an active teacher at your school.'
+      : 'Could not save the assignment. Try again.';
+  } finally {
+    if (request === schoolRequest) assignmentButton.disabled = false;
+  }
+});
 const staffForm = document.querySelector('#staff-form');
 const staffStatus = document.querySelector('#staff-status');
 const staffList = document.querySelector('#staff-list');
@@ -104,6 +135,11 @@ staffForm.addEventListener('submit', async (event) => {
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   dashboard.hidden = true;
+  saveAssignment = undefined;
+  assignmentForm.reset();
+  assignmentStatus.textContent = '';
+  assignmentSummary.textContent = '';
+  assignmentButton.disabled = false;
   teacherDashboard.hidden = true;
   teacherEmail.textContent = '';
   staffDirectory = undefined;
@@ -128,7 +164,7 @@ onAuthStateChanged(auth, async (user) => {
 
   schoolStatus.textContent = 'Checking school access.';
   try {
-    const { addDoc, collection, doc, getDocFromServer, getDocsFromServer, getFirestore, updateDoc } = await import(
+    const { addDoc, collection, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, updateDoc } = await import(
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
@@ -140,6 +176,16 @@ onAuthStateChanged(auth, async (user) => {
       teacherDashboard.hidden = false;
       status.hidden = true;
       schoolStatus.hidden = true;
+      assignmentSummary.textContent = 'Loading assignment.';
+      try {
+        const assignment = await getDocFromServer(doc(schoolRef, 'teacherAssignments', user.uid));
+        if (request !== schoolRequest) return;
+        assignmentSummary.textContent = assignment.exists()
+          ? assignment.data().className + ' - ' + assignment.data().subject
+          : 'No class or subject assigned yet.';
+      } catch {
+        if (request === schoolRequest) assignmentSummary.textContent = 'Could not load your assignment.';
+      }
       return;
     }
     const school = await getDocFromServer(schoolRef);
@@ -153,6 +199,7 @@ onAuthStateChanged(auth, async (user) => {
       profileForm.elements.namedItem(field).value = school.data()[field] ?? '';
     }
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);
+    saveAssignment = (uid, assignment) => setDoc(doc(schoolRef, 'teacherAssignments', uid), assignment);
     ownerEmail.textContent = user.email;
     dashboard.hidden = false;
     status.hidden = true;

@@ -32,6 +32,14 @@
         <button type="submit">Save profile</button>
         <p id="profile-status" role="status"></p>
       </form>
+      <h3>Teacher Assignment</h3>
+      <form id="teacher-assignment">
+        <p><label>Teacher Firebase UID <input name="uid" required maxlength="128" pattern="[A-Za-z0-9_\-]+"></label></p>
+        <p><label>Class <input name="className" required maxlength="80"></label></p>
+        <p><label>Subject <input name="subject" required maxlength="80"></label></p>
+        <button type="submit">Save assignment</button>
+        <p id="assignment-status" role="status"></p>
+      </form>
       <h3>Staff Directory</h3>
       <p id="staff-status" role="status"></p>
       <ul id="staff-list"></ul>
@@ -47,6 +55,8 @@
       <h2 id="teacher-title">Teacher Dashboard</h2>
       <p>ABCD School</p>
       <p id="teacher-email"></p>
+      <h3>My Assignment</h3>
+      <p id="teacher-assignment-summary" role="status"></p>
     </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>
