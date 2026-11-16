@@ -200,10 +200,15 @@ function fillSelect(select, records, label) {
 async function loadAcademic(request) {
   const tools = academic;
   try {
-    const [years, classes, sections, subjects, mappings] = await Promise.all(
-      ['academicYears', 'classes', 'sections', 'subjects', 'classSubjects'].map((name) => tools.list(name)),
+    const [years, classes, sections, subjects, mappings, studentDocs, enrollments] = await Promise.all(
+      ['academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'students', 'enrollments']
+        .map((name) => tools.list(name)),
     );
     if (request !== schoolRequest) return;
+    studentRecords = studentDocs.docs;
+    renderStudents();
+    placementData = { years: years.docs, classes: classes.docs, sections: sections.docs, enrollments: enrollments.docs };
+    renderPlacements();
     for (const list of Object.values(setupLists)) list.replaceChildren();
     const classRecords = classes.docs.sort((a, b) => a.data().order - b.data().order);
     const className = (id) => classRecords.find((record) => record.id === id)?.data().name ?? id;
@@ -245,23 +250,23 @@ async function loadAcademic(request) {
   }
 }
 
-async function runSetupAction(action, done) {
+async function runSetupAction(action, done, statusElement = academicStatus) {
   if (!academic || academic.busy) return;
   const tools = academic;
   const request = schoolRequest;
   tools.busy = true;
-  academicStatus.textContent = 'Saving.';
+  statusElement.textContent = 'Saving.';
   try {
     if (await action() === false) {
-      if (request === schoolRequest) academicStatus.textContent = '';
+      if (request === schoolRequest) statusElement.textContent = '';
       return;
     }
     if (request !== schoolRequest) return;
-    academicStatus.textContent = done;
+    statusElement.textContent = done;
     await loadAcademic(request);
-    if (request === schoolRequest) academicStatus.textContent = done;
+    if (request === schoolRequest) statusElement.textContent = done;
   } catch (error) {
-    if (request === schoolRequest) academicStatus.textContent = error.code === 'permission-denied'
+    if (request === schoolRequest) statusElement.textContent = error.code === 'permission-denied'
       ? 'This change is not allowed. Check that the records it depends on exist and are open.'
       : 'Could not save. Try again.';
   } finally {
@@ -323,6 +328,177 @@ bindSetupForm(mappingForm, (value) => {
     data: { classId: value('classId'), subjectId: value('subjectId') } };
 }, 'Subject added to the class.');
 
+const studentSection = document.querySelector('#student-roster');
+const studentStatus = document.querySelector('#student-status');
+const studentList = document.querySelector('#student-list');
+const studentSearch = document.querySelector('#student-search');
+const studentForm = document.querySelector('#student-form');
+const studentSave = studentForm.querySelector('[type="submit"]');
+const studentCancel = studentForm.querySelector('[type="reset"]');
+const studentFields = ['admissionNo', 'name', 'guardianName', 'guardianPhone'];
+let studentRecords = [];
+let studentEditingId;
+
+studentForm.addEventListener('reset', () => {
+  studentEditingId = undefined;
+  studentForm.elements.namedItem('admissionNo').readOnly = false;
+  studentSave.textContent = 'Save student';
+  studentCancel.hidden = true;
+});
+
+function renderStudents() {
+  studentList.replaceChildren();
+  const term = studentSearch.value.trim().toLowerCase();
+  const matches = studentRecords
+    .filter((record) => !term || (record.data().name + ' ' + record.data().admissionNo).toLowerCase().includes(term))
+    .sort((a, b) => a.data().name.localeCompare(b.data().name));
+  for (const record of matches) {
+    const student = record.data();
+    const row = document.createElement('li');
+    row.textContent = student.name + ' - ' + student.admissionNo + ' - ' + student.guardianName
+      + (student.guardianPhone ? ' (' + student.guardianPhone + ')' : '') + ' - ' + student.status + ' ';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.textContent = 'Edit ' + student.name;
+    edit.addEventListener('click', () => {
+      studentEditingId = record.id;
+      for (const field of studentFields) studentForm.elements.namedItem(field).value = student[field];
+      studentForm.elements.namedItem('admissionNo').readOnly = true;
+      studentSave.textContent = 'Save changes';
+      studentCancel.hidden = false;
+      studentForm.elements.namedItem('name').focus();
+    });
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    const next = student.status === 'active' ? 'inactive' : 'active';
+    toggle.textContent = (next === 'inactive' ? 'Mark inactive ' : 'Mark active ') + student.name;
+    toggle.addEventListener('click', () => runSetupAction(
+      () => academic.save('students', record.id, { ...student, status: next }),
+      'Student marked ' + next + '.', studentStatus,
+    ));
+    row.append(edit, toggle);
+    studentList.append(row);
+  }
+  if (!studentRecords.length) studentStatus.textContent = studentStatus.textContent || 'No students yet.';
+  else if (!matches.length) studentStatus.textContent = 'No students match your search.';
+}
+
+studentSearch.addEventListener('input', () => {
+  studentStatus.textContent = '';
+  renderStudents();
+});
+
+studentForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy) return;
+  const fields = new FormData(studentForm);
+  const value = (name) => String(fields.get(name) ?? '').trim();
+  const admissionNo = studentEditingId ? studentRecords.find((r) => r.id === studentEditingId).data().admissionNo
+    : value('admissionNo');
+  const id = admissionNo.toLowerCase();
+  if (!/^[A-Za-z0-9-]{1,20}$/.test(admissionNo)) {
+    studentStatus.textContent = 'Admission number may use letters, numbers and hyphens only (up to 20).';
+    return;
+  }
+  if (!value('name') || !value('guardianName')) {
+    studentStatus.textContent = 'Enter the student name and guardian name.';
+    return;
+  }
+  if (!/^[0-9+() -]{0,20}$/.test(value('guardianPhone'))) {
+    studentStatus.textContent = 'Phone may use digits, +, spaces, hyphens and brackets only.';
+    return;
+  }
+  const existing = studentRecords.find((record) => record.id === id);
+  if (existing && !studentEditingId) {
+    studentStatus.textContent = 'Admission number ' + existing.data().admissionNo + ' is already used by '
+      + existing.data().name + '. Use Edit to change that student.';
+    return;
+  }
+  runSetupAction(async () => {
+    await academic.save('students', id, {
+      admissionNo, name: value('name'), guardianName: value('guardianName'),
+      guardianPhone: value('guardianPhone'), status: existing?.data().status ?? 'active',
+    });
+    studentForm.reset();
+  }, 'Student saved.', studentStatus);
+});
+
+const placementStatus = document.querySelector('#placement-status');
+const placementList = document.querySelector('#placement-list');
+const placementForm = document.querySelector('#placement-form');
+let placementData = { years: [], classes: [], sections: [], enrollments: [] };
+
+function renderPlacements() {
+  const { years, classes, sections, enrollments } = placementData;
+  const className = (id) => classes.find((record) => record.id === id)?.data().name ?? id;
+  const sectionLabel = (record) => className(record.data().classId) + ' - ' + record.data().name;
+  placementList.replaceChildren();
+  const sorted = [...enrollments].sort((a, b) => (a.data().yearId + a.data().sectionId).localeCompare(
+    b.data().yearId + b.data().sectionId) || a.data().rollNo - b.data().rollNo);
+  for (const record of sorted) {
+    const item = record.data();
+    const student = studentRecords.find((candidate) => candidate.id === item.studentId)?.data();
+    const section = sections.find((candidate) => candidate.id === item.sectionId);
+    listItem(placementList, (student ? student.name + ' (' + student.admissionNo + ')' : item.studentId)
+      + ' - ' + (section ? sectionLabel(section) : item.sectionId) + ' - Roll ' + item.rollNo + ' - ' + item.yearId);
+  }
+  fillSelect(placementForm.elements.namedItem('yearId'),
+    years.filter((record) => record.data().status !== 'closed'), (item) => item.label + ' (' + item.status + ')');
+  fillSelect(placementForm.elements.namedItem('studentId'),
+    studentRecords.filter((record) => record.data().status === 'active')
+      .sort((a, b) => a.data().name.localeCompare(b.data().name)),
+    (item) => item.name + ' (' + item.admissionNo + ')');
+  fillSelect(placementForm.elements.namedItem('sectionId'),
+    [...sections].sort((a, b) => a.id.localeCompare(b.id)).map((record) => ({
+      id: record.id, data: () => ({ label: sectionLabel(record) }),
+    })), (item) => item.label);
+}
+
+placementForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy) return;
+  const fields = new FormData(placementForm);
+  const yearId = String(fields.get('yearId') ?? '');
+  const studentId = String(fields.get('studentId') ?? '');
+  const sectionId = String(fields.get('sectionId') ?? '');
+  const rollNo = Number(fields.get('rollNo'));
+  if (!yearId || !studentId || !sectionId) {
+    placementStatus.textContent = 'Add an open academic year, an active student and a section first.';
+    return;
+  }
+  if (!Number.isInteger(rollNo) || rollNo < 1 || rollNo > 999) {
+    placementStatus.textContent = 'Roll number must be a whole number from 1 to 999.';
+    return;
+  }
+  const { sections, enrollments } = placementData;
+  const section = sections.find((record) => record.id === sectionId);
+  const holder = enrollments.find((record) => record.data().yearId === yearId
+    && record.data().sectionId === sectionId && record.data().rollNo === rollNo);
+  if (holder && holder.data().studentId !== studentId) {
+    const other = studentRecords.find((record) => record.id === holder.data().studentId)?.data();
+    placementStatus.textContent = 'Roll ' + rollNo + ' in this section is already held by '
+      + (other ? other.name : holder.data().studentId) + '.';
+    return;
+  }
+  const current = enrollments.find((record) => record.id === yearId + '_' + studentId)?.data();
+  if (current && current.sectionId === sectionId && current.rollNo === rollNo) {
+    placementStatus.textContent = 'This student already has that class, section and roll number.';
+    return;
+  }
+  const ops = [
+    { path: ['enrollments', yearId + '_' + studentId],
+      data: { yearId, studentId, classId: section.data().classId, sectionId, rollNo } },
+    { path: ['rollKeys', yearId + '_' + sectionId + '_' + rollNo],
+      data: { yearId, sectionId, rollNo, studentId } },
+  ];
+  // Moving a student releases the roll number they held before.
+  if (current) ops.push({ path: ['rollKeys', yearId + '_' + current.sectionId + '_' + current.rollNo], delete: true });
+  runSetupAction(async () => {
+    await academic.commit(ops);
+    placementForm.elements.namedItem('rollNo').value = '';
+  }, current ? 'Student moved.' : 'Student placed.', placementStatus);
+});
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   dashboard.hidden = true;
@@ -338,6 +514,17 @@ onAuthStateChanged(auth, async (user) => {
   assignmentButton.disabled = false;
   teacherDashboard.hidden = true;
   teacherEmail.textContent = '';
+  placementData = { years: [], classes: [], sections: [], enrollments: [] };
+  placementStatus.textContent = '';
+  placementList.replaceChildren();
+  placementForm.reset();
+  for (const name of ['yearId', 'studentId', 'sectionId']) placementForm.elements.namedItem(name).replaceChildren();
+  studentRecords = [];
+  studentSection.hidden = true;
+  studentStatus.textContent = '';
+  studentSearch.value = '';
+  studentList.replaceChildren();
+  studentForm.reset();
   academic = undefined;
   academicSection.hidden = true;
   academicStatus.textContent = '';
@@ -434,8 +621,17 @@ onAuthStateChanged(auth, async (user) => {
         return batch.commit();
       },
       close: (id) => updateDoc(doc(schoolRef, 'academicYears', id), { status: 'closed' }),
+      commit: (ops) => {
+        const batch = writeBatch(firestore);
+        for (const op of ops) {
+          const ref = doc(schoolRef, ...op.path);
+          if (op.delete) batch.delete(ref); else batch.set(ref, op.data);
+        }
+        return batch.commit();
+      },
     };
     academicSection.hidden = false;
+    studentSection.hidden = false;
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
   } catch (error) {

@@ -90,6 +90,30 @@
           <button type="submit">Add subject to class</button>
         </form>
       </section>
+      <section id="student-roster" aria-labelledby="student-title" hidden>
+        <h3 id="student-title">Students</h3>
+        <p id="student-status" role="status"></p>
+        <p><label>Search students <input id="student-search" type="search" maxlength="120" placeholder="Name or admission number"></label></p>
+        <ul id="student-list"></ul>
+        <form id="student-form">
+          <p><label>Admission number <input name="admissionNo" required maxlength="20" pattern="[A-Za-z0-9\-]+"></label></p>
+          <p><label>Student name <input name="name" required maxlength="120"></label></p>
+          <p><label>Guardian name <input name="guardianName" required maxlength="120"></label></p>
+          <p><label>Guardian phone <input name="guardianPhone" type="tel" maxlength="20" pattern="[0-9+ \(\)\-]*"></label></p>
+          <button type="submit">Save student</button>
+          <p><button type="reset" hidden>Cancel edit</button></p>
+        </form>
+        <h4>Place a student in a class</h4>
+        <p id="placement-status" role="status"></p>
+        <ul id="placement-list"></ul>
+        <form id="placement-form">
+          <p><label>Academic year <select name="yearId" required></select></label></p>
+          <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Class and section <select name="sectionId" required></select></label></p>
+          <p><label>Roll number <input name="rollNo" type="number" required min="1" max="999"></label></p>
+          <button type="submit">Place student</button>
+        </form>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -112,7 +136,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=academic-setup-1');
+      await import('./sign-in.mjs?v=placement-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

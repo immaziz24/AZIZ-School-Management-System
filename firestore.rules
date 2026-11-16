@@ -41,6 +41,29 @@ service cloud.firestore {
           && validStaff(request.resource.data);
       }
 
+      // Helpers for student placement (feature 028).
+      function openYear(yearId) {
+        let year = /databases/$(database)/documents/schools/$(schoolId)/academicYears/$(yearId);
+        return exists(year) && get(year).data.status in ['draft', 'active'];
+      }
+      function activeStudent(studentId) {
+        let student = /databases/$(database)/documents/schools/$(schoolId)/students/$(studentId);
+        return exists(student) && get(student).data.status == 'active';
+      }
+      function enrollmentAfter(yearId, studentId) {
+        return getAfter(/databases/$(database)/documents/schools/$(schoolId)/enrollments/$(yearId + '_' + studentId)).data;
+      }
+      function rollKeyMatches(enrollment) {
+        let key = getAfter(/databases/$(database)/documents/schools/$(schoolId)/rollKeys/$(enrollment.yearId + '_' + enrollment.sectionId + '_' + string(enrollment.rollNo))).data;
+        return key.studentId == enrollment.studentId && key.yearId == enrollment.yearId
+          && key.sectionId == enrollment.sectionId && key.rollNo == enrollment.rollNo;
+      }
+      function sectionInClass(sectionId, classId) {
+        let section = /databases/$(database)/documents/schools/$(schoolId)/sections/$(sectionId);
+        return exists(section) && get(section).data.classId == classId
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(classId));
+      }
+
       // Academic setup (features 018, 019, 020). Owner only; IDs are lowercase slugs.
       // academicYears/{yearId}: label, startDate, endDate (YYYY-MM-DD strings), status
       //   draft -> active -> closed. settings/academic.activeYearId points at the one
@@ -107,6 +130,61 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/schools/$(schoolId)/subjects/$(request.resource.data.subjectId));
       }
 
+      // Students (features 025, 026, 027, 029). Owner only. The document ID is the
+      // lowercase admission number, so admission numbers are unique by construction.
+      // students/{studentId}: admissionNo, name, guardianName, guardianPhone, status.
+      match /students/{studentId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && studentId.matches('[a-z0-9-]{1,20}') && validStudentRecord(request.resource.data)
+          && request.resource.data.admissionNo.lower() == studentId
+          && request.resource.data.status == 'active';
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validStudentRecord(request.resource.data)
+          && request.resource.data.admissionNo == resource.data.admissionNo;
+      }
+
+      // Placement (feature 028). enrollments/{yearId}_{studentId}: yearId, studentId, classId,
+      // sectionId, rollNo. rollKeys/{yearId}_{sectionId}_{rollNo}: yearId, sectionId, rollNo,
+      // studentId. The two are always written in one batch, so a roll number belongs to one
+      // student per section per year. Closed years are frozen.
+      match /enrollments/{enrollmentId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && validEnrollment(request.resource.data)
+          && enrollmentId == request.resource.data.yearId + '_' + request.resource.data.studentId
+          && openYear(request.resource.data.yearId)
+          && activeStudent(request.resource.data.studentId)
+          && sectionInClass(request.resource.data.sectionId, request.resource.data.classId)
+          && rollKeyMatches(request.resource.data);
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validEnrollment(request.resource.data)
+          && request.resource.data.yearId == resource.data.yearId
+          && request.resource.data.studentId == resource.data.studentId
+          && openYear(resource.data.yearId)
+          && activeStudent(resource.data.studentId)
+          && sectionInClass(request.resource.data.sectionId, request.resource.data.classId)
+          && rollKeyMatches(request.resource.data);
+      }
+
+      match /rollKeys/{rollKeyId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && validRollKey(request.resource.data)
+          && rollKeyId == request.resource.data.yearId + '_' + request.resource.data.sectionId
+            + '_' + string(request.resource.data.rollNo)
+          && openYear(request.resource.data.yearId)
+          && enrollmentAfter(request.resource.data.yearId, request.resource.data.studentId).sectionId
+            == request.resource.data.sectionId
+          && enrollmentAfter(request.resource.data.yearId, request.resource.data.studentId).rollNo
+            == request.resource.data.rollNo;
+        // A roll key may be released only when its student has moved to another section or roll.
+        allow delete: if request.auth != null && isSchoolOwner(schoolId)
+          && openYear(resource.data.yearId)
+          && (enrollmentAfter(resource.data.yearId, resource.data.studentId).sectionId != resource.data.sectionId
+            || enrollmentAfter(resource.data.yearId, resource.data.studentId).rollNo != resource.data.rollNo);
+      }
+
       match /teacherAssignments/{uid}/marks/{markId} {
         function assignedTeacher() {
           let member = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
@@ -170,6 +248,36 @@ service cloud.firestore {
       return item.keys().hasOnly(['name', 'code']) && item.keys().hasAll(['name', 'code'])
         && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
         && item.code is string && item.code.size() <= 12;
+    }
+
+    function validStudentRecord(student) {
+      return student.keys().hasOnly(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status'])
+        && student.keys().hasAll(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status'])
+        && student.admissionNo is string && student.admissionNo.matches('[A-Za-z0-9-]{1,20}')
+        && student.name is string && student.name.size() <= 120 && student.name.matches('.*[^[:space:]].*')
+        && student.guardianName is string && student.guardianName.size() <= 120
+        && student.guardianName.matches('.*[^[:space:]].*')
+        && student.guardianPhone is string && student.guardianPhone.matches('[0-9+() -]{0,20}')
+        && student.status in ['active', 'inactive'];
+    }
+
+    function validEnrollment(item) {
+      return item.keys().hasOnly(['yearId', 'studentId', 'classId', 'sectionId', 'rollNo'])
+        && item.keys().hasAll(['yearId', 'studentId', 'classId', 'sectionId', 'rollNo'])
+        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.sectionId is string && item.sectionId.matches('[a-z0-9-]{1,31}')
+        && item.rollNo is int && item.rollNo >= 1 && item.rollNo <= 999;
+    }
+
+    function validRollKey(item) {
+      return item.keys().hasOnly(['yearId', 'sectionId', 'rollNo', 'studentId'])
+        && item.keys().hasAll(['yearId', 'sectionId', 'rollNo', 'studentId'])
+        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
+        && item.sectionId is string && item.sectionId.matches('[a-z0-9-]{1,31}')
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.rollNo is int && item.rollNo >= 1 && item.rollNo <= 999;
     }
 
     function validStaff(staff) {
