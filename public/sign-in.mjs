@@ -527,6 +527,9 @@ function renderReviewExams() {
       + ' - ' + exam.yearId + (exam.status === 'open' ? '' : ' - ' + exam.status));
 }
 
+const GRADE_SCALE = [[90, 'A+'], [80, 'A'], [70, 'B'], [60, 'C'], [50, 'D'], [40, 'E'], [0, 'F']];
+const gradeFor = (percent) => GRADE_SCALE.find(([min]) => percent >= min)[1];
+
 async function renderMarksReview() {
   const tools = academic;
   const request = schoolRequest;
@@ -553,9 +556,12 @@ async function renderMarksReview() {
     for (const row of rows) {
       const student = students.get(row.studentId);
       const tr = document.createElement('tr');
-      const marks = scores.has(row.studentId) ? scores.get(row.studentId) + ' / ' + exam.maxMarks : 'Missing';
+      const has = scores.has(row.studentId);
+      const marks = has ? scores.get(row.studentId) + ' / ' + exam.maxMarks : 'Missing';
+      const percent = has ? Math.round(scores.get(row.studentId) / exam.maxMarks * 1000) / 10 : null;
       for (const text of [sectionName(row.sectionId), String(row.rollNo),
-        student ? student.name + ' (' + student.admissionNo + ')' : row.studentId, marks]) {
+        student ? student.name + ' (' + student.admissionNo + ')' : row.studentId, marks,
+        has ? percent + '%' : '-', has ? gradeFor(percent) : '-']) {
         const td = document.createElement('td');
         td.textContent = text;
         tr.append(td);
@@ -567,7 +573,8 @@ async function renderMarksReview() {
       ? entered.length + ' of ' + rows.length + ' students have marks'
         + (entered.length ? '. Highest ' + Math.max(...entered) + ', lowest ' + Math.min(...entered)
           + ', average ' + (Math.round(entered.reduce((sum, score) => sum + score, 0) / entered.length * 10) / 10)
-          + ' (out of ' + exam.maxMarks + ').' : '.')
+          + ' (out of ' + exam.maxMarks + '). ' + entered.filter((score) => score / exam.maxMarks * 100 >= 40).length
+          + ' of ' + entered.length + ' at or above 40%.' : '.')
       : 'No students are placed in this class for ' + exam.yearId + '.';
     const missing = rows.length - entered.length;
     reviewStatus.textContent = {

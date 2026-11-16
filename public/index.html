@@ -131,7 +131,7 @@
         <p><label>Exam <select id="review-exam"></select></label></p>
         <p id="review-summary" role="status"></p>
         <table>
-          <thead><tr><th>Section</th><th>Roll</th><th>Student</th><th>Marks</th></tr></thead>
+          <thead><tr><th>Section</th><th>Roll</th><th>Student</th><th>Marks</th><th>Percent</th><th>Grade</th></tr></thead>
           <tbody id="review-body"></tbody>
         </table>
         <p id="review-actions"></p>
@@ -171,7 +171,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=marks-3');
+      await import('./sign-in.mjs?v=marks-4');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
