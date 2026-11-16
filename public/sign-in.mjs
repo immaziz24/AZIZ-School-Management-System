@@ -200,8 +200,8 @@ function fillSelect(select, records, label) {
 async function loadAcademic(request) {
   const tools = academic;
   try {
-    const [years, classes, sections, subjects, mappings, studentDocs, enrollments] = await Promise.all(
-      ['academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'students', 'enrollments']
+    const [years, classes, sections, subjects, mappings, studentDocs, enrollments, exams] = await Promise.all(
+      ['academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'students', 'enrollments', 'exams']
         .map((name) => tools.list(name)),
     );
     if (request !== schoolRequest) return;
@@ -209,6 +209,8 @@ async function loadAcademic(request) {
     renderStudents();
     placementData = { years: years.docs, classes: classes.docs, sections: sections.docs, enrollments: enrollments.docs };
     renderPlacements();
+    examData = { years: years.docs, classes: classes.docs, subjects: subjects.docs, mappings: mappings.docs, exams: exams.docs };
+    renderExams();
     for (const list of Object.values(setupLists)) list.replaceChildren();
     const classRecords = classes.docs.sort((a, b) => a.data().order - b.data().order);
     const className = (id) => classRecords.find((record) => record.id === id)?.data().name ?? id;
@@ -499,6 +501,76 @@ placementForm.addEventListener('submit', (event) => {
   }, current ? 'Student moved.' : 'Student placed.', placementStatus);
 });
 
+const examSection = document.querySelector('#exam-setup');
+const examStatus = document.querySelector('#exam-status');
+const examList = document.querySelector('#exam-list');
+const examForm = document.querySelector('#exam-form');
+let examData = { years: [], classes: [], subjects: [], mappings: [], exams: [] };
+
+function renderExams() {
+  const { years, classes, subjects, mappings, exams } = examData;
+  const nameOf = (records, id) => records.find((record) => record.id === id)?.data().name ?? id;
+  examList.replaceChildren();
+  const sorted = [...exams].sort((a, b) => a.id.localeCompare(b.id));
+  for (const record of sorted) {
+    const exam = record.data();
+    let button;
+    if (exam.status === 'open') {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Lock ' + exam.name;
+      button.addEventListener('click', () => runSetupAction(async () => {
+        if (!confirm('Lock ' + exam.name + '? A locked exam cannot be changed or reopened.')) return false;
+        return academic.save('exams', record.id, { ...exam, status: 'locked' });
+      }, 'Exam locked.', examStatus));
+    }
+    listItem(examList, exam.name + ' - ' + nameOf(classes, exam.classId) + ' - ' + nameOf(subjects, exam.subjectId)
+      + ' - max ' + exam.maxMarks + ' - ' + exam.yearId + ' - ' + exam.status, button);
+  }
+  fillSelect(examForm.elements.namedItem('yearId'),
+    years.filter((record) => record.data().status !== 'closed'), (item) => item.label + ' (' + item.status + ')');
+  fillSelect(examForm.elements.namedItem('mappingId'),
+    [...mappings].sort((a, b) => a.id.localeCompare(b.id)).map((record) => ({
+      id: record.id,
+      data: () => ({ label: nameOf(classes, record.data().classId) + ' - ' + nameOf(subjects, record.data().subjectId) }),
+    })), (item) => item.label);
+}
+
+examForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy) return;
+  const fields = new FormData(examForm);
+  const yearId = String(fields.get('yearId') ?? '');
+  const mapping = examData.mappings.find((record) => record.id === String(fields.get('mappingId') ?? ''));
+  const name = String(fields.get('name') ?? '').trim();
+  const examKey = slug(name, 20);
+  const maxMarks = Number(fields.get('maxMarks'));
+  if (!yearId || !mapping) {
+    examStatus.textContent = 'Add an open academic year and link a subject to a class first.';
+    return;
+  }
+  if (!name || !examKey) {
+    examStatus.textContent = 'Give the exam a name with letters or numbers.';
+    return;
+  }
+  if (!Number.isInteger(maxMarks) || maxMarks < 1 || maxMarks > 1000) {
+    examStatus.textContent = 'Maximum marks must be a whole number from 1 to 1000.';
+    return;
+  }
+  const { classId, subjectId } = mapping.data();
+  const id = yearId + '_' + classId + '_' + subjectId + '_' + examKey;
+  const existing = examData.exams.find((record) => record.id === id)?.data();
+  if (existing && existing.status === 'locked') {
+    examStatus.textContent = 'This exam is locked and cannot be changed.';
+    return;
+  }
+  runSetupAction(async () => {
+    await academic.save('exams', id, { yearId, classId, subjectId, examKey, name, maxMarks, status: 'open' });
+    examForm.elements.namedItem('name').value = '';
+    examForm.elements.namedItem('maxMarks').value = '';
+  }, existing ? 'Exam updated.' : 'Exam saved.', examStatus);
+});
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   dashboard.hidden = true;
@@ -519,6 +591,12 @@ onAuthStateChanged(auth, async (user) => {
   placementList.replaceChildren();
   placementForm.reset();
   for (const name of ['yearId', 'studentId', 'sectionId']) placementForm.elements.namedItem(name).replaceChildren();
+  examData = { years: [], classes: [], subjects: [], mappings: [], exams: [] };
+  examSection.hidden = true;
+  examStatus.textContent = '';
+  examList.replaceChildren();
+  examForm.reset();
+  for (const name of ['yearId', 'mappingId']) examForm.elements.namedItem(name).replaceChildren();
   studentRecords = [];
   studentSection.hidden = true;
   studentStatus.textContent = '';
@@ -632,6 +710,7 @@ onAuthStateChanged(auth, async (user) => {
     };
     academicSection.hidden = false;
     studentSection.hidden = false;
+    examSection.hidden = false;
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
   } catch (error) {

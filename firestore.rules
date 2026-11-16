@@ -130,6 +130,30 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/schools/$(schoolId)/subjects/$(request.resource.data.subjectId));
       }
 
+      // Exam configuration (features 040, 041). Owner only. One exam per year, class,
+      // subject and exam key; the ID is yearId_classId_subjectId_examKey so duplicates
+      // are impossible. The subject must be taught in the class, and the year must be
+      // open. status open -> locked; a locked exam is frozen.
+      // exams/{examId}: yearId, classId, subjectId, examKey, name, maxMarks (1-1000), status.
+      match /exams/{examId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && validExam(request.resource.data)
+          && request.resource.data.status == 'open'
+          && examId == request.resource.data.yearId + '_' + request.resource.data.classId
+            + '_' + request.resource.data.subjectId + '_' + request.resource.data.examKey
+          && openYear(request.resource.data.yearId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classSubjects/$(request.resource.data.classId + '_' + request.resource.data.subjectId));
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validExam(request.resource.data)
+          && resource.data.status == 'open'
+          && request.resource.data.yearId == resource.data.yearId
+          && request.resource.data.classId == resource.data.classId
+          && request.resource.data.subjectId == resource.data.subjectId
+          && request.resource.data.examKey == resource.data.examKey
+          && openYear(resource.data.yearId);
+      }
+
       // Students (features 025, 026, 027, 029). Owner only. The document ID is the
       // lowercase admission number, so admission numbers are unique by construction.
       // students/{studentId}: admissionNo, name, guardianName, guardianPhone, status.
@@ -248,6 +272,18 @@ service cloud.firestore {
       return item.keys().hasOnly(['name', 'code']) && item.keys().hasAll(['name', 'code'])
         && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
         && item.code is string && item.code.size() <= 12;
+    }
+
+    function validExam(item) {
+      return item.keys().hasOnly(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status'])
+        && item.keys().hasAll(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status'])
+        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
+        && item.examKey is string && item.examKey.matches('[a-z0-9-]{1,20}')
+        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
+        && item.maxMarks is int && item.maxMarks >= 1 && item.maxMarks <= 1000
+        && item.status in ['open', 'locked'];
     }
 
     function validStudentRecord(student) {

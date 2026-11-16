@@ -114,6 +114,18 @@
           <button type="submit">Place student</button>
         </form>
       </section>
+      <section id="exam-setup" aria-labelledby="exam-title" hidden>
+        <h3 id="exam-title">Exams</h3>
+        <p id="exam-status" role="status"></p>
+        <ul id="exam-list"></ul>
+        <form id="exam-form">
+          <p><label>Academic year <select name="yearId" required></select></label></p>
+          <p><label>Class and subject <select name="mappingId" required></select></label></p>
+          <p><label>Exam name <input name="name" required maxlength="60" placeholder="Mid-term"></label></p>
+          <p><label>Maximum marks <input name="maxMarks" type="number" required min="1" max="1000" step="1"></label></p>
+          <button type="submit">Save exam</button>
+        </form>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -136,7 +148,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=placement-1');
+      await import('./sign-in.mjs?v=exams-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
