@@ -682,24 +682,23 @@ examMarksForm.addEventListener('submit', async (event) => {
     examMarksStatus.textContent = 'No new or changed marks to save.';
     return;
   }
-  const { doc, writeBatch, getFirestore } = firestoreTools;
+  const { doc, setDoc } = firestoreTools;
   const request = schoolRequest;
-  const firestore = getFirestore(app);
   context.busy = true;
   let done = 0;
   try {
-    // A few marks per batch keeps each write within the rules' document-read limit.
+    // One write per student: the rules read several documents to check each mark, and a
+    // batched write may only read 20 in total. Ten parallel writes at a time keeps it quick.
     for (let start = 0; start < writes.length; start += MARKS_PER_BATCH) {
       examMarksStatus.textContent = 'Saving marks ' + (start + 1) + ' of ' + writes.length + '.';
-      const batch = writeBatch(firestore);
-      for (const { studentId, score } of writes.slice(start, start + MARKS_PER_BATCH)) {
-        batch.set(doc(context.schoolRef, 'marks', examRecord.id + '_' + studentId), {
+      const results = await Promise.allSettled(writes.slice(start, start + MARKS_PER_BATCH).map(({ studentId, score }) => setDoc(
+        doc(context.schoolRef, 'marks', examRecord.id + '_' + studentId), {
           examId: examRecord.id, yearId: exam.yearId, classId: exam.classId, subjectId: exam.subjectId,
           studentId, score, maxMarks: exam.maxMarks, enteredBy: context.uid,
-        });
-      }
-      await batch.commit();
-      done = Math.min(start + MARKS_PER_BATCH, writes.length);
+        })));
+      done += results.filter((result) => result.status === 'fulfilled').length;
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
     }
     if (request !== schoolRequest || context !== teacherMarks) return;
     await renderTeacherMarks(request);
@@ -787,7 +786,7 @@ onAuthStateChanged(auth, async (user) => {
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
-    firestoreTools = { collection, doc, getDocsFromServer, getFirestore, query, where, writeBatch };
+    firestoreTools = { collection, doc, getDocsFromServer, query, setDoc, where };
     const schoolRef = doc(getFirestore(app), 'schools', 'abcd-school');
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     if (request !== schoolRequest) return;

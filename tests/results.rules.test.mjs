@@ -55,6 +55,8 @@ const batch = async (who, writes) => {
   return response.status;
 };
 const allowed = async (promise, label) => assert.equal(await promise, 200, label);
+const denied = async (promise, label) => assert.equal(await promise, 403, label);
+
 // Structured query over REST, so list rules can be tested with the filters the app uses.
 const query = async (who, parent, collectionId, filters) => {
   const fieldFilter = ([field, value]) => ({ fieldFilter: { field: { fieldPath: field }, op: 'EQUAL', value: encode(value) } });
@@ -138,11 +140,11 @@ test('the assigned teacher can save, read and correct marks for a placed student
   await allowed(query('owner-a', A, 'marks', [['examId', EXAM]]), 'owner lists marks for an exam');
 });
 
-test('a whole page of marks can be saved in one batch', async () => {
-  const writes = Array.from({ length: 10 }, (_, i) => [markPath('s' + (i + 1)), mark('s' + (i + 1), 10 + i)]);
-  await allowed(batch('teacher-a', writes), 'ten marks in one batch');
-  await allowed(get('teacher-a', markPath('s10')), 'last mark saved');
-  await denied(batch('teacher-a', [...writes.slice(0, 2), [markPath('s3'), mark('s3', 99)]]), 'one bad mark rejects the whole batch');
+test('a whole class of marks can be saved, one document per student', async () => {
+  const saves = Array.from({ length: 12 }, (_, i) => set('teacher-a', markPath('s' + (i + 1)), mark('s' + (i + 1), 10 + i)));
+  for (const status of await Promise.all(saves)) assert.equal(status, 200, 'parallel save');
+  await allowed(get('teacher-a', markPath('s12')), 'last mark saved');
+  await allowed(query('teacher-a', A, 'marks', [['examId', EXAM], ['enteredBy', 'teacher-a']]), 'teacher lists the class marks');
 });
 
 test('mark values are validated against the exam', async () => {
@@ -233,7 +235,7 @@ test('the owner assigns teachers by class and subject IDs', async () => {
   await allowed(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, { className: 'Class 8', subject: 'Whatever' }), 'text-only assignment still allowed');
   await denied(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, id({ className: 'Class 9' })), 'class name does not match the record');
   await denied(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, id({ subject: 'Physics' })), 'subject name does not match the record');
-  await denied(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, id({ classId: 'class-7', className: 'Class 7' })), 'subject not taught in that class');
+  await denied(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, id({ classId: 'class-7', className: 'Class 7', subjectId: 'maths', subject: 'Maths' })), 'subject not taught in that class');
   await denied(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, id({ classId: 'class-99' })), 'class does not exist');
   await denied(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, { className: 'Class 8', subject: 'Science', classId: 'class-8' }), 'only one of the two IDs');
   await denied(set('owner-a', `${A}/teacherAssignments/teacher-unassigned`, { ...id(), extra: 'x' }), 'extra field');
