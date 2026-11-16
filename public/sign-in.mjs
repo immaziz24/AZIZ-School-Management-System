@@ -26,6 +26,7 @@ const saveProfile = profileForm.querySelector('button');
 const profileFields = ['name', 'contactEmail', 'phone', 'address'];
 let saveSchoolProfile;
 let schoolRequest = 0;
+let firestoreTools;
 const assignmentForm = document.querySelector('#teacher-assignment');
 const assignmentStatus = document.querySelector('#assignment-status');
 const assignmentSummary = document.querySelector('#teacher-assignment-summary');
@@ -67,16 +68,22 @@ assignmentForm.addEventListener('submit', async (event) => {
   const request = schoolRequest;
   const fields = new FormData(assignmentForm);
   const uid = fields.get('uid').trim();
-  const className = fields.get('className').trim();
-  const subject = fields.get('subject').trim();
+  const link = examData.mappings.find((record) => record.id === String(fields.get('mappingId') ?? ''));
+  if (!link) {
+    assignmentStatus.textContent = 'Link a subject to a class in Academic Setup first.';
+    return;
+  }
+  const { classId, subjectId } = link.data();
+  const className = examData.classes.find((record) => record.id === classId)?.data().name;
+  const subject = examData.subjects.find((record) => record.id === subjectId)?.data().name;
   if (!className || !subject) {
-    assignmentStatus.textContent = 'Enter a class and subject.';
+    assignmentStatus.textContent = 'That class or subject could not be found. Reload and try again.';
     return;
   }
   assignmentButton.disabled = true;
   assignmentStatus.textContent = 'Saving assignment.';
   try {
-    await saveAssignment(uid, { className, subject });
+    await saveAssignment(uid, { className, subject, classId, subjectId });
     if (request === schoolRequest) assignmentStatus.textContent = 'Assignment saved.';
   } catch (error) {
     if (request === schoolRequest) assignmentStatus.textContent = error.code === 'permission-denied'
@@ -531,11 +538,12 @@ function renderExams() {
   }
   fillSelect(examForm.elements.namedItem('yearId'),
     years.filter((record) => record.data().status !== 'closed'), (item) => item.label + ' (' + item.status + ')');
-  fillSelect(examForm.elements.namedItem('mappingId'),
-    [...mappings].sort((a, b) => a.id.localeCompare(b.id)).map((record) => ({
-      id: record.id,
-      data: () => ({ label: nameOf(classes, record.data().classId) + ' - ' + nameOf(subjects, record.data().subjectId) }),
-    })), (item) => item.label);
+  const links = [...mappings].sort((a, b) => a.id.localeCompare(b.id)).map((record) => ({
+    id: record.id,
+    data: () => ({ label: nameOf(classes, record.data().classId) + ' - ' + nameOf(subjects, record.data().subjectId) }),
+  }));
+  fillSelect(examForm.elements.namedItem('mappingId'), links, (item) => item.label);
+  fillSelect(assignmentForm.elements.namedItem('mappingId'), links, (item) => item.label);
 }
 
 examForm.addEventListener('submit', (event) => {
@@ -573,8 +581,149 @@ examForm.addEventListener('submit', (event) => {
   }, existing ? 'Exam updated.' : 'Exam saved.', examStatus);
 });
 
+const examMarksSection = document.querySelector('#exam-marks');
+const examMarksStatus = document.querySelector('#exam-marks-status');
+const examMarksSelect = document.querySelector('#exam-marks-exam');
+const examMarksForm = document.querySelector('#exam-marks-form');
+const examMarksBody = document.querySelector('#exam-marks-body');
+const examMarksHeading = document.querySelector('#exam-marks-heading');
+let teacherMarks; // { schoolRef, uid, classId, subjectId, exams, busy }
+const MARKS_PER_BATCH = 10;
+
+async function loadTeacherExams(request) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  const context = teacherMarks;
+  const snapshot = await getDocsFromServer(query(collection(context.schoolRef, 'exams'),
+    where('classId', '==', context.classId), where('subjectId', '==', context.subjectId)));
+  if (request !== schoolRequest || context !== teacherMarks) return;
+  // Open exams first, so the screen opens on an exam that can be marked.
+  context.exams = snapshot.docs.sort((a, b) => (a.data().status === 'locked') - (b.data().status === 'locked')
+    || a.id.localeCompare(b.id));
+  fillSelect(examMarksSelect, context.exams,
+    (exam) => exam.name + ' - ' + exam.yearId + ' (out of ' + exam.maxMarks + ')' + (exam.status === 'locked' ? ' - locked' : ''));
+  await renderTeacherMarks(request);
+}
+
+async function renderTeacherMarks(request) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  const context = teacherMarks;
+  examMarksBody.replaceChildren();
+  const examRecord = context.exams.find((record) => record.id === examMarksSelect.value);
+  if (!examRecord) {
+    examMarksStatus.textContent = 'No exams have been set up for your class and subject yet.';
+    return;
+  }
+  const exam = examRecord.data();
+  examMarksHeading.textContent = 'Marks (out of ' + exam.maxMarks + ')';
+  examMarksStatus.textContent = 'Loading students.';
+  try {
+    const [placements, sections, saved] = await Promise.all([
+      getDocsFromServer(query(collection(context.schoolRef, 'enrollments'),
+        where('yearId', '==', exam.yearId), where('classId', '==', context.classId))),
+      getDocsFromServer(query(collection(context.schoolRef, 'sections'), where('classId', '==', context.classId))),
+      getDocsFromServer(query(collection(context.schoolRef, 'marks'),
+        where('examId', '==', examRecord.id), where('enteredBy', '==', context.uid))),
+    ]);
+    if (request !== schoolRequest || context !== teacherMarks || examRecord.id !== examMarksSelect.value) return;
+    const scores = new Map(saved.docs.map((record) => [record.data().studentId, record.data().score]));
+    const sectionName = (id) => sections.docs.find((record) => record.id === id)?.data().name ?? id;
+    const rows = placements.docs.map((record) => record.data())
+      .sort((a, b) => sectionName(a.sectionId).localeCompare(sectionName(b.sectionId)) || a.rollNo - b.rollNo);
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = String(exam.maxMarks);
+      input.step = '1';
+      input.disabled = exam.status === 'locked';
+      input.dataset.student = row.studentId;
+      input.dataset.original = scores.has(row.studentId) ? String(scores.get(row.studentId)) : '';
+      input.value = input.dataset.original;
+      input.setAttribute('aria-label', 'Marks for ' + sectionName(row.sectionId) + ' roll ' + row.rollNo);
+      for (const content of [sectionName(row.sectionId), String(row.rollNo), input]) {
+        const td = document.createElement('td');
+        td.append(content);
+        tr.append(td);
+      }
+      examMarksBody.append(tr);
+    }
+    examMarksStatus.textContent = exam.status === 'locked'
+      ? 'This exam is locked. Ask the principal to unlock it to change marks.'
+      : rows.length ? '' : 'No students have been placed in your class for this year yet.';
+  } catch {
+    if (request === schoolRequest) examMarksStatus.textContent = 'Could not load students. Try again.';
+  }
+}
+
+examMarksSelect.addEventListener('change', () => {
+  if (teacherMarks) renderTeacherMarks(schoolRequest);
+});
+
+examMarksForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = teacherMarks;
+  if (!context || context.busy) return;
+  const examRecord = context.exams.find((record) => record.id === examMarksSelect.value);
+  if (!examRecord) return;
+  const exam = examRecord.data();
+  const writes = [];
+  for (const input of examMarksBody.querySelectorAll('input')) {
+    if (input.value === '' || input.value === input.dataset.original) continue;
+    const score = Number(input.value);
+    if (!Number.isInteger(score) || score < 0 || score > exam.maxMarks) {
+      examMarksStatus.textContent = 'Marks must be whole numbers from 0 to ' + exam.maxMarks + '.';
+      input.focus();
+      return;
+    }
+    writes.push({ studentId: input.dataset.student, score });
+  }
+  if (!writes.length) {
+    examMarksStatus.textContent = 'No new or changed marks to save.';
+    return;
+  }
+  const { doc, writeBatch, getFirestore } = firestoreTools;
+  const request = schoolRequest;
+  const firestore = getFirestore(app);
+  context.busy = true;
+  let done = 0;
+  try {
+    // A few marks per batch keeps each write within the rules' document-read limit.
+    for (let start = 0; start < writes.length; start += MARKS_PER_BATCH) {
+      examMarksStatus.textContent = 'Saving marks ' + (start + 1) + ' of ' + writes.length + '.';
+      const batch = writeBatch(firestore);
+      for (const { studentId, score } of writes.slice(start, start + MARKS_PER_BATCH)) {
+        batch.set(doc(context.schoolRef, 'marks', examRecord.id + '_' + studentId), {
+          examId: examRecord.id, yearId: exam.yearId, classId: exam.classId, subjectId: exam.subjectId,
+          studentId, score, maxMarks: exam.maxMarks, enteredBy: context.uid,
+        });
+      }
+      await batch.commit();
+      done = Math.min(start + MARKS_PER_BATCH, writes.length);
+    }
+    if (request !== schoolRequest || context !== teacherMarks) return;
+    await renderTeacherMarks(request);
+    if (request === schoolRequest) examMarksStatus.textContent = 'Saved ' + done + ' mark' + (done === 1 ? '' : 's') + '.';
+  } catch (error) {
+    if (request !== schoolRequest || context !== teacherMarks) return;
+    await renderTeacherMarks(request);
+    examMarksStatus.textContent = (done ? 'Saved ' + done + ' of ' + writes.length + ' marks. ' : '')
+      + (error.code === 'permission-denied'
+        ? 'The rest could not be saved. The exam may be locked, or a student may have moved class.'
+        : 'Could not save all marks. Check your connection and save again.');
+  } finally {
+    context.busy = false;
+  }
+});
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
+  teacherMarks = undefined;
+  examMarksSection.hidden = true;
+  examMarksStatus.textContent = '';
+  examMarksBody.replaceChildren();
+  examMarksSelect.replaceChildren();
+  assignmentForm.elements.namedItem('mappingId').replaceChildren();
   dashboard.hidden = true;
   saveAssignment = undefined;
   saveMark = undefined;
@@ -634,10 +783,11 @@ onAuthStateChanged(auth, async (user) => {
 
   schoolStatus.textContent = 'Checking school access.';
   try {
-    const { addDoc, collection, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, updateDoc, writeBatch } = await import(
+    const { addDoc, collection, doc, getDocFromServer, getDocsFromServer, getFirestore, query, setDoc, updateDoc, where, writeBatch } = await import(
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
+    firestoreTools = { collection, doc, getDocsFromServer, getFirestore, query, where, writeBatch };
     const schoolRef = doc(getFirestore(app), 'schools', 'abcd-school');
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     if (request !== schoolRequest) return;
@@ -654,11 +804,19 @@ onAuthStateChanged(auth, async (user) => {
           ? assignment.data().className + ' - ' + assignment.data().subject
           : 'No class or subject assigned yet.';
         if (assignment.exists()) {
-          const { className, subject } = assignment.data();
-          saveMark = (mark) => setDoc(doc(assignment.ref, 'marks', mark.exam + '_' + mark.roll), {
-            ...mark, className, subject,
-          });
-          marksForm.hidden = false;
+          const { className, subject, classId, subjectId } = assignment.data();
+          if (classId && subjectId) {
+            teacherMarks = { schoolRef, uid: user.uid, classId, subjectId, exams: [], busy: false };
+            examMarksSection.hidden = false;
+            examMarksStatus.textContent = 'Loading exams.';
+            await loadTeacherExams(request);
+          } else {
+            assignmentSummary.textContent += ' - ask the principal to save your assignment again to use the new marks screen.';
+            saveMark = (mark) => setDoc(doc(assignment.ref, 'marks', mark.exam + '_' + mark.roll), {
+              ...mark, className, subject,
+            });
+            marksForm.hidden = false;
+          }
         }
       } catch {
         if (request === schoolRequest) assignmentSummary.textContent = 'Could not load your assignment.';

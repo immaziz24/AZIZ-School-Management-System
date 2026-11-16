@@ -31,14 +31,54 @@ service cloud.firestore {
 
         allow get: if request.auth != null && (isSchoolOwner(schoolId)
           || (request.auth.uid == uid && activeTeacher()));
+        // An ID-based assignment must link a subject that is taught in the class, and its
+        // display names must match those records.
+        function idsMatchRecords(assignment) {
+          return !assignment.keys().hasAll(['classId', 'subjectId'])
+            || (exists(/databases/$(database)/documents/schools/$(schoolId)/classSubjects/$(assignment.classId + '_' + assignment.subjectId))
+              && get(/databases/$(database)/documents/schools/$(schoolId)/classes/$(assignment.classId)).data.name == assignment.className
+              && get(/databases/$(database)/documents/schools/$(schoolId)/subjects/$(assignment.subjectId)).data.name == assignment.subject);
+        }
+
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
-          && activeTeacher() && validAssignment(request.resource.data);
+          && activeTeacher() && validAssignment(request.resource.data)
+          && idsMatchRecords(request.resource.data);
       }
 
       match /staff/{staffId} {
         allow get, list: if request.auth != null && isSchoolOwner(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validStaff(request.resource.data);
+      }
+
+      // Teacher helpers (feature 042/043). A teacher's assignment may carry classId and
+      // subjectId; only those ID-based assignments unlock the exam marks screen.
+      function isActiveTeacher() {
+        let member = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
+        return exists(member) && get(member).data.active == true && get(member).data.role == 'teacher';
+      }
+      function teacherClassId() {
+        let path = /databases/$(database)/documents/schools/$(schoolId)/teacherAssignments/$(request.auth.uid);
+        return exists(path) && get(path).data.keys().hasAll(['classId', 'subjectId']) ? get(path).data.classId : '';
+      }
+      function teacherSubjectId() {
+        let path = /databases/$(database)/documents/schools/$(schoolId)/teacherAssignments/$(request.auth.uid);
+        return exists(path) && get(path).data.keys().hasAll(['classId', 'subjectId']) ? get(path).data.subjectId : '';
+      }
+      function teachesClass(classId) {
+        return request.auth != null && isActiveTeacher() && teacherClassId() != '' && teacherClassId() == classId;
+      }
+      function teachesExam(exam) {
+        return teachesClass(exam.classId) && teacherSubjectId() == exam.subjectId;
+      }
+      function markAllowed(mark) {
+        let exam = get(/databases/$(database)/documents/schools/$(schoolId)/exams/$(mark.examId)).data;
+        let enrollmentPath = /databases/$(database)/documents/schools/$(schoolId)/enrollments/$(mark.yearId + '_' + mark.studentId);
+        return exam.status == 'open'
+          && exam.yearId == mark.yearId && exam.classId == mark.classId && exam.subjectId == mark.subjectId
+          && exam.maxMarks == mark.maxMarks && mark.score <= exam.maxMarks
+          && teachesExam(exam) && openYear(exam.yearId)
+          && exists(enrollmentPath) && get(enrollmentPath).data.classId == exam.classId;
       }
 
       // Helpers for student placement (feature 028).
@@ -103,7 +143,7 @@ service cloud.firestore {
       }
 
       match /sections/{sectionId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && sectionId.matches('[a-z0-9-]{1,31}') && validSection(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
@@ -137,7 +177,7 @@ service cloud.firestore {
       // reopen it (the reopen write may not change anything else).
       // exams/{examId}: yearId, classId, subjectId, examKey, name, maxMarks (1-1000), status.
       match /exams/{examId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesExam(resource.data));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validExam(request.resource.data)
           && request.resource.data.status == 'open'
@@ -156,6 +196,27 @@ service cloud.firestore {
             || (resource.data.status == 'locked' && request.resource.data.status == 'open'
               && request.resource.data.name == resource.data.name
               && request.resource.data.maxMarks == resource.data.maxMarks));
+      }
+
+      // Exam marks (features 042, 043). marks/{examId}_{studentId}. Written by the teacher
+      // assigned to the exam's class and subject, only while the exam is open and the
+      // student is placed in that class. The maximum comes from the exam, not the teacher.
+      // Owners can read every mark; a teacher can read only the marks they entered.
+      match /marks/{markId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || (isActiveTeacher() && resource.data.enteredBy == request.auth.uid));
+        allow create: if request.auth != null && isActiveTeacher()
+          && validResultMark(request.resource.data)
+          && request.resource.data.enteredBy == request.auth.uid
+          && markId == request.resource.data.examId + '_' + request.resource.data.studentId
+          && markAllowed(request.resource.data);
+        allow update: if request.auth != null && isActiveTeacher()
+          && validResultMark(request.resource.data)
+          && resource.data.enteredBy == request.auth.uid
+          && request.resource.data.enteredBy == resource.data.enteredBy
+          && request.resource.data.examId == resource.data.examId
+          && request.resource.data.studentId == resource.data.studentId
+          && markAllowed(request.resource.data);
       }
 
       // Students (features 025, 026, 027, 029). Owner only. The document ID is the
@@ -177,7 +238,7 @@ service cloud.firestore {
       // studentId. The two are always written in one batch, so a roll number belongs to one
       // student per section per year. Closed years are frozen.
       match /enrollments/{enrollmentId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validEnrollment(request.resource.data)
           && enrollmentId == request.resource.data.yearId + '_' + request.resource.data.studentId
@@ -233,11 +294,15 @@ service cloud.firestore {
 
     function validAssignment(assignment) {
       return assignment.keys().hasAll(['className', 'subject'])
-        && assignment.keys().hasOnly(['className', 'subject'])
+        && assignment.keys().hasOnly(['className', 'subject', 'classId', 'subjectId'])
         && assignment.className is string && assignment.className.size() <= 80
         && assignment.className.matches('.*[^[:space:]].*')
         && assignment.subject is string && assignment.subject.size() <= 80
-        && assignment.subject.matches('.*[^[:space:]].*');
+        && assignment.subject.matches('.*[^[:space:]].*')
+        && (assignment.keys().hasAll(['classId', 'subjectId'])
+          ? (assignment.classId is string && assignment.classId.matches('[a-z0-9-]{1,20}')
+            && assignment.subjectId is string && assignment.subjectId.matches('[a-z0-9-]{1,30}'))
+          : !assignment.keys().hasAny(['classId', 'subjectId']));
     }
 
     function validMark(mark, markId) {
@@ -276,6 +341,19 @@ service cloud.firestore {
       return item.keys().hasOnly(['name', 'code']) && item.keys().hasAll(['name', 'code'])
         && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
         && item.code is string && item.code.size() <= 12;
+    }
+
+    function validResultMark(mark) {
+      return mark.keys().hasOnly(['examId', 'yearId', 'classId', 'subjectId', 'studentId', 'score', 'maxMarks', 'enteredBy'])
+        && mark.keys().hasAll(['examId', 'yearId', 'classId', 'subjectId', 'studentId', 'score', 'maxMarks', 'enteredBy'])
+        && mark.examId is string && mark.examId.size() <= 100
+        && mark.yearId is string && mark.yearId.matches('[a-z0-9-]{1,20}')
+        && mark.classId is string && mark.classId.matches('[a-z0-9-]{1,20}')
+        && mark.subjectId is string && mark.subjectId.matches('[a-z0-9-]{1,30}')
+        && mark.studentId is string && mark.studentId.matches('[a-z0-9-]{1,20}')
+        && mark.enteredBy is string
+        && mark.maxMarks is int && mark.maxMarks >= 1 && mark.maxMarks <= 1000
+        && mark.score is int && mark.score >= 0 && mark.score <= mark.maxMarks;
     }
 
     function validExam(item) {

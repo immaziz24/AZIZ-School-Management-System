@@ -35,8 +35,7 @@
       <h3>Teacher Assignment</h3>
       <form id="teacher-assignment">
         <p><label>Teacher Firebase UID <input name="uid" required maxlength="128" pattern="[A-Za-z0-9_\-]+"></label></p>
-        <p><label>Class <input name="className" required maxlength="80"></label></p>
-        <p><label>Subject <input name="subject" required maxlength="80"></label></p>
+        <p><label>Class and subject <select name="mappingId" required></select></label></p>
         <button type="submit">Save assignment</button>
         <p id="assignment-status" role="status"></p>
       </form>
@@ -133,8 +132,20 @@
       <p id="teacher-email"></p>
       <h3>My Assignment</h3>
       <p id="teacher-assignment-summary" role="status"></p>
+      <section id="exam-marks" hidden>
+        <h3>Enter Marks</h3>
+        <p id="exam-marks-status" role="status"></p>
+        <p><label>Exam <select id="exam-marks-exam"></select></label></p>
+        <form id="exam-marks-form">
+          <table>
+            <thead><tr><th>Section</th><th>Roll</th><th id="exam-marks-heading">Marks</th></tr></thead>
+            <tbody id="exam-marks-body"></tbody>
+          </table>
+          <button type="submit">Save marks</button>
+        </form>
+      </section>
       <form id="marks-entry" hidden>
-        <h3>Marks Entry</h3>
+        <h3>Marks Entry (old form)</h3>
         <p><label>Exam code <input name="exam" required maxlength="40" pattern="[a-z0-9\-]+" placeholder="midterm"></label></p>
         <p><label>Student roll number <input name="roll" required maxlength="24" pattern="[a-z0-9\-]+"></label></p>
         <p><label>Marks obtained <input name="score" type="number" required min="0" max="1000"></label></p>
@@ -148,7 +159,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=exams-2');
+      await import('./sign-in.mjs?v=marks-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
