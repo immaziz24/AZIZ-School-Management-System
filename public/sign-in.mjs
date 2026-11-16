@@ -161,6 +161,168 @@ staffForm.addEventListener('submit', async (event) => {
   }
 });
 
+const academicSection = document.querySelector('#academic-setup');
+const academicStatus = document.querySelector('#academic-status');
+const setupLists = {
+  years: document.querySelector('#year-list'), classes: document.querySelector('#class-list'),
+  sections: document.querySelector('#section-list'), subjects: document.querySelector('#subject-list'),
+  mappings: document.querySelector('#mapping-list'),
+};
+const yearForm = document.querySelector('#year-form');
+const classForm = document.querySelector('#class-form');
+const sectionForm = document.querySelector('#section-form');
+const subjectForm = document.querySelector('#subject-form');
+const mappingForm = document.querySelector('#mapping-form');
+let academic;
+
+const slug = (text, max) => text.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '').slice(0, max).replace(/-+$/, '');
+
+function listItem(list, text, button) {
+  const item = document.createElement('li');
+  item.textContent = text + (button ? ' ' : '');
+  if (button) item.append(button);
+  list.append(item);
+}
+
+function fillSelect(select, records, label) {
+  const previous = select.value;
+  select.replaceChildren();
+  for (const record of records) {
+    const option = document.createElement('option');
+    option.value = record.id;
+    option.textContent = label(record.data());
+    select.append(option);
+  }
+  if (records.some((record) => record.id === previous)) select.value = previous;
+}
+
+async function loadAcademic(request) {
+  const tools = academic;
+  try {
+    const [years, classes, sections, subjects, mappings] = await Promise.all(
+      ['academicYears', 'classes', 'sections', 'subjects', 'classSubjects'].map((name) => tools.list(name)),
+    );
+    if (request !== schoolRequest) return;
+    for (const list of Object.values(setupLists)) list.replaceChildren();
+    const classRecords = classes.docs.sort((a, b) => a.data().order - b.data().order);
+    const className = (id) => classRecords.find((record) => record.id === id)?.data().name ?? id;
+    const subjectName = (id) => subjects.docs.find((record) => record.id === id)?.data().name ?? id;
+    const hasActiveYear = years.docs.some((record) => record.data().status === 'active');
+    for (const record of years.docs.sort((a, b) => a.data().startDate.localeCompare(b.data().startDate))) {
+      const year = record.data();
+      let button;
+      if (year.status === 'draft' || year.status === 'active') {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = year.status === 'draft' ? 'Activate ' + year.label : 'Close ' + year.label;
+        button.disabled = year.status === 'draft' && hasActiveYear;
+        button.addEventListener('click', () => runSetupAction(async () => {
+          if (year.status === 'draft') return tools.activate(record.id, year);
+          if (!confirm('Close ' + year.label + '? A closed year cannot be reopened or edited.')) return false;
+          return tools.close(record.id);
+        }, year.status === 'draft' ? 'Academic year activated.' : 'Academic year closed.'));
+      }
+      listItem(setupLists.years, year.label + ' (' + year.startDate + ' to ' + year.endDate + ') - ' + year.status
+        + (year.status === 'draft' && hasActiveYear ? ' - close the active year first' : ''), button);
+    }
+    for (const record of classRecords) listItem(setupLists.classes, record.data().order + '. ' + record.data().name);
+    for (const record of sections.docs.sort((a, b) => a.id.localeCompare(b.id))) {
+      listItem(setupLists.sections, className(record.data().classId) + ' - Section ' + record.data().name);
+    }
+    for (const record of subjects.docs.sort((a, b) => a.id.localeCompare(b.id))) {
+      listItem(setupLists.subjects, record.data().name + (record.data().code ? ' (' + record.data().code + ')' : ''));
+    }
+    for (const record of mappings.docs.sort((a, b) => a.id.localeCompare(b.id))) {
+      listItem(setupLists.mappings, className(record.data().classId) + ' - ' + subjectName(record.data().subjectId));
+    }
+    fillSelect(sectionForm.elements.namedItem('classId'), classRecords, (item) => item.name);
+    fillSelect(mappingForm.elements.namedItem('classId'), classRecords, (item) => item.name);
+    fillSelect(mappingForm.elements.namedItem('subjectId'), subjects.docs, (item) => item.name);
+    academicStatus.textContent = '';
+  } catch {
+    if (request === schoolRequest) academicStatus.textContent = 'Could not load academic setup.';
+  }
+}
+
+async function runSetupAction(action, done) {
+  if (!academic || academic.busy) return;
+  const tools = academic;
+  const request = schoolRequest;
+  tools.busy = true;
+  academicStatus.textContent = 'Saving.';
+  try {
+    if (await action() === false) {
+      if (request === schoolRequest) academicStatus.textContent = '';
+      return;
+    }
+    if (request !== schoolRequest) return;
+    academicStatus.textContent = done;
+    await loadAcademic(request);
+    if (request === schoolRequest) academicStatus.textContent = done;
+  } catch (error) {
+    if (request === schoolRequest) academicStatus.textContent = error.code === 'permission-denied'
+      ? 'This change is not allowed. Check that the records it depends on exist and are open.'
+      : 'Could not save. Try again.';
+  } finally {
+    tools.busy = false;
+  }
+}
+
+function bindSetupForm(form, build, done) {
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!academic || academic.busy) return;
+    const fields = new FormData(form);
+    const result = build((name) => String(fields.get(name) ?? '').trim());
+    if (typeof result === 'string') {
+      academicStatus.textContent = result;
+      return;
+    }
+    runSetupAction(async () => {
+      await academic.save(result.collection, result.id, result.data);
+      form.reset();
+    }, done);
+  });
+}
+
+bindSetupForm(yearForm, (value) => {
+  const id = slug(value('label'), 20);
+  if (!id) return 'Enter a year label such as 2026-27.';
+  if (value('endDate') <= value('startDate')) return 'The end date must be after the start date.';
+  return { collection: 'academicYears', id, data: {
+    label: value('label'), startDate: value('startDate'), endDate: value('endDate'), status: 'draft',
+  } };
+}, 'Academic year added as a draft.');
+
+bindSetupForm(classForm, (value) => {
+  const id = slug(value('name'), 20);
+  const order = Number(value('order'));
+  if (!id) return 'Enter a class name.';
+  if (!Number.isInteger(order) || order < 1 || order > 100) return 'Display order must be a whole number from 1 to 100.';
+  return { collection: 'classes', id, data: { name: value('name'), order } };
+}, 'Class saved.');
+
+bindSetupForm(sectionForm, (value) => {
+  const suffix = slug(value('name'), 10);
+  if (!value('classId')) return 'Add a class first.';
+  if (!suffix) return 'Enter a section name.';
+  return { collection: 'sections', id: value('classId') + '-' + suffix,
+    data: { classId: value('classId'), name: value('name') } };
+}, 'Section saved.');
+
+bindSetupForm(subjectForm, (value) => {
+  const id = slug(value('name'), 30);
+  if (!id) return 'Enter a subject name.';
+  return { collection: 'subjects', id, data: { name: value('name'), code: value('code') } };
+}, 'Subject saved.');
+
+bindSetupForm(mappingForm, (value) => {
+  if (!value('classId') || !value('subjectId')) return 'Add a class and a subject first.';
+  return { collection: 'classSubjects', id: value('classId') + '_' + value('subjectId'),
+    data: { classId: value('classId'), subjectId: value('subjectId') } };
+}, 'Subject added to the class.');
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   dashboard.hidden = true;
@@ -176,6 +338,13 @@ onAuthStateChanged(auth, async (user) => {
   assignmentButton.disabled = false;
   teacherDashboard.hidden = true;
   teacherEmail.textContent = '';
+  academic = undefined;
+  academicSection.hidden = true;
+  academicStatus.textContent = '';
+  for (const list of Object.values(setupLists)) list.replaceChildren();
+  for (const form of [yearForm, classForm, sectionForm, subjectForm, mappingForm]) form.reset();
+  for (const select of [sectionForm.elements.namedItem('classId'), mappingForm.elements.namedItem('classId'),
+    mappingForm.elements.namedItem('subjectId')]) select.replaceChildren();
   staffDirectory = undefined;
   staffForm.reset();
   staffForm.hidden = true;
@@ -198,7 +367,7 @@ onAuthStateChanged(auth, async (user) => {
 
   schoolStatus.textContent = 'Checking school access.';
   try {
-    const { addDoc, collection, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, updateDoc } = await import(
+    const { addDoc, collection, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, updateDoc, writeBatch } = await import(
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
@@ -252,6 +421,23 @@ onAuthStateChanged(auth, async (user) => {
     };
     staffStatus.textContent = 'Loading staff profiles.';
     await loadStaff(staffDirectory, request);
+    const firestore = getFirestore(app);
+    academic = {
+      busy: false,
+      list: (name) => getDocsFromServer(collection(schoolRef, name)),
+      save: (name, id, data) => setDoc(doc(schoolRef, name, id), data),
+      // A year becomes active in one batch with the pointer the rules check.
+      activate: (id, year) => {
+        const batch = writeBatch(firestore);
+        batch.set(doc(schoolRef, 'academicYears', id), { ...year, status: 'active' });
+        batch.set(doc(schoolRef, 'settings', 'academic'), { activeYearId: id });
+        return batch.commit();
+      },
+      close: (id) => updateDoc(doc(schoolRef, 'academicYears', id), { status: 'closed' }),
+    };
+    academicSection.hidden = false;
+    academicStatus.textContent = 'Loading academic setup.';
+    await loadAcademic(request);
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'

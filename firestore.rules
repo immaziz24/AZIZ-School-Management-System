@@ -41,6 +41,72 @@ service cloud.firestore {
           && validStaff(request.resource.data);
       }
 
+      // Academic setup (features 018, 019, 020). Owner only; IDs are lowercase slugs.
+      // academicYears/{yearId}: label, startDate, endDate (YYYY-MM-DD strings), status
+      //   draft -> active -> closed. settings/academic.activeYearId points at the one
+      //   active year; it must be written in the same batch as the year's status change.
+      match /settings/academic {
+        allow get: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && request.resource.data.keys().hasOnly(['activeYearId'])
+          && request.resource.data.activeYearId is string
+          && request.resource.data.activeYearId.matches('[a-z0-9-]{1,20}')
+          && getAfter(/databases/$(database)/documents/schools/$(schoolId)/academicYears/$(request.resource.data.activeYearId)).data.status == 'active'
+          && (resource == null || resource.data.activeYearId == request.resource.data.activeYearId
+            || getAfter(/databases/$(database)/documents/schools/$(schoolId)/academicYears/$(resource.data.activeYearId)).data.status == 'closed');
+      }
+
+      match /academicYears/{yearId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && yearId.matches('[a-z0-9-]{1,20}')
+          && validYear(request.resource.data) && request.resource.data.status == 'draft';
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validYear(request.resource.data)
+          && request.resource.data.label == resource.data.label
+          && ((resource.data.status == 'draft' && request.resource.data.status == 'draft')
+            || (resource.data.status == 'draft' && request.resource.data.status == 'active'
+              && getAfter(/databases/$(database)/documents/schools/$(schoolId)/settings/academic).data.activeYearId == yearId)
+            || (resource.data.status == 'active' && request.resource.data.status == 'closed'
+              && request.resource.data.startDate == resource.data.startDate
+              && request.resource.data.endDate == resource.data.endDate));
+      }
+
+      // classes/{classId}: name, order. sections/{sectionId}: classId, name.
+      match /classes/{classId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && classId.matches('[a-z0-9-]{1,20}') && validClass(request.resource.data);
+      }
+
+      match /sections/{sectionId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && sectionId.matches('[a-z0-9-]{1,31}') && validSection(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validSection(request.resource.data)
+          && request.resource.data.classId == resource.data.classId;
+      }
+
+      // subjects/{subjectId}: name, code. classSubjects/{classId}_{subjectId}: classId, subjectId.
+      match /subjects/{subjectId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && subjectId.matches('[a-z0-9-]{1,30}') && validSubject(request.resource.data);
+      }
+
+      match /classSubjects/{mappingId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && request.resource.data.keys().hasOnly(['classId', 'subjectId'])
+          && request.resource.data.classId is string && request.resource.data.classId.matches('[a-z0-9-]{1,20}')
+          && request.resource.data.subjectId is string && request.resource.data.subjectId.matches('[a-z0-9-]{1,30}')
+          && mappingId == request.resource.data.classId + '_' + request.resource.data.subjectId
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/subjects/$(request.resource.data.subjectId));
+      }
+
       match /teacherAssignments/{uid}/marks/{markId} {
         function assignedTeacher() {
           let member = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
@@ -76,6 +142,34 @@ service cloud.firestore {
         && markId == mark.exam + '_' + mark.roll
         && mark.maximum is int && mark.maximum > 0 && mark.maximum <= 1000
         && mark.score is int && mark.score >= 0 && mark.score <= mark.maximum;
+    }
+
+    function validYear(year) {
+      return year.keys().hasOnly(['label', 'startDate', 'endDate', 'status'])
+        && year.keys().hasAll(['label', 'startDate', 'endDate', 'status'])
+        && year.label is string && year.label.size() <= 20 && year.label.matches('.*[^[:space:]].*')
+        && year.startDate is string && year.startDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && year.endDate is string && year.endDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && year.endDate > year.startDate
+        && year.status in ['draft', 'active', 'closed'];
+    }
+
+    function validClass(item) {
+      return item.keys().hasOnly(['name', 'order']) && item.keys().hasAll(['name', 'order'])
+        && item.name is string && item.name.size() <= 40 && item.name.matches('.*[^[:space:]].*')
+        && item.order is int && item.order >= 1 && item.order <= 100;
+    }
+
+    function validSection(item) {
+      return item.keys().hasOnly(['classId', 'name']) && item.keys().hasAll(['classId', 'name'])
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.name is string && item.name.size() <= 10 && item.name.matches('.*[^[:space:]].*');
+    }
+
+    function validSubject(item) {
+      return item.keys().hasOnly(['name', 'code']) && item.keys().hasAll(['name', 'code'])
+        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
+        && item.code is string && item.code.size() <= 12;
     }
 
     function validStaff(staff) {

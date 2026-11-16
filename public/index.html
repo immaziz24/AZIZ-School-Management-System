@@ -50,6 +50,46 @@
         <button type="submit">Add staff member</button>
         <p><button type="reset" hidden>Cancel edit</button></p>
       </form>
+      <section id="academic-setup" aria-labelledby="academic-title" hidden>
+        <h3 id="academic-title">Academic Setup</h3>
+        <p id="academic-status" role="status"></p>
+        <h4>Academic Years</h4>
+        <ul id="year-list"></ul>
+        <form id="year-form">
+          <p><label>Year label <input name="label" required maxlength="20" placeholder="2026-27"></label></p>
+          <p><label>Start date <input name="startDate" type="date" required></label></p>
+          <p><label>End date <input name="endDate" type="date" required></label></p>
+          <button type="submit">Add academic year</button>
+        </form>
+        <h4>Classes</h4>
+        <ul id="class-list"></ul>
+        <form id="class-form">
+          <p><label>Class name <input name="name" required maxlength="40" placeholder="Class 8"></label></p>
+          <p><label>Display order <input name="order" type="number" required min="1" max="100"></label></p>
+          <button type="submit">Save class</button>
+        </form>
+        <h4>Sections</h4>
+        <ul id="section-list"></ul>
+        <form id="section-form">
+          <p><label>Class <select name="classId" required></select></label></p>
+          <p><label>Section name <input name="name" required maxlength="10" placeholder="A"></label></p>
+          <button type="submit">Save section</button>
+        </form>
+        <h4>Subjects</h4>
+        <ul id="subject-list"></ul>
+        <form id="subject-form">
+          <p><label>Subject name <input name="name" required maxlength="80" placeholder="English"></label></p>
+          <p><label>Subject code (optional) <input name="code" maxlength="12"></label></p>
+          <button type="submit">Save subject</button>
+        </form>
+        <h4>Subjects taught in each class</h4>
+        <ul id="mapping-list"></ul>
+        <form id="mapping-form">
+          <p><label>Class <select name="classId" required></select></label></p>
+          <p><label>Subject <select name="subjectId" required></select></label></p>
+          <button type="submit">Add subject to class</button>
+        </form>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -72,7 +112,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=marks-entry-1');
+      await import('./sign-in.mjs?v=academic-setup-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
