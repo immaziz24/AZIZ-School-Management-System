@@ -218,6 +218,8 @@ async function loadAcademic(request) {
     renderPlacements();
     examData = { years: years.docs, classes: classes.docs, subjects: subjects.docs, mappings: mappings.docs, exams: exams.docs };
     renderExams();
+    renderReviewExams();
+    renderMarksReview();
     for (const list of Object.values(setupLists)) list.replaceChildren();
     const classRecords = classes.docs.sort((a, b) => a.data().order - b.data().order);
     const className = (id) => classRecords.find((record) => record.id === id)?.data().name ?? id;
@@ -508,6 +510,72 @@ placementForm.addEventListener('submit', (event) => {
   }, current ? 'Student moved.' : 'Student placed.', placementStatus);
 });
 
+const reviewSection = document.querySelector('#marks-review');
+const reviewStatus = document.querySelector('#review-status');
+const reviewExam = document.querySelector('#review-exam');
+const reviewSummary = document.querySelector('#review-summary');
+const reviewBody = document.querySelector('#review-body');
+const reviewRefresh = document.querySelector('#review-refresh');
+let reviewRequest = 0;
+
+function renderReviewExams() {
+  const { classes, subjects, exams } = examData;
+  const nameOf = (records, id) => records.find((record) => record.id === id)?.data().name ?? id;
+  fillSelect(reviewExam, [...exams].sort((a, b) => a.id.localeCompare(b.id)),
+    (exam) => exam.name + ' - ' + nameOf(classes, exam.classId) + ' - ' + nameOf(subjects, exam.subjectId)
+      + ' - ' + exam.yearId + (exam.status === 'locked' ? ' - locked' : ''));
+}
+
+async function renderMarksReview() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++reviewRequest;
+  reviewBody.replaceChildren();
+  reviewSummary.textContent = '';
+  const examRecord = examData.exams.find((record) => record.id === reviewExam.value);
+  if (!tools || !examRecord) {
+    reviewStatus.textContent = 'Create an exam first to review its marks.';
+    return;
+  }
+  const exam = examRecord.data();
+  reviewStatus.textContent = 'Loading marks.';
+  try {
+    const saved = await tools.marksFor(examRecord.id);
+    if (request !== schoolRequest || token !== reviewRequest) return;
+    const scores = new Map(saved.docs.map((record) => [record.data().studentId, record.data().score]));
+    const sectionName = (id) => placementData.sections.find((record) => record.id === id)?.data().name ?? id;
+    const students = new Map(studentRecords.map((record) => [record.id, record.data()]));
+    const rows = placementData.enrollments.map((record) => record.data())
+      .filter((item) => item.yearId === exam.yearId && item.classId === exam.classId)
+      .sort((a, b) => sectionName(a.sectionId).localeCompare(sectionName(b.sectionId)) || a.rollNo - b.rollNo);
+    for (const row of rows) {
+      const student = students.get(row.studentId);
+      const tr = document.createElement('tr');
+      const marks = scores.has(row.studentId) ? scores.get(row.studentId) + ' / ' + exam.maxMarks : 'Missing';
+      for (const text of [sectionName(row.sectionId), String(row.rollNo),
+        student ? student.name + ' (' + student.admissionNo + ')' : row.studentId, marks]) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.append(td);
+      }
+      reviewBody.append(tr);
+    }
+    const entered = rows.filter((row) => scores.has(row.studentId)).map((row) => scores.get(row.studentId));
+    reviewSummary.textContent = rows.length
+      ? entered.length + ' of ' + rows.length + ' students have marks'
+        + (entered.length ? '. Highest ' + Math.max(...entered) + ', lowest ' + Math.min(...entered)
+          + ', average ' + (Math.round(entered.reduce((sum, score) => sum + score, 0) / entered.length * 10) / 10)
+          + ' (out of ' + exam.maxMarks + ').' : '.')
+      : 'No students are placed in this class for ' + exam.yearId + '.';
+    reviewStatus.textContent = exam.status === 'locked' ? 'This exam is locked.' : 'This exam is open for marks entry.';
+  } catch {
+    if (request === schoolRequest && token === reviewRequest) reviewStatus.textContent = 'Could not load marks. Try again.';
+  }
+}
+
+reviewExam.addEventListener('change', renderMarksReview);
+reviewRefresh.addEventListener('click', () => { if (academic) loadAcademic(schoolRequest).then(renderMarksReview); });
+
 const examSection = document.querySelector('#exam-setup');
 const examStatus = document.querySelector('#exam-status');
 const examList = document.querySelector('#exam-list');
@@ -743,6 +811,11 @@ onAuthStateChanged(auth, async (user) => {
   for (const name of ['yearId', 'studentId', 'sectionId']) placementForm.elements.namedItem(name).replaceChildren();
   examData = { years: [], classes: [], subjects: [], mappings: [], exams: [] };
   examSection.hidden = true;
+  reviewSection.hidden = true;
+  reviewStatus.textContent = '';
+  reviewSummary.textContent = '';
+  reviewBody.replaceChildren();
+  reviewExam.replaceChildren();
   examStatus.textContent = '';
   examList.replaceChildren();
   examForm.reset();
@@ -850,6 +923,7 @@ onAuthStateChanged(auth, async (user) => {
       busy: false,
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: (name, id, data) => setDoc(doc(schoolRef, name, id), data),
+      marksFor: (examId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('examId', '==', examId))),
       // A year becomes active in one batch with the pointer the rules check.
       activate: (id, year) => {
         const batch = writeBatch(firestore);
@@ -870,6 +944,7 @@ onAuthStateChanged(auth, async (user) => {
     academicSection.hidden = false;
     studentSection.hidden = false;
     examSection.hidden = false;
+    reviewSection.hidden = false;
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
   } catch (error) {

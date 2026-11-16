@@ -125,6 +125,17 @@
           <button type="submit">Save exam</button>
         </form>
       </section>
+      <section id="marks-review" aria-labelledby="review-title" hidden>
+        <h3 id="review-title">Marks Review</h3>
+        <p id="review-status" role="status"></p>
+        <p><label>Exam <select id="review-exam"></select></label></p>
+        <p id="review-summary" role="status"></p>
+        <table>
+          <thead><tr><th>Section</th><th>Roll</th><th>Student</th><th>Marks</th></tr></thead>
+          <tbody id="review-body"></tbody>
+        </table>
+        <button id="review-refresh" type="button">Refresh marks</button>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -159,7 +170,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=marks-1');
+      await import('./sign-in.mjs?v=marks-2');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
