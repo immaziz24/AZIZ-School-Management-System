@@ -57,13 +57,22 @@
       <p id="teacher-email"></p>
       <h3>My Assignment</h3>
       <p id="teacher-assignment-summary" role="status"></p>
+      <form id="marks-entry" hidden>
+        <h3>Marks Entry</h3>
+        <p><label>Exam code <input name="exam" required maxlength="40" pattern="[a-z0-9\-]+" placeholder="midterm"></label></p>
+        <p><label>Student roll number <input name="roll" required maxlength="24" pattern="[a-z0-9\-]+"></label></p>
+        <p><label>Marks obtained <input name="score" type="number" required min="0" max="1000"></label></p>
+        <p><label>Maximum marks <input name="maximum" type="number" required min="1" max="1000"></label></p>
+        <button type="submit">Save marks</button>
+        <p id="marks-status" role="status"></p>
+      </form>
     </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=3c31bcf');
+      await import('./sign-in.mjs?v=marks-entry-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

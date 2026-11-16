@@ -40,6 +40,23 @@ service cloud.firestore {
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validStaff(request.resource.data);
       }
+
+      match /teacherAssignments/{uid}/marks/{markId} {
+        function assignedTeacher() {
+          let member = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
+          return request.auth.uid == uid && exists(member)
+            && get(member).data.active == true && get(member).data.role == 'teacher';
+        }
+        function matchesAssignment(mark) {
+          let assignment = /databases/$(database)/documents/schools/$(schoolId)/teacherAssignments/$(uid);
+          return exists(assignment) && mark.className == get(assignment).data.className
+            && mark.subject == get(assignment).data.subject;
+        }
+        allow get: if request.auth != null && assignedTeacher() && matchesAssignment(resource.data);
+        allow create, update: if request.auth != null && assignedTeacher()
+          && validMark(request.resource.data, markId) && matchesAssignment(request.resource.data)
+          && (resource == null || matchesAssignment(resource.data));
+      }
     }
 
     function validAssignment(assignment) {
@@ -49,6 +66,16 @@ service cloud.firestore {
         && assignment.className.matches('.*[^[:space:]].*')
         && assignment.subject is string && assignment.subject.size() <= 80
         && assignment.subject.matches('.*[^[:space:]].*');
+    }
+
+    function validMark(mark, markId) {
+      return mark.keys().hasAll(['className', 'subject', 'exam', 'roll', 'score', 'maximum'])
+        && mark.keys().hasOnly(['className', 'subject', 'exam', 'roll', 'score', 'maximum'])
+        && mark.exam is string && mark.exam.matches('[a-z0-9-]{1,40}')
+        && mark.roll is string && mark.roll.matches('[a-z0-9-]{1,24}')
+        && markId == mark.exam + '_' + mark.roll
+        && mark.maximum is int && mark.maximum > 0 && mark.maximum <= 1000
+        && mark.score is int && mark.score >= 0 && mark.score <= mark.maximum;
     }
 
     function validStaff(staff) {

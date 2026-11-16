@@ -31,6 +31,35 @@ const assignmentStatus = document.querySelector('#assignment-status');
 const assignmentSummary = document.querySelector('#teacher-assignment-summary');
 const assignmentButton = assignmentForm.querySelector('button');
 let saveAssignment;
+const marksForm = document.querySelector('#marks-entry');
+const marksStatus = document.querySelector('#marks-status');
+const marksButton = marksForm.querySelector('button');
+let saveMark;
+
+marksForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!saveMark || marksButton.disabled) return;
+  const request = schoolRequest;
+  const fields = new FormData(marksForm);
+  const score = Number(fields.get('score'));
+  const maximum = Number(fields.get('maximum'));
+  if (score > maximum) {
+    marksStatus.textContent = 'Marks obtained cannot exceed maximum marks.';
+    return;
+  }
+  marksButton.disabled = true;
+  marksStatus.textContent = 'Saving marks.';
+  try {
+    await saveMark({ exam: fields.get('exam'), roll: fields.get('roll'), score, maximum });
+    if (request === schoolRequest) marksStatus.textContent = 'Marks saved.';
+  } catch (error) {
+    if (request === schoolRequest) marksStatus.textContent = error.code === 'permission-denied'
+      ? 'These marks cannot be saved for your current assignment.'
+      : 'Could not save marks. Try again.';
+  } finally {
+    if (request === schoolRequest) marksButton.disabled = false;
+  }
+});
 
 assignmentForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -136,6 +165,11 @@ onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   dashboard.hidden = true;
   saveAssignment = undefined;
+  saveMark = undefined;
+  marksForm.hidden = true;
+  marksForm.reset();
+  marksButton.disabled = false;
+  marksStatus.textContent = '';
   assignmentForm.reset();
   assignmentStatus.textContent = '';
   assignmentSummary.textContent = '';
@@ -183,6 +217,13 @@ onAuthStateChanged(auth, async (user) => {
         assignmentSummary.textContent = assignment.exists()
           ? assignment.data().className + ' - ' + assignment.data().subject
           : 'No class or subject assigned yet.';
+        if (assignment.exists()) {
+          const { className, subject } = assignment.data();
+          saveMark = (mark) => setDoc(doc(assignment.ref, 'marks', mark.exam + '_' + mark.roll), {
+            ...mark, className, subject,
+          });
+          marksForm.hidden = false;
+        }
       } catch {
         if (request === schoolRequest) assignmentSummary.textContent = 'Could not load your assignment.';
       }
