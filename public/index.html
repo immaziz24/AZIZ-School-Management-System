@@ -147,6 +147,19 @@
         </table>
         <p id="report-total" role="status"></p>
       </section>
+      <section id="family-access" aria-labelledby="family-title" hidden>
+        <h3 id="family-title">Student and Parent Access</h3>
+        <p>Create the account in Firebase Authentication and add it as a member with the role student or parent first. Then link it to a student here.</p>
+        <p id="family-status" role="status"></p>
+        <form id="family-form">
+          <p><label>Account ID (UID) <input name="uid" required maxlength="128"></label></p>
+          <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Relation <select name="relation"><option value="parent">Parent</option><option value="student">Student</option></select></label></p>
+          <p><label>Access <select name="state"><option value="active">Active</option><option value="off">Switched off</option></select></label></p>
+          <button type="submit">Save access</button>
+        </form>
+        <ul id="family-list"></ul>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -176,12 +189,24 @@
         <p id="marks-status" role="status"></p>
       </form>
     </section>
+    <section id="portal-dashboard" aria-labelledby="portal-title" hidden>
+      <h2 id="portal-title">My Results</h2>
+      <p>ABCD School</p>
+      <p id="portal-email"></p>
+      <p id="portal-student"></p>
+      <p id="portal-status" role="status"></p>
+      <table>
+        <thead><tr><th>Year</th><th>Subject</th><th>Exam</th><th>Marks</th><th>Percent</th><th>Grade</th></tr></thead>
+        <tbody id="portal-body"></tbody>
+      </table>
+      <p id="portal-total" role="status"></p>
+    </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=marks-7');
+      await import('./sign-in.mjs?v=marks-8');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

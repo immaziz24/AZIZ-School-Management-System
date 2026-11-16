@@ -81,6 +81,30 @@ service cloud.firestore {
           && exists(enrollmentPath) && get(enrollmentPath).data.classId == exam.classId;
       }
 
+      // Student and parent access (feature 048). familyAccess/{uid} links a student or parent
+      // account to one student and can be switched off by the owner. Family accounts read only
+      // published results for that student. Each helper uses at most two access calls because a
+      // request may make ten in total across every rule that is evaluated.
+      function familyActive() {
+        return get(/databases/$(database)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid)).data.active == true;
+      }
+      function familyOwns(studentId) {
+        return familyActive()
+          && get(/databases/$(database)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid)).data.studentId == studentId;
+      }
+
+      match /familyAccess/{uid} {
+        function familyMember() {
+          let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
+          return exists(path) && get(path).data.active == true && get(path).data.role in ['student', 'parent'];
+        }
+        allow get: if request.auth != null && (isSchoolOwner(schoolId) || (request.auth.uid == uid && familyMember()));
+        allow list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && familyMember()
+          && validFamilyAccess(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+      }
+
       // A pure status change leaves the name and the maximum marks untouched.
       function examUnchangedFields(before, after) {
         return after.name == before.name && after.maxMarks == before.maxMarks;
@@ -160,6 +184,7 @@ service cloud.firestore {
       // subjects/{subjectId}: name, code. classSubjects/{classId}_{subjectId}: classId, subjectId.
       match /subjects/{subjectId} {
         allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get: if request.auth != null && familyActive();
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && subjectId.matches('[a-z0-9-]{1,30}') && validSubject(request.resource.data);
       }
@@ -184,6 +209,7 @@ service cloud.firestore {
       // exams/{examId}: yearId, classId, subjectId, examKey, name, maxMarks (1-1000), status.
       match /exams/{examId} {
         allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesExam(resource.data));
+        allow get, list: if request.auth != null && resource.data.published == true && familyActive();
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validExam(request.resource.data)
           && request.resource.data.status == 'open'
@@ -215,6 +241,9 @@ service cloud.firestore {
       match /marks/{markId} {
         allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
           || (isActiveTeacher() && resource.data.enteredBy == request.auth.uid));
+        // A student or parent reads only their own student's mark, by ID, once the exam is published.
+        allow get: if request.auth != null && familyOwns(resource.data.studentId)
+          && get(/databases/$(database)/documents/schools/$(schoolId)/exams/$(resource.data.examId)).data.published == true;
         allow create: if request.auth != null && isActiveTeacher()
           && validResultMark(request.resource.data)
           && request.resource.data.enteredBy == request.auth.uid
@@ -234,6 +263,7 @@ service cloud.firestore {
       // students/{studentId}: admissionNo, name, guardianName, guardianPhone, status.
       match /students/{studentId} {
         allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get: if request.auth != null && familyOwns(studentId);
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && studentId.matches('[a-z0-9-]{1,20}') && validStudentRecord(request.resource.data)
           && request.resource.data.admissionNo.lower() == studentId
@@ -364,6 +394,12 @@ service cloud.firestore {
         && mark.enteredBy is string
         && mark.maxMarks is int && mark.maxMarks >= 1 && mark.maxMarks <= 1000
         && mark.score is int && mark.score >= 0 && mark.score <= mark.maxMarks;
+    }
+
+    function validFamilyAccess(item) {
+      return item.keys().hasOnly(['studentId', 'relation', 'active']) && item.keys().hasAll(['studentId', 'relation', 'active'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.relation in ['student', 'parent'] && item.active is bool;
     }
 
     function validExam(item) {

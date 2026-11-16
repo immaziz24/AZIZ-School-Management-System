@@ -221,6 +221,7 @@ async function loadAcademic(request) {
     renderReviewExams();
     renderMarksReview();
     renderReportStudents();
+    renderFamilyLinks();
     for (const list of Object.values(setupLists)) list.replaceChildren();
     const classRecords = classes.docs.sort((a, b) => a.data().order - b.data().order);
     const className = (id) => classRecords.find((record) => record.id === id)?.data().name ?? id;
@@ -680,6 +681,121 @@ async function renderReportCard() {
 }
 
 reportStudent.addEventListener('change', renderReportCard);
+
+// Family access (feature 048): the owner links a student or parent account to one student.
+const linkSection = document.querySelector('#family-access');
+const linkForm = document.querySelector('#family-form');
+const linkStatus = document.querySelector('#family-status');
+const linkList = document.querySelector('#family-list');
+let linkRequest = 0;
+
+async function renderFamilyLinks() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++linkRequest;
+  fillSelect(linkForm.elements.namedItem('studentId'), [...studentRecords].sort((a, b) => a.data().name.localeCompare(b.data().name)),
+    (student) => student.name + ' (' + student.admissionNo + ')');
+  linkList.replaceChildren();
+  if (!tools) return;
+  try {
+    const saved = await tools.list('familyAccess');
+    if (request !== schoolRequest || token !== linkRequest) return;
+    for (const record of saved.docs.sort((a, b) => a.id.localeCompare(b.id))) {
+      const link = record.data();
+      const student = studentRecords.find((item) => item.id === link.studentId)?.data();
+      const item = document.createElement('li');
+      item.textContent = record.id + ' - ' + (student ? student.name + ' (' + student.admissionNo + ')' : link.studentId)
+        + ' - ' + link.relation + ' - ' + (link.active ? 'active' : 'switched off');
+      linkList.append(item);
+    }
+  } catch {
+    if (request === schoolRequest && token === linkRequest) linkStatus.textContent = 'Could not load linked accounts. Try again.';
+  }
+}
+
+linkForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy) return;
+  const fields = new FormData(linkForm);
+  const uid = String(fields.get('uid') ?? '').trim();
+  const studentId = String(fields.get('studentId') ?? '');
+  const relation = String(fields.get('relation') ?? '');
+  if (!uid || uid.length > 128 || uid.includes('/')) {
+    linkStatus.textContent = 'Enter the account ID (UID) from Firebase Authentication.';
+    return;
+  }
+  if (!studentId) {
+    linkStatus.textContent = 'Add a student first.';
+    return;
+  }
+  runSetupAction(async () => {
+    await academic.save('familyAccess', uid, { studentId, relation, active: fields.get('state') === 'active' });
+    linkForm.elements.namedItem('uid').value = '';
+  }, 'Access saved.', linkStatus);
+});
+const portalDashboard = document.querySelector('#portal-dashboard');
+const portalEmail = document.querySelector('#portal-email');
+const portalStatus = document.querySelector('#portal-status');
+const portalStudent = document.querySelector('#portal-student');
+const portalBody = document.querySelector('#portal-body');
+const portalTotal = document.querySelector('#portal-total');
+
+// Student and parent page (feature 048). Marks are read one by one by ID: the rules allow only
+// the linked student's marks in published exams, so an exam from another class is skipped.
+async function loadPortal(tools, request) {
+  const { schoolRef, user, doc, collection, getDocFromServer, getDocsFromServer, query, where } = tools;
+  portalEmail.textContent = user.email;
+  portalDashboard.hidden = false;
+  portalStatus.textContent = 'Loading results.';
+  try {
+    const link = await getDocFromServer(doc(schoolRef, 'familyAccess', user.uid));
+    if (request !== schoolRequest) return;
+    if (!link.exists() || link.data().active !== true) {
+      portalStatus.textContent = 'Your account is not linked to a student yet. Ask the school office.';
+      return;
+    }
+    const studentId = link.data().studentId;
+    const [student, exams] = await Promise.all([
+      getDocFromServer(doc(schoolRef, 'students', studentId)),
+      getDocsFromServer(query(collection(schoolRef, 'exams'), where('published', '==', true))),
+    ]);
+    if (request !== schoolRequest) return;
+    const attempt = async (promise) => { try { return await promise; } catch { return null; } };
+    const marks = await Promise.all(exams.docs.map((record) =>
+      attempt(getDocFromServer(doc(schoolRef, 'marks', record.id + '_' + studentId)))));
+    const subjectIds = [...new Set(exams.docs.map((record) => record.data().subjectId))];
+    const subjectDocs = await Promise.all(subjectIds.map((id) => attempt(getDocFromServer(doc(schoolRef, 'subjects', id)))));
+    if (request !== schoolRequest) return;
+    const subjectName = new Map(subjectIds.map((id, index) => [id, subjectDocs[index]?.data()?.name ?? id]));
+    const lines = exams.docs.map((record, index) => ({ exam: record.data(), mark: marks[index]?.exists() ? marks[index].data() : null }))
+      .filter((line) => line.mark)
+      .sort((a, b) => a.exam.yearId.localeCompare(b.exam.yearId) || subjectName.get(a.exam.subjectId).localeCompare(subjectName.get(b.exam.subjectId)));
+    portalStudent.textContent = student.exists() ? student.data().name + ' (' + student.data().admissionNo + ')' : '';
+    let got = 0;
+    let max = 0;
+    for (const { exam, mark } of lines) {
+      const percent = Math.round(mark.score / exam.maxMarks * 1000) / 10;
+      got += mark.score;
+      max += exam.maxMarks;
+      const tr = document.createElement('tr');
+      for (const text of [exam.yearId, subjectName.get(exam.subjectId), exam.name,
+        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeFor(percent)]) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.append(td);
+      }
+      portalBody.append(tr);
+    }
+    portalStatus.textContent = lines.length ? '' : 'No results have been published yet.';
+    if (lines.length) {
+      const overall = Math.round(got / max * 1000) / 10;
+      portalTotal.textContent = 'Total ' + got + ' / ' + max + ' - ' + overall + '% - Grade ' + gradeFor(overall);
+    }
+  } catch {
+    if (request === schoolRequest) portalStatus.textContent = 'Could not load results. Try again.';
+  }
+}
+
 reviewExam.addEventListener('change', renderMarksReview);
 reviewRefresh.addEventListener('click', () => { if (academic) loadAcademic(schoolRequest).then(renderMarksReview); });
 
@@ -926,6 +1042,17 @@ onAuthStateChanged(auth, async (user) => {
   examSection.hidden = true;
   reviewSection.hidden = true;
   reportSection.hidden = true;
+  linkSection.hidden = true;
+  linkStatus.textContent = '';
+  linkList.replaceChildren();
+  linkForm.reset();
+  linkForm.elements.namedItem('studentId').replaceChildren();
+  portalDashboard.hidden = true;
+  portalStatus.textContent = '';
+  portalEmail.textContent = '';
+  portalStudent.textContent = '';
+  portalBody.replaceChildren();
+  portalTotal.textContent = '';
   reportStatus.textContent = '';
   reportTotal.textContent = '';
   reportBody.replaceChildren();
@@ -1013,6 +1140,12 @@ onAuthStateChanged(auth, async (user) => {
       }
       return;
     }
+    if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
+      status.hidden = true;
+      schoolStatus.hidden = true;
+      await loadPortal({ schoolRef, user, doc, collection, getDocFromServer, getDocsFromServer, query, where }, request);
+      return;
+    }
     const school = await getDocFromServer(schoolRef);
     if (request !== schoolRequest) return;
     if (!school.exists()) {
@@ -1065,6 +1198,7 @@ onAuthStateChanged(auth, async (user) => {
     examSection.hidden = false;
     reviewSection.hidden = false;
     reportSection.hidden = false;
+    linkSection.hidden = false;
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
   } catch (error) {
