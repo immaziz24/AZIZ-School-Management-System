@@ -755,6 +755,7 @@ async function renderTeacherMarks(request) {
       }
       examMarksBody.append(tr);
     }
+    examMarksForm.querySelector('button[type="submit"]').disabled = exam.status !== 'open' || !rows.length;
     examMarksStatus.textContent = exam.status === 'approved'
       ? 'These marks are approved and final.'
       : exam.status === 'locked'
