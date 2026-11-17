@@ -760,6 +760,7 @@ async function loadPortal(tools, request) {
     const studentId = link.data().studentId;
     loadPortalAttendance(tools, request, studentId);
     loadPortalFees(tools, request, studentId);
+    loadPortalNotices(tools, request, studentId);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
       getDocsFromServer(query(collection(schoolRef, 'exams'), where('published', '==', true))),
@@ -2020,6 +2021,160 @@ async function loadPortalFees(tools, request, studentId) {
   }
 }
 
+// Notice board. The owner posts notices for everyone, teachers, families or one class. Notices are
+// never edited; the owner can remove one. Each reader asks only for the notices they may see.
+const noticesSection = document.querySelector('#notices');
+const noticesStatus = document.querySelector('#notices-status');
+const noticeForm = document.querySelector('#notice-form');
+const noticeList = document.querySelector('#notice-list');
+const teacherNoticesSection = document.querySelector('#teacher-notices');
+const teacherNoticesStatus = document.querySelector('#teacher-notices-status');
+const teacherNoticesList = document.querySelector('#teacher-notices-list');
+const portalNoticesSection = document.querySelector('#portal-notices');
+const portalNoticesStatus = document.querySelector('#portal-notices-status');
+const portalNoticesList = document.querySelector('#portal-notices-list');
+let noticeData = [];
+let noticeAssignedClass = '';
+
+const newestFirst = (a, b) => b.data.createdAt.localeCompare(a.data.createdAt) || b.id.localeCompare(a.id);
+const noticeText = (data) => data.createdAt + ' - ' + data.title + ': ' + data.body;
+
+function renderNotices() {
+  noticeList.replaceChildren();
+  const classes = [...examData.classes].sort(byClassOrder);
+  const className = (id) => classes.find((record) => record.id === id)?.data().name ?? id;
+  fillSelect(noticeForm.elements.namedItem('classId'), classes, (item) => item.name);
+  const audienceLabel = (data) => ({ all: 'Everyone', teachers: 'Teachers', families: 'Parents and students' })[data.audience]
+    ?? className(data.classId);
+  for (const item of [...noticeData].sort(newestFirst)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Remove';
+    button.addEventListener('click', async () => {
+      if (!academic || academic.busy || !confirm('Remove this notice? It will disappear for everyone.')) return;
+      const request = schoolRequest;
+      academic.busy = true;
+      noticesStatus.textContent = 'Removing.';
+      try {
+        await academic.remove('notices', item.id);
+        academic.busy = false;
+        await loadNotices(request);
+        if (request === schoolRequest) noticesStatus.textContent = 'Notice removed.';
+      } catch {
+        if (request === schoolRequest) noticesStatus.textContent = 'Could not remove the notice. Try again.';
+      } finally {
+        academic.busy = false;
+      }
+    });
+    listItem(noticeList, '[' + audienceLabel(item.data) + '] ' + noticeText(item.data), button);
+  }
+  if (!noticeData.length) noticesStatus.textContent = 'No notices yet.';
+}
+
+async function loadNotices(request) {
+  try {
+    const saved = await academic.list('notices');
+    if (request !== schoolRequest) return;
+    noticeData = saved.docs.map((record) => ({ id: record.id, data: record.data() }));
+    noticesSection.hidden = false;
+    noticesStatus.textContent = '';
+    renderNotices();
+  } catch {
+    if (request === schoolRequest) {
+      noticesSection.hidden = false;
+      noticesStatus.textContent = 'Could not load notices. Try again.';
+    }
+  }
+}
+
+noticeForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const fields = new FormData(noticeForm);
+  const title = String(fields.get('title') ?? '').trim();
+  const body = String(fields.get('body') ?? '').trim();
+  const audience = String(fields.get('audience') ?? '');
+  const classId = String(fields.get('classId') ?? '');
+  if (!title || !body) {
+    noticesStatus.textContent = 'Enter a title and the notice text.';
+    return;
+  }
+  if (audience === 'class' && !classId) {
+    noticesStatus.textContent = 'Choose the class for this notice.';
+    return;
+  }
+  const createdAt = localToday();
+  const id = 'N-' + createdAt.replaceAll('-', '') + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();
+  const data = { title, body, audience, createdAt, createdBy: schoolUid, ...(audience === 'class' ? { classId } : {}) };
+  const request = schoolRequest;
+  tools.busy = true;
+  noticesStatus.textContent = 'Posting.';
+  try {
+    await tools.save('notices', id, data);
+    tools.busy = false;
+    noticeForm.reset();
+    await loadNotices(request);
+    if (request === schoolRequest) noticesStatus.textContent = 'Notice posted.';
+  } catch {
+    if (request === schoolRequest) noticesStatus.textContent = 'Could not post the notice. Check the details and try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
+
+// One query for each kind of notice the reader may see, then merged.
+async function readNotices(schoolRef, audiences, classIds) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  const notices = collection(schoolRef, 'notices');
+  const runs = [getDocsFromServer(query(notices, where('audience', 'in', audiences)))];
+  for (const classId of classIds) {
+    runs.push(getDocsFromServer(query(notices, where('audience', '==', 'class'), where('classId', '==', classId))));
+  }
+  const results = await Promise.all(runs);
+  const seen = new Map();
+  for (const result of results) for (const record of result.docs) seen.set(record.id, { id: record.id, data: record.data() });
+  return [...seen.values()].sort(newestFirst);
+}
+
+function showNotices(list, items) {
+  list.replaceChildren();
+  for (const item of items) listItem(list, noticeText(item.data));
+}
+
+async function loadTeacherNotices(request, schoolRef, uid) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  teacherNoticesSection.hidden = false;
+  teacherNoticesStatus.textContent = 'Loading notices.';
+  try {
+    const mine = await getDocsFromServer(query(collection(schoolRef, 'classTeachers'), where('teacherUid', '==', uid)));
+    const classIds = new Set(mine.docs.map((record) => record.id));
+    if (noticeAssignedClass) classIds.add(noticeAssignedClass);
+    const items = await readNotices(schoolRef, ['all', 'teachers'], [...classIds]);
+    if (request !== schoolRequest) return;
+    showNotices(teacherNoticesList, items);
+    teacherNoticesStatus.textContent = items.length ? '' : 'No notices yet.';
+  } catch {
+    if (request === schoolRequest) teacherNoticesStatus.textContent = 'Could not load notices. Try again.';
+  }
+}
+
+async function loadPortalNotices(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalNoticesSection.hidden = false;
+  portalNoticesStatus.textContent = 'Loading notices.';
+  try {
+    const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId)));
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    const items = await readNotices(schoolRef, ['all', 'families'], latest ? [latest.classId] : []);
+    if (request !== schoolRequest) return;
+    showNotices(portalNoticesList, items);
+    portalNoticesStatus.textContent = items.length ? '' : 'No notices yet.';
+  } catch {
+    if (request === schoolRequest) portalNoticesStatus.textContent = 'Could not load notices. Try again.';
+  }
+}
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -2032,6 +2187,19 @@ onAuthStateChanged(auth, async (user) => {
   attClass.replaceChildren();
   attDate.value = '';
   attPrev = { classId: '', date: '' };
+  noticesSection.hidden = true;
+  noticesStatus.textContent = '';
+  noticeForm.reset();
+  noticeForm.elements.namedItem('classId').replaceChildren();
+  noticeList.replaceChildren();
+  noticeData = [];
+  noticeAssignedClass = '';
+  teacherNoticesSection.hidden = true;
+  teacherNoticesStatus.textContent = '';
+  teacherNoticesList.replaceChildren();
+  portalNoticesSection.hidden = true;
+  portalNoticesStatus.textContent = '';
+  portalNoticesList.replaceChildren();
   feesSection.hidden = true;
   feesStatus.textContent = '';
   feeStructureList.replaceChildren();
@@ -2202,6 +2370,7 @@ onAuthStateChanged(auth, async (user) => {
           : 'No class or subject assigned yet.';
         if (assignment.exists()) {
           const { className, subject, classId, subjectId } = assignment.data();
+          noticeAssignedClass = classId ?? '';
           if (classId && subjectId) {
             teacherMarks = { schoolRef, uid: user.uid, classId, subjectId, exams: [], busy: false };
             examMarksSection.hidden = false;
@@ -2222,6 +2391,7 @@ onAuthStateChanged(auth, async (user) => {
       await loadAttendanceClasses(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadMyAttendance(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadMyLeave(request, schoolRef, user.uid);
+      if (request === schoolRequest) await loadTeacherNotices(request, schoolRef, user.uid);
       return;
     }
     if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
@@ -2303,6 +2473,7 @@ onAuthStateChanged(auth, async (user) => {
       await renderLeaveReview();
     }
     if (request === schoolRequest) await loadFees(request);
+    if (request === schoolRequest) await loadNotices(request);
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'

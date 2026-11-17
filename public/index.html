@@ -245,6 +245,18 @@
           <tbody id="fee-balance-body"></tbody>
         </table>
       </section>
+      <section id="notices" aria-labelledby="notices-title" hidden>
+        <h3 id="notices-title">Notice Board</h3>
+        <p id="notices-status" role="status"></p>
+        <form id="notice-form">
+          <p><label>Title <input name="title" required maxlength="100"></label></p>
+          <p><label>Notice <textarea name="body" required maxlength="2000" rows="4"></textarea></label></p>
+          <p><label>Who should see it <select name="audience"><option value="all">Everyone</option><option value="teachers">Teachers only</option><option value="families">Parents and students only</option><option value="class">One class</option></select></label></p>
+          <p><label>Class (for One class) <select name="classId"></select></label></p>
+          <button type="submit">Post notice</button>
+        </form>
+        <ul id="notice-list"></ul>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -303,6 +315,11 @@
           <tbody id="leave-request-body"></tbody>
         </table>
       </section>
+      <section id="teacher-notices" aria-labelledby="teacher-notices-title" hidden>
+        <h3 id="teacher-notices-title">Notices</h3>
+        <p id="teacher-notices-status" role="status"></p>
+        <ul id="teacher-notices-list"></ul>
+      </section>
       <form id="marks-entry" hidden>
         <h3>Marks Entry (old form)</h3>
         <p><label>Exam code <input name="exam" required maxlength="40" pattern="[a-z0-9\-]+" placeholder="midterm"></label></p>
@@ -343,13 +360,18 @@
           <tbody id="portal-fees-body"></tbody>
         </table>
       </section>
+      <section id="portal-notices" aria-labelledby="portal-notices-title" hidden>
+        <h3 id="portal-notices-title">Notices</h3>
+        <p id="portal-notices-status" role="status"></p>
+        <ul id="portal-notices-list"></ul>
+      </section>
     </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=fees-1');
+      await import('./sign-in.mjs?v=notices-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

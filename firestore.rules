@@ -229,6 +229,34 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid)).data.studentId == studentId;
       }
 
+      // Notices. notices/{noticeId}: title, body, audience (all, teachers, families or class), classId
+      // (only with the class audience), createdAt (YYYY-MM-DD), createdBy. The owner posts and removes
+      // them; a notice is never edited. Teachers read notices for all or for teachers, and class notices
+      // for a class they are class teacher of or teach. A linked student or parent reads notices for all
+      // or for families, and class notices for the class their student is placed in this year.
+      function familyInClass(classId) {
+        let settings = /databases/$(database)/documents/schools/$(schoolId)/settings/academic;
+        let link = /databases/$(database)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid);
+        let enrollment = /databases/$(database)/documents/schools/$(schoolId)/enrollments/$(get(settings).data.activeYearId + '_' + get(link).data.studentId);
+        return familyActive() && exists(settings) && exists(enrollment) && get(enrollment).data.classId == classId;
+      }
+
+      match /notices/{noticeId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || (resource.data.audience in ['all', 'teachers'] && isActiveTeacher())
+          || (resource.data.audience in ['all', 'families'] && familyActive())
+          || (resource.data.audience == 'class' && (classTeacherOf(resource.data.classId)
+            || teachesClass(resource.data.classId) || familyInClass(resource.data.classId))));
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && noticeId.matches('[A-Za-z0-9-]{1,30}')
+          && validNotice(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt <= latestAttendanceDate()
+          && (request.resource.data.audience != 'class'
+            || exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId)));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
       match /familyAccess/{uid} {
         function familyMember() {
           let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
@@ -607,6 +635,19 @@ service cloud.firestore {
         && item.receiptNo is string && item.receiptNo.matches('[A-Za-z0-9-]{1,24}')
         && item.receivedBy is string
         && (!item.keys().hasAny(['voided']) || item.voided == true);
+    }
+
+    function validNotice(item) {
+      return item.keys().hasOnly(['title', 'body', 'audience', 'classId', 'createdAt', 'createdBy'])
+        && item.keys().hasAll(['title', 'body', 'audience', 'createdAt', 'createdBy'])
+        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
+        && item.body is string && item.body.size() <= 2000 && item.body.matches('.*[^[:space:]].*')
+        && item.audience in ['all', 'teachers', 'families', 'class']
+        && (item.audience == 'class'
+          ? (item.keys().hasAny(['classId']) && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}'))
+          : !item.keys().hasAny(['classId']))
+        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && item.createdBy is string;
     }
 
     function validFamilyAccess(item) {
