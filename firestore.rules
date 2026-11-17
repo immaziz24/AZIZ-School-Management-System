@@ -15,6 +15,11 @@ service cloud.firestore {
       return exists(path) && get(path).data.active == true && get(path).data.role in ['owner', 'principal'];
     }
 
+    function isSchoolPrincipal(schoolId) {
+      let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
+      return exists(path) && get(path).data.active == true && get(path).data.role == 'principal';
+    }
+
     match /schools/{schoolId} {
       allow get: if request.auth != null && isSchoolViewer(schoolId);
       allow update: if request.auth != null && isSchoolOwner(schoolId)
@@ -763,6 +768,20 @@ service cloud.firestore {
                 && !resource.data.keys().hasAny(['published']))
               || (resource.data.status == 'open' && request.resource.data.status in ['open', 'locked'])
             : resource.data.status == 'open' && request.resource.data.status in ['open', 'locked']);
+      }
+      // A principal may only approve a locked exam (locked -> approved, nothing else changes).
+      match /exams/{examId} {
+        allow update: if request.auth != null && isSchoolPrincipal(schoolId)
+          && validExam(request.resource.data)
+          && resource.data.status == 'locked' && request.resource.data.status == 'approved'
+          && examUnchangedFields(resource.data, request.resource.data)
+          && request.resource.data.yearId == resource.data.yearId
+          && request.resource.data.classId == resource.data.classId
+          && request.resource.data.subjectId == resource.data.subjectId
+          && request.resource.data.examKey == resource.data.examKey
+          && request.resource.data.approvedBy == request.auth.uid
+          && !request.resource.data.keys().hasAny(['published'])
+          && openYear(resource.data.yearId);
       }
 
       // Exam marks (features 042, 043). marks/{examId}_{studentId}. Written by the teacher

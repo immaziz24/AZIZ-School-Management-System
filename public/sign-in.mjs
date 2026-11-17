@@ -632,7 +632,7 @@ async function renderMarksReview() {
     if (exam.status === 'open') {
       action('Lock exam', 'Lock ' + exam.name + '? Teachers can no longer enter or change marks. You can unlock it later.', 'locked', 'Exam locked.');
     } else if (exam.status === 'locked') {
-      action('Unlock exam', 'Unlock ' + exam.name + '? Teachers can then enter and change marks again.', 'open', 'Exam unlocked.');
+      if (!viewOnly) action('Unlock exam', 'Unlock ' + exam.name + '? Teachers can then enter and change marks again.', 'open', 'Exam unlocked.');
       action('Approve results', () => (missing
         ? missing + ' student' + (missing === 1 ? ' has' : 's have') + ' no marks yet. Approve the results anyway?'
         : 'Approve the results for ' + exam.name + '? Marks become final.'), 'approved', 'Results approved.');
@@ -787,7 +787,7 @@ let viewOnly = false;
 // two capture handlers stop the buttons and forms first so the page says why.
 dashboard.addEventListener('click', (event) => {
   const button = viewOnly ? event.target.closest('button') : null;
-  if (!button || /^(download|print|show|refresh|view|preview)/i.test(button.textContent.trim())) return;
+  if (!button || /^(download|print|show|refresh|view|preview|approve results)/i.test(button.textContent.trim())) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   viewOnlyNote.focus?.();
