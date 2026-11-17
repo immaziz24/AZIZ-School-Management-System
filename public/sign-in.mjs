@@ -355,7 +355,7 @@ const studentSearch = document.querySelector('#student-search');
 const studentForm = document.querySelector('#student-form');
 const studentSave = studentForm.querySelector('[type="submit"]');
 const studentCancel = studentForm.querySelector('[type="reset"]');
-const studentFields = ['admissionNo', 'name', 'guardianName', 'guardianPhone'];
+const studentFields = ['admissionNo', 'name', 'guardianName', 'guardianPhone', 'dob', 'address'];
 let studentRecords = [];
 let studentEditingId;
 
@@ -382,7 +382,7 @@ function renderStudents() {
     edit.textContent = 'Edit ' + student.name;
     edit.addEventListener('click', () => {
       studentEditingId = record.id;
-      for (const field of studentFields) studentForm.elements.namedItem(field).value = student[field];
+      for (const field of studentFields) studentForm.elements.namedItem(field).value = student[field] ?? '';
       studentForm.elements.namedItem('admissionNo').readOnly = true;
       studentSave.textContent = 'Save changes';
       studentCancel.hidden = false;
@@ -428,6 +428,10 @@ studentForm.addEventListener('submit', (event) => {
     studentStatus.textContent = 'Phone may use digits, +, spaces, hyphens and brackets only.';
     return;
   }
+  if (value('dob') && !DATE_TEXT.test(value('dob'))) {
+    studentStatus.textContent = 'Enter the date of birth as a date.';
+    return;
+  }
   const existing = studentRecords.find((record) => record.id === id);
   if (existing && !studentEditingId) {
     studentStatus.textContent = 'Admission number ' + existing.data().admissionNo + ' is already used by '
@@ -438,6 +442,7 @@ studentForm.addEventListener('submit', (event) => {
     await academic.save('students', id, {
       admissionNo, name: value('name'), guardianName: value('guardianName'),
       guardianPhone: value('guardianPhone'), status: existing?.data().status ?? 'active',
+      ...(value('dob') ? { dob: value('dob') } : {}), ...(value('address') ? { address: value('address') } : {}),
     });
     studentForm.reset();
   }, 'Student saved.', studentStatus);
@@ -4026,12 +4031,20 @@ function refreshAttention() {
     [count(lists.syllabus, (item) => item.status !== 'Done'), 'syllabus chapter(s) not finished'],
   ].filter(([number]) => number > 0);
   attentionList.replaceChildren();
+  const monthDay = localToday().slice(5);
+  const birthdays = studentRecords.map((record) => record.data())
+    .filter((student) => student.status === 'active' && student.dob && student.dob.slice(5) === monthDay).map((student) => student.name);
+  if (birthdays.length) {
+    const item = document.createElement('li');
+    item.textContent = 'Birthday today: ' + birthdays.join(', ');
+    attentionList.append(item);
+  }
   for (const [number, label] of checks) {
     const item = document.createElement('li');
     item.textContent = number + ' ' + label;
     attentionList.append(item);
   }
-  attentionStatus.textContent = checks.length ? '' : 'Nothing needs attention right now.';
+  attentionStatus.textContent = checks.length || birthdays.length ? '' : 'Nothing needs attention right now.';
 }
 document.querySelector('#attention-refresh').addEventListener('click', refreshAttention);
 
@@ -4094,6 +4107,8 @@ document.querySelector('#profile360-show').addEventListener('click', async () =>
     const data = student.data();
     const rows = [['Student', data.name + ' (' + data.admissionNo + ') - ' + data.status],
       ['Guardian', data.guardianName + (data.guardianPhone ? ' - ' + data.guardianPhone : '')]];
+    if (data.dob) rows.push(['Date of birth', data.dob]);
+    if (data.address) rows.push(['Address', data.address]);
     for (const record of enrollments.docs.filter((item) => item.data().studentId === studentId)) {
       const placement = record.data();
       rows.push(['Class ' + placement.yearId, nameOfClass(placement.classId) + ', roll ' + placement.rollNo]);

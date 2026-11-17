@@ -1633,8 +1633,10 @@ service cloud.firestore {
     }
 
     function validStudentRecord(student) {
-      return student.keys().hasOnly(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status'])
+      return student.keys().hasOnly(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status', 'dob', 'address'])
         && student.keys().hasAll(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status'])
+        && (!student.keys().hasAny(['dob']) || (student.dob is string && student.dob.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
+        && (!student.keys().hasAny(['address']) || (student.address is string && student.address.size() <= 200))
         && student.admissionNo is string && student.admissionNo.matches('[A-Za-z0-9-]{1,20}')
         && student.name is string && student.name.size() <= 120 && student.name.matches('.*[^[:space:]].*')
         && student.guardianName is string && student.guardianName.size() <= 120

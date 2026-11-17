@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-23">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-24">
 </head>
 <body>
   <main>
@@ -107,6 +107,8 @@
           <p><label>Student name <input name="name" required maxlength="120"></label></p>
           <p><label>Guardian name <input name="guardianName" required maxlength="120"></label></p>
           <p><label>Guardian phone <input name="guardianPhone" type="tel" maxlength="20" pattern="[0-9+ \(\)\-]*"></label></p>
+          <p><label>Date of birth (optional) <input name="dob" type="date"></label></p>
+          <p><label>Address (optional) <input name="address" maxlength="200"></label></p>
           <button type="submit">Save student</button>
           <p><button type="reset" hidden>Cancel edit</button></p>
         </form>
@@ -1067,7 +1069,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-23');
+      await import('./sign-in.mjs?v=batch-24');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
