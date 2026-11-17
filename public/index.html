@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-8">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-9">
 </head>
 <body>
   <main>
@@ -161,6 +161,7 @@
         <form id="family-form">
           <p><label>Account ID (UID) <input name="uid" required maxlength="128"></label></p>
           <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Other children of the same parent (optional, up to 4; hold Ctrl to pick several) <select name="extra" multiple size="4"></select></label></p>
           <p><label>Relation <select name="relation"><option value="parent">Parent</option><option value="student">Student</option></select></label></p>
           <p><label>Access <select name="state"><option value="active">Active</option><option value="off">Switched off</option></select></label></p>
           <button type="submit">Save access</button>
@@ -759,6 +760,7 @@
       <div id="portal-card" class="print-target">
       <p id="portal-print-head" class="print-only"></p>
       <h2 id="portal-title">My Results</h2>
+      <p id="portal-child-wrap" hidden><label>Child <select id="portal-child"></select></label></p>
       <p>ABCD School</p>
       <p id="portal-email"></p>
       <p id="portal-student"></p>
@@ -850,7 +852,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-8');
+      await import('./sign-in.mjs?v=batch-9');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

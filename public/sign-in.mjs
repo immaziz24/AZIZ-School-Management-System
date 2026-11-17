@@ -724,8 +724,9 @@ async function renderFamilyLinks() {
   const tools = academic;
   const request = schoolRequest;
   const token = ++linkRequest;
-  fillSelect(linkForm.elements.namedItem('studentId'), [...studentRecords].sort((a, b) => a.data().name.localeCompare(b.data().name)),
-    (student) => student.name + ' (' + student.admissionNo + ')');
+  const sortedStudents = [...studentRecords].sort((a, b) => a.data().name.localeCompare(b.data().name));
+  fillSelect(linkForm.elements.namedItem('studentId'), sortedStudents, (student) => student.name + ' (' + student.admissionNo + ')');
+  fillSelect(linkForm.elements.namedItem('extra'), sortedStudents, (student) => student.name + ' (' + student.admissionNo + ')');
   linkList.replaceChildren();
   if (!tools) return;
   try {
@@ -736,6 +737,7 @@ async function renderFamilyLinks() {
       const student = studentRecords.find((item) => item.id === link.studentId)?.data();
       const item = document.createElement('li');
       item.textContent = record.id + ' - ' + (student ? student.name + ' (' + student.admissionNo + ')' : link.studentId)
+        + (link.extraStudentIds?.length ? ' + ' + link.extraStudentIds.map((id) => studentRecords.find((item) => item.id === id)?.data().name ?? id).join(', ') : '')
         + ' - ' + link.relation + ' - ' + (link.active ? 'active' : 'switched off');
       linkList.append(item);
     }
@@ -759,12 +761,33 @@ linkForm.addEventListener('submit', (event) => {
     linkStatus.textContent = 'Add a student first.';
     return;
   }
+  const extras = [...new Set(fields.getAll('extra').map(String))].filter((id) => id && id !== studentId);
+  if (extras.length && relation !== 'parent') {
+    linkStatus.textContent = 'Only a parent login can have more than one child.';
+    return;
+  }
+  if (extras.length > 4) {
+    linkStatus.textContent = 'Pick at most 4 other children.';
+    return;
+  }
+  const year = activeYearRecord();
+  const extraClassIds = [...new Set(extras.map((id) => placementData.enrollments
+    .find((record) => year && record.data().yearId === year.id && record.data().studentId === id)?.data().classId).filter(Boolean))];
   runSetupAction(async () => {
-    await academic.save('familyAccess', uid, { studentId, relation, active: fields.get('state') === 'active' });
+    await academic.save('familyAccess', uid, { studentId, relation, active: fields.get('state') === 'active',
+      ...(extras.length ? { extraStudentIds: extras, extraClassIds } : {}) });
     linkForm.elements.namedItem('uid').value = '';
   }, 'Access saved.', linkStatus);
 });
 const portalDashboard = document.querySelector('#portal-dashboard');
+const portalChildWrap = document.querySelector('#portal-child-wrap');
+const portalChild = document.querySelector('#portal-child');
+let portalChoice = '';
+let portalTools;
+portalChild.addEventListener('change', () => {
+  portalChoice = portalChild.value;
+  if (portalTools) loadPortal(portalTools, schoolRequest);
+});
 const portalEmail = document.querySelector('#portal-email');
 const portalStatus = document.querySelector('#portal-status');
 const portalStudent = document.querySelector('#portal-student');
@@ -786,7 +809,33 @@ async function loadPortal(tools, request) {
       portalStatus.textContent = 'Your account is not linked to a student yet. Ask the school office.';
       return;
     }
-    const studentId = link.data().studentId;
+    const children = [link.data().studentId, ...(link.data().extraStudentIds ?? [])];
+    const studentId = children.includes(portalChoice) ? portalChoice : children[0];
+    portalTools = tools;
+    portalBody.replaceChildren();
+    portalTotal.textContent = '';
+    if (children.length > 1) {
+      const names = await Promise.all(children.map(async (id) => {
+        try {
+          const record = await getDocFromServer(doc(schoolRef, 'students', id));
+          return record.exists() ? record.data().name : id;
+        } catch {
+          return id;
+        }
+      }));
+      if (request !== schoolRequest) return;
+      portalChild.replaceChildren();
+      children.forEach((id, index) => {
+        const option = document.createElement('option');
+        option.value = id;
+        option.textContent = names[index];
+        portalChild.append(option);
+      });
+      portalChild.value = studentId;
+      portalChildWrap.hidden = false;
+    } else {
+      portalChildWrap.hidden = true;
+    }
     loadPortalAttendance(tools, request, studentId);
     loadPortalFees(tools, request, studentId);
     loadPortalNotices(tools, request, studentId);
@@ -4763,6 +4812,10 @@ onAuthStateChanged(auth, async (user) => {
   portalMessagesList.replaceChildren();
   messageForm.reset();
   portalMessaging = undefined;
+  portalChoice = '';
+  portalTools = undefined;
+  portalChildWrap.hidden = true;
+  portalChild.replaceChildren();
   portalEventsSection.hidden = true;
   portalEventsStatus.textContent = '';
   portalEventsList.replaceChildren();

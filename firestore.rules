@@ -241,7 +241,8 @@ service cloud.firestore {
       }
       function familyOwns(studentId) {
         return familyActive()
-          && get(/databases/$(database)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid)).data.studentId == studentId;
+          && (get(/databases/$(database)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid)).data.studentId == studentId
+            || studentId in get(/databases/$(database)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid)).data.get('extraStudentIds', []));
       }
 
       // Notices. notices/{noticeId}: title, body, audience (all, teachers, families or class), classId
@@ -253,7 +254,8 @@ service cloud.firestore {
         let settings = /databases/$(database)/documents/schools/$(schoolId)/settings/academic;
         let link = /databases/$(database)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid);
         let enrollment = /databases/$(database)/documents/schools/$(schoolId)/enrollments/$(get(settings).data.activeYearId + '_' + get(link).data.studentId);
-        return familyActive() && exists(settings) && exists(enrollment) && get(enrollment).data.classId == classId;
+        return familyActive() && ((exists(settings) && exists(enrollment) && get(enrollment).data.classId == classId)
+          || classId in get(link).data.get('extraClassIds', []));
       }
 
       match /notices/{noticeId} {
@@ -1314,9 +1316,14 @@ service cloud.firestore {
     }
 
     function validFamilyAccess(item) {
-      return item.keys().hasOnly(['studentId', 'relation', 'active']) && item.keys().hasAll(['studentId', 'relation', 'active'])
+      return item.keys().hasOnly(['studentId', 'relation', 'active', 'extraStudentIds', 'extraClassIds'])
+        && item.keys().hasAll(['studentId', 'relation', 'active'])
         && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.relation in ['student', 'parent'] && item.active is bool;
+        && item.relation in ['student', 'parent'] && item.active is bool
+        && (!item.keys().hasAny(['extraStudentIds']) || (item.extraStudentIds is list && item.extraStudentIds.size() <= 4
+          && item.relation == 'parent'))
+        && (!item.keys().hasAny(['extraClassIds']) || (item.extraClassIds is list && item.extraClassIds.size() <= 4
+          && item.keys().hasAny(['extraStudentIds'])));
     }
 
     function validExam(item) {
