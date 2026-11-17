@@ -109,7 +109,10 @@ test('teacher, inactive owner and anonymous cannot read or write setup', async (
   };
   for (const who of ['teacher-a', 'inactive-owner-a', null, 'stranger']) {
     for (const [label, [path, data]] of Object.entries(paths)) {
-      await denied(get(who, path), `${who} reads ${label}`);
+      // Active teachers may read academic years (label, dates, status) so a class teacher can find
+      // the active year. They still cannot write one, and every other record stays owner only.
+      if (who === 'teacher-a' && label === 'year') await allowed(get(who, path), `${who} reads ${label}`);
+      else await denied(get(who, path), `${who} reads ${label}`);
       await denied(set(who, path, data), `${who} writes ${label}`);
     }
     await denied(get(who, `${A}/classes`), `${who} lists classes`);

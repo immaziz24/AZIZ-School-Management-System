@@ -160,6 +160,34 @@
         </form>
         <ul id="family-list"></ul>
       </section>
+      <section id="class-teachers" aria-labelledby="class-teacher-title" hidden>
+        <h3 id="class-teacher-title">Class Teachers</h3>
+        <p>Each class has one class teacher, who marks its daily attendance. The account must already be an active teacher.</p>
+        <p id="class-teacher-status" role="status"></p>
+        <ul id="class-teacher-list"></ul>
+        <form id="class-teacher-form">
+          <p><label>Class <select name="classId" required></select></label></p>
+          <p><label>Teacher account ID (UID) <input name="uid" required maxlength="128"></label></p>
+          <button type="submit">Save class teacher</button>
+        </form>
+      </section>
+      <section id="attendance-review" aria-labelledby="attendance-review-title" hidden>
+        <h3 id="attendance-review-title">Attendance Review</h3>
+        <p id="attendance-review-status" role="status"></p>
+        <p>
+          <label>Date <input id="attendance-review-date" type="date"></label>
+          <button id="attendance-review-refresh" type="button">Refresh attendance</button>
+        </p>
+        <table>
+          <thead><tr><th>Class</th><th>Class teacher account</th><th>Students</th><th>Present</th><th>Absent</th><th>Late</th><th>Not marked</th></tr></thead>
+          <tbody id="attendance-review-body"></tbody>
+        </table>
+        <p><label>Class details <select id="attendance-review-class"></select></label></p>
+        <table>
+          <thead><tr><th>Section</th><th>Roll</th><th>Student</th><th>Status</th></tr></thead>
+          <tbody id="attendance-detail-body"></tbody>
+        </table>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -177,6 +205,21 @@
             <tbody id="exam-marks-body"></tbody>
           </table>
           <button type="submit">Save marks</button>
+        </form>
+      </section>
+      <section id="attendance-mark" aria-labelledby="attendance-mark-title" hidden>
+        <h3 id="attendance-mark-title">Daily Attendance</h3>
+        <p id="attendance-mark-status" role="status"></p>
+        <p><label>Class <select id="attendance-class"></select></label></p>
+        <p><label>Date <input id="attendance-date" type="date"></label></p>
+        <form id="attendance-form">
+          <table>
+            <thead><tr><th>Section</th><th>Roll</th><th>Student</th><th>Attendance</th></tr></thead>
+            <tbody id="attendance-body"></tbody>
+          </table>
+          <p id="attendance-counts" role="status"></p>
+          <button id="attendance-all-present" type="button">Mark all unmarked students present</button>
+          <button type="submit">Save attendance</button>
         </form>
       </section>
       <form id="marks-entry" hidden>
@@ -206,7 +249,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=marks-8');
+      await import('./sign-in.mjs?v=attendance-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

@@ -207,8 +207,8 @@ function fillSelect(select, records, label) {
 async function loadAcademic(request) {
   const tools = academic;
   try {
-    const [years, classes, sections, subjects, mappings, studentDocs, enrollments, exams] = await Promise.all(
-      ['academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'students', 'enrollments', 'exams']
+    const [years, classes, sections, subjects, mappings, studentDocs, enrollments, exams, classTeacherDocs] = await Promise.all(
+      ['academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'students', 'enrollments', 'exams', 'classTeachers']
         .map((name) => tools.list(name)),
     );
     if (request !== schoolRequest) return;
@@ -222,6 +222,9 @@ async function loadAcademic(request) {
     renderMarksReview();
     renderReportStudents();
     renderFamilyLinks();
+    classTeacherData = classTeacherDocs.docs;
+    renderClassTeachers();
+    renderAttendanceReview();
     for (const list of Object.values(setupLists)) list.replaceChildren();
     const classRecords = classes.docs.sort((a, b) => a.data().order - b.data().order);
     const className = (id) => classRecords.find((record) => record.id === id)?.data().name ?? id;
@@ -1012,9 +1015,375 @@ examMarksForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Attendance (feature 062). The owner picks one class teacher per class. The class teacher marks
+// each school day and the owner reviews it. One record per student per day: date_classId_studentId.
+const pad = (n) => String(n).padStart(2, '0');
+const localToday = () => {
+  const now = new Date();
+  return now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+};
+const DATE_TEXT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const STATUS_LABEL = { present: 'Present', absent: 'Absent', late: 'Late' };
+const byClassOrder = (a, b) => a.data().order - b.data().order;
+
+const classTeacherSection = document.querySelector('#class-teachers');
+const classTeacherStatus = document.querySelector('#class-teacher-status');
+const classTeacherList = document.querySelector('#class-teacher-list');
+const classTeacherForm = document.querySelector('#class-teacher-form');
+let classTeacherData = [];
+
+function renderClassTeachers() {
+  const classes = [...examData.classes].sort(byClassOrder);
+  classTeacherList.replaceChildren();
+  for (const record of classes) {
+    const holder = classTeacherData.find((item) => item.id === record.id)?.data().teacherUid;
+    listItem(classTeacherList, record.data().name + ' - ' + (holder ? 'class teacher account ' + holder : 'no class teacher yet'));
+  }
+  fillSelect(classTeacherForm.elements.namedItem('classId'), classes, (item) => item.name);
+}
+
+classTeacherForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy) return;
+  const fields = new FormData(classTeacherForm);
+  const classId = String(fields.get('classId') ?? '');
+  const uid = String(fields.get('uid') ?? '').trim();
+  if (!classId) {
+    classTeacherStatus.textContent = 'Add a class in Academic Setup first.';
+    return;
+  }
+  if (!uid || uid.length > 128 || uid.includes('/')) {
+    classTeacherStatus.textContent = 'Enter the teacher account ID (UID) from Firebase Authentication.';
+    return;
+  }
+  runSetupAction(async () => {
+    await academic.save('classTeachers', classId, { teacherUid: uid });
+    classTeacherForm.elements.namedItem('uid').value = '';
+  }, 'Class teacher saved.', classTeacherStatus);
+});
+
+// Owner review: one date at a time, class by class, then the students of one class.
+const attReviewSection = document.querySelector('#attendance-review');
+const attReviewStatus = document.querySelector('#attendance-review-status');
+const attReviewDate = document.querySelector('#attendance-review-date');
+const attReviewRefresh = document.querySelector('#attendance-review-refresh');
+const attReviewBody = document.querySelector('#attendance-review-body');
+const attReviewClass = document.querySelector('#attendance-review-class');
+const attDetailBody = document.querySelector('#attendance-detail-body');
+let attReviewToken = 0;
+let attReviewState; // { rows: Map(classId -> placements), marks: Map(classId/studentId -> status) }
+
+function addRow(body, cells) {
+  const tr = document.createElement('tr');
+  for (const text of cells) {
+    const td = document.createElement('td');
+    td.textContent = text;
+    tr.append(td);
+  }
+  body.append(tr);
+}
+
+function renderAttendanceDetail() {
+  attDetailBody.replaceChildren();
+  if (!attReviewState) return;
+  const sectionName = (id) => placementData.sections.find((record) => record.id === id)?.data().name ?? id;
+  const students = new Map(studentRecords.map((record) => [record.id, record.data()]));
+  const classId = attReviewClass.value;
+  for (const row of attReviewState.rows.get(classId) ?? []) {
+    const student = students.get(row.studentId);
+    const mark = attReviewState.marks.get(classId + '/' + row.studentId);
+    addRow(attDetailBody, [sectionName(row.sectionId), String(row.rollNo),
+      student ? student.name + ' (' + student.admissionNo + ')' : row.studentId,
+      mark ? STATUS_LABEL[mark] : 'Not marked']);
+  }
+}
+
+async function renderAttendanceReview() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++attReviewToken;
+  attReviewBody.replaceChildren();
+  attDetailBody.replaceChildren();
+  attReviewState = undefined;
+  if (!tools) return;
+  const year = placementData.years.find((record) => record.data().status === 'active');
+  const date = attReviewDate.value;
+  if (!year) {
+    attReviewStatus.textContent = 'Activate an academic year to review attendance.';
+    return;
+  }
+  if (!DATE_TEXT.test(date)) {
+    attReviewStatus.textContent = 'Choose a date.';
+    return;
+  }
+  attReviewStatus.textContent = 'Loading attendance.';
+  try {
+    const saved = await tools.attendanceOn(date);
+    if (request !== schoolRequest || token !== attReviewToken) return;
+    const marks = new Map(saved.docs.filter((record) => record.data().yearId === year.id)
+      .map((record) => [record.data().classId + '/' + record.data().studentId, record.data().status]));
+    const students = new Map(studentRecords.map((record) => [record.id, record.data()]));
+    const sectionName = (id) => placementData.sections.find((record) => record.id === id)?.data().name ?? id;
+    const placed = placementData.enrollments.map((record) => record.data())
+      .filter((item) => item.yearId === year.id && students.get(item.studentId)?.status === 'active');
+    const classes = [...examData.classes].sort(byClassOrder);
+    const rows = new Map();
+    let marked = 0;
+    for (const record of classes) {
+      const list = placed.filter((item) => item.classId === record.id)
+        .sort((a, b) => sectionName(a.sectionId).localeCompare(sectionName(b.sectionId)) || a.rollNo - b.rollNo);
+      rows.set(record.id, list);
+      const count = { present: 0, absent: 0, late: 0 };
+      for (const item of list) {
+        const mark = marks.get(record.id + '/' + item.studentId);
+        if (mark) count[mark] += 1;
+      }
+      const done = count.present + count.absent + count.late;
+      if (done) marked += 1;
+      addRow(attReviewBody, [record.data().name,
+        classTeacherData.find((item) => item.id === record.id)?.data().teacherUid ?? 'Not set',
+        String(list.length), String(count.present), String(count.absent), String(count.late), String(list.length - done)]);
+    }
+    attReviewState = { rows, marks };
+    fillSelect(attReviewClass, classes, (item) => item.name);
+    renderAttendanceDetail();
+    attReviewStatus.textContent = classes.length
+      ? marked + ' of ' + classes.length + ' classes have attendance marked for ' + date + '.'
+      : 'Add classes in Academic Setup first.';
+  } catch {
+    if (request === schoolRequest && token === attReviewToken) attReviewStatus.textContent = 'Could not load attendance. Try again.';
+  }
+}
+
+attReviewDate.addEventListener('change', renderAttendanceReview);
+attReviewRefresh.addEventListener('click', () => {
+  if (academic) loadAcademic(schoolRequest);
+});
+attReviewClass.addEventListener('change', renderAttendanceDetail);
+
+// Class teacher: the daily marking sheet.
+const attMarkSection = document.querySelector('#attendance-mark');
+const attMarkStatus = document.querySelector('#attendance-mark-status');
+const attClass = document.querySelector('#attendance-class');
+const attDate = document.querySelector('#attendance-date');
+const attForm = document.querySelector('#attendance-form');
+const attBody = document.querySelector('#attendance-body');
+const attCounts = document.querySelector('#attendance-counts');
+const attAllPresent = document.querySelector('#attendance-all-present');
+const attSave = attForm.querySelector('button[type="submit"]');
+let teacherAttendance; // { schoolRef, uid, year, names: Map(studentId -> student or null), busy }
+let attToken = 0;
+let attPrev = { classId: '', date: '' };
+const ATTENDANCE_PER_GROUP = 10;
+
+const attSelects = () => [...attBody.querySelectorAll('select')];
+const attendanceDirty = () => attSelects().some((select) => select.value !== select.dataset.original);
+
+function updateAttendanceCounts() {
+  const count = { present: 0, absent: 0, late: 0, '': 0 };
+  for (const select of attSelects()) count[select.value] += 1;
+  attCounts.textContent = attSelects().length
+    ? 'Present ' + count.present + ', absent ' + count.absent + ', late ' + count.late + ', not marked ' + count['']
+    : '';
+}
+
+async function loadAttendanceClasses(request, schoolRef, uid) {
+  const { collection, doc, query, where, getDocFromServer, getDocsFromServer } = firestoreTools;
+  try {
+    const mine = await getDocsFromServer(query(collection(schoolRef, 'classTeachers'), where('teacherUid', '==', uid)));
+    if (request !== schoolRequest || mine.empty) return;
+    attMarkSection.hidden = false;
+    attMarkStatus.textContent = 'Loading your class.';
+    const years = await getDocsFromServer(query(collection(schoolRef, 'academicYears'), where('status', '==', 'active')));
+    if (request !== schoolRequest) return;
+    if (years.empty) {
+      attMarkStatus.textContent = 'There is no active academic year yet. Ask the principal to activate one.';
+      return;
+    }
+    const classDocs = await Promise.all(mine.docs.map((record) => getDocFromServer(doc(schoolRef, 'classes', record.id))));
+    if (request !== schoolRequest) return;
+    const classes = classDocs.filter((record) => record.exists()).sort(byClassOrder);
+    teacherAttendance = { schoolRef, uid, year: years.docs[0], names: new Map(), busy: false };
+    const year = years.docs[0].data();
+    fillSelect(attClass, classes, (item) => item.name);
+    const today = localToday();
+    attDate.min = year.startDate;
+    attDate.max = today < year.endDate ? today : year.endDate;
+    attDate.value = today >= year.startDate && today <= year.endDate ? today : attDate.max;
+    attPrev = { classId: attClass.value, date: attDate.value };
+    await renderTeacherAttendance(request);
+  } catch {
+    if (request === schoolRequest) attMarkStatus.textContent = 'Could not load your class. Refresh to try again.';
+  }
+}
+
+async function renderTeacherAttendance(request) {
+  const { collection, doc, query, where, getDocFromServer, getDocsFromServer } = firestoreTools;
+  const context = teacherAttendance;
+  const token = ++attToken;
+  attBody.replaceChildren();
+  attCounts.textContent = '';
+  attSave.disabled = attAllPresent.disabled = true;
+  const classId = attClass.value;
+  const date = attDate.value;
+  const year = context?.year.data();
+  if (!context || !classId) {
+    attMarkStatus.textContent = 'No class is assigned to you yet.';
+    return;
+  }
+  if (!DATE_TEXT.test(date) || date < year.startDate || date > year.endDate || date > localToday()) {
+    attMarkStatus.textContent = 'Choose a date this school year, up to today.';
+    return;
+  }
+  attMarkStatus.textContent = 'Loading students.';
+  const stale = () => request !== schoolRequest || context !== teacherAttendance || token !== attToken;
+  try {
+    const [placements, sections, saved] = await Promise.all([
+      getDocsFromServer(query(collection(context.schoolRef, 'enrollments'),
+        where('yearId', '==', context.year.id), where('classId', '==', classId))),
+      getDocsFromServer(query(collection(context.schoolRef, 'sections'), where('classId', '==', classId))),
+      getDocsFromServer(query(collection(context.schoolRef, 'attendance'),
+        where('classId', '==', classId), where('date', '==', date))),
+    ]);
+    if (stale()) return;
+    // Names are read one student at a time; the rules allow only students placed in your class.
+    const missing = placements.docs.map((record) => record.data().studentId).filter((id) => !context.names.has(id));
+    const fetched = await Promise.all(missing.map(async (id) => {
+      try {
+        const record = await getDocFromServer(doc(context.schoolRef, 'students', id));
+        return [id, record.exists() ? record.data() : null];
+      } catch {
+        return [id, null];
+      }
+    }));
+    if (stale()) return;
+    for (const [id, student] of fetched) context.names.set(id, student);
+    const marks = new Map(saved.docs.map((record) => [record.data().studentId, record.data().status]));
+    const sectionName = (id) => sections.docs.find((record) => record.id === id)?.data().name ?? id;
+    const rows = placements.docs.map((record) => record.data())
+      .filter((item) => context.names.get(item.studentId)?.status !== 'inactive')
+      .sort((a, b) => sectionName(a.sectionId).localeCompare(sectionName(b.sectionId)) || a.rollNo - b.rollNo);
+    for (const row of rows) {
+      const student = context.names.get(row.studentId);
+      const original = marks.get(row.studentId) ?? '';
+      const select = document.createElement('select');
+      select.dataset.student = row.studentId;
+      select.dataset.original = original;
+      for (const [value, label] of [['', 'Not marked'], ...Object.entries(STATUS_LABEL)]) {
+        // A saved mark can be corrected but not turned back into "not marked".
+        if (value === '' && original) continue;
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        select.append(option);
+      }
+      select.value = original;
+      select.setAttribute('aria-label', 'Attendance for ' + sectionName(row.sectionId) + ' roll ' + row.rollNo);
+      select.addEventListener('change', updateAttendanceCounts);
+      const tr = document.createElement('tr');
+      for (const content of [sectionName(row.sectionId), String(row.rollNo),
+        student ? student.name + ' (' + student.admissionNo + ')' : row.studentId, select]) {
+        const td = document.createElement('td');
+        td.append(content);
+        tr.append(td);
+      }
+      attBody.append(tr);
+    }
+    attSave.disabled = attAllPresent.disabled = !rows.length;
+    updateAttendanceCounts();
+    attMarkStatus.textContent = rows.length ? '' : 'No students have been placed in this class for this year yet.';
+  } catch {
+    if (!stale()) attMarkStatus.textContent = 'Could not load students. Try again.';
+  }
+}
+
+function onAttendanceChoice() {
+  if (attendanceDirty() && !confirm('You have attendance that is not saved. Switch without saving it?')) {
+    attClass.value = attPrev.classId;
+    attDate.value = attPrev.date;
+    return;
+  }
+  attPrev = { classId: attClass.value, date: attDate.value };
+  if (teacherAttendance) renderTeacherAttendance(schoolRequest);
+}
+attClass.addEventListener('change', onAttendanceChoice);
+attDate.addEventListener('change', onAttendanceChoice);
+
+attAllPresent.addEventListener('click', () => {
+  for (const select of attSelects()) if (select.value === '') select.value = 'present';
+  updateAttendanceCounts();
+});
+
+attForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = teacherAttendance;
+  if (!context || context.busy) return;
+  const classId = attClass.value;
+  const date = attDate.value;
+  const writes = attSelects().filter((select) => select.value !== '' && select.value !== select.dataset.original)
+    .map((select) => ({ studentId: select.dataset.student, status: select.value }));
+  if (!writes.length) {
+    attMarkStatus.textContent = 'No new or changed attendance to save.';
+    return;
+  }
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  attSave.disabled = true;
+  let done = 0;
+  try {
+    // One write per student: each is checked on its own by the rules, so ten run at a time.
+    for (let start = 0; start < writes.length; start += ATTENDANCE_PER_GROUP) {
+      attMarkStatus.textContent = 'Saving attendance ' + (start + 1) + ' of ' + writes.length + '.';
+      const results = await Promise.allSettled(writes.slice(start, start + ATTENDANCE_PER_GROUP).map(({ studentId, status }) => setDoc(
+        doc(context.schoolRef, 'attendance', date + '_' + classId + '_' + studentId), {
+          yearId: context.year.id, classId, studentId, date, status, markedBy: context.uid,
+        })));
+      done += results.filter((result) => result.status === 'fulfilled').length;
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
+    }
+    if (request !== schoolRequest || context !== teacherAttendance) return;
+    await renderTeacherAttendance(request);
+    if (request === schoolRequest) attMarkStatus.textContent = 'Saved attendance for ' + done + ' student' + (done === 1 ? '' : 's') + '.';
+  } catch (error) {
+    if (request !== schoolRequest || context !== teacherAttendance) return;
+    await renderTeacherAttendance(request);
+    attMarkStatus.textContent = (done ? 'Saved ' + done + ' of ' + writes.length + '. ' : '')
+      + (error.code === 'permission-denied'
+        ? 'The rest could not be saved. Check the date, and that you are still this class\'s teacher.'
+        : 'Could not save all attendance. Check your connection and save again.');
+  } finally {
+    context.busy = false;
+  }
+});
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
+  teacherAttendance = undefined;
+  attToken += 1;
+  attMarkSection.hidden = true;
+  attMarkStatus.textContent = '';
+  attBody.replaceChildren();
+  attCounts.textContent = '';
+  attClass.replaceChildren();
+  attDate.value = '';
+  attPrev = { classId: '', date: '' };
+  classTeacherSection.hidden = true;
+  classTeacherStatus.textContent = '';
+  classTeacherList.replaceChildren();
+  classTeacherForm.reset();
+  classTeacherForm.elements.namedItem('classId').replaceChildren();
+  classTeacherData = [];
+  attReviewSection.hidden = true;
+  attReviewStatus.textContent = '';
+  attReviewBody.replaceChildren();
+  attDetailBody.replaceChildren();
+  attReviewClass.replaceChildren();
+  attReviewDate.value = '';
+  attReviewState = undefined;
+  attReviewToken += 1;
   examMarksSection.hidden = true;
   examMarksStatus.textContent = '';
   examMarksBody.replaceChildren();
@@ -1104,7 +1473,7 @@ onAuthStateChanged(auth, async (user) => {
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
-    firestoreTools = { collection, doc, getDocsFromServer, query, setDoc, where };
+    firestoreTools = { collection, doc, getDocFromServer, getDocsFromServer, query, setDoc, where };
     const schoolRef = doc(getFirestore(app), 'schools', 'abcd-school');
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     if (request !== schoolRequest) return;
@@ -1138,6 +1507,8 @@ onAuthStateChanged(auth, async (user) => {
       } catch {
         if (request === schoolRequest) assignmentSummary.textContent = 'Could not load your assignment.';
       }
+      // A class teacher also gets the daily attendance sheet, with or without a subject assignment.
+      await loadAttendanceClasses(request, schoolRef, user.uid);
       return;
     }
     if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
@@ -1175,6 +1546,7 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: (name, id, data) => setDoc(doc(schoolRef, name, id), data),
       marksOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('studentId', '==', studentId))),
+      attendanceOn: (date) => getDocsFromServer(query(collection(schoolRef, 'attendance'), where('date', '==', date))),
       marksFor: (examId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('examId', '==', examId))),
       // A year becomes active in one batch with the pointer the rules check.
       activate: (id, year) => {
@@ -1199,6 +1571,9 @@ onAuthStateChanged(auth, async (user) => {
     reviewSection.hidden = false;
     reportSection.hidden = false;
     linkSection.hidden = false;
+    classTeacherSection.hidden = false;
+    attReviewSection.hidden = false;
+    attReviewDate.value = localToday();
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
   } catch (error) {

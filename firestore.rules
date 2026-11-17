@@ -81,6 +81,63 @@ service cloud.firestore {
           && exists(enrollmentPath) && get(enrollmentPath).data.classId == exam.classId;
       }
 
+      // Class teacher (feature 062). classTeachers/{classId}: teacherUid. One class teacher per
+      // class, set by the owner. The class teacher marks daily attendance for that class and
+      // can read the class's placements and sections. A class teacher need not teach a subject.
+      function classTeacherOf(classId) {
+        return request.auth != null && isActiveTeacher()
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classTeachers/$(classId))
+          && get(/databases/$(database)/documents/schools/$(schoolId)/classTeachers/$(classId)).data.teacherUid == request.auth.uid;
+      }
+      function classTeacherOfStudent(studentId) {
+        let settings = /databases/$(database)/documents/schools/$(schoolId)/settings/academic;
+        let enrollment = /databases/$(database)/documents/schools/$(schoolId)/enrollments/$(get(settings).data.activeYearId + '_' + studentId);
+        return exists(settings) && exists(enrollment) && classTeacherOf(get(enrollment).data.classId);
+      }
+      function activeTeacherMember(uid) {
+        let member = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
+        return exists(member) && get(member).data.active == true && get(member).data.role == 'teacher';
+      }
+      // A daily attendance mark needs: the signed-in class teacher, an open year, a date inside
+      // that year and no later than tomorrow (UTC), and a student placed in the class that year.
+      function attendanceAllowed(item) {
+        let year = /databases/$(database)/documents/schools/$(schoolId)/academicYears/$(item.yearId);
+        let enrollment = /databases/$(database)/documents/schools/$(schoolId)/enrollments/$(item.yearId + '_' + item.studentId);
+        return classTeacherOf(item.classId)
+          && exists(year) && get(year).data.status in ['draft', 'active']
+          && get(year).data.startDate <= item.date && item.date <= get(year).data.endDate
+          && item.date <= latestAttendanceDate()
+          && exists(enrollment) && get(enrollment).data.classId == item.classId;
+      }
+
+      match /classTeachers/{classId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || (isActiveTeacher() && resource.data.teacherUid == request.auth.uid));
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && classId.matches('[a-z0-9-]{1,20}') && validClassTeacher(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(classId))
+          && activeTeacherMember(request.resource.data.teacherUid);
+      }
+
+      // Daily attendance (feature 062). attendance/{date}_{classId}_{studentId}: yearId, classId,
+      // studentId, date (YYYY-MM-DD), status (present, absent or late), markedBy. Only the class
+      // teacher writes, and may correct a mark at any time while the year is open. The owner
+      // reads and reviews every mark. Records are never deleted.
+      match /attendance/{attendanceId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || classTeacherOf(resource.data.classId));
+        allow create: if request.auth != null && validAttendance(request.resource.data)
+          && request.resource.data.markedBy == request.auth.uid
+          && attendanceId == request.resource.data.date + '_' + request.resource.data.classId
+            + '_' + request.resource.data.studentId
+          && attendanceAllowed(request.resource.data);
+        allow update: if request.auth != null && validAttendance(request.resource.data)
+          && request.resource.data.markedBy == request.auth.uid
+          && request.resource.data.yearId == resource.data.yearId
+          && attendanceId == request.resource.data.date + '_' + request.resource.data.classId
+            + '_' + request.resource.data.studentId
+          && attendanceAllowed(request.resource.data);
+      }
+
       // Student and parent access (feature 048). familyAccess/{uid} links a student or parent
       // account to one student and can be switched off by the owner. Family accounts read only
       // published results for that student. Each helper uses at most two access calls because a
@@ -149,7 +206,8 @@ service cloud.firestore {
       }
 
       match /academicYears/{yearId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        // Teachers read years (label, dates, status only) so a class teacher can find the active year.
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher());
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && yearId.matches('[a-z0-9-]{1,20}')
           && validYear(request.resource.data) && request.resource.data.status == 'draft';
@@ -167,12 +225,15 @@ service cloud.firestore {
       // classes/{classId}: name, order. sections/{sectionId}: classId, name.
       match /classes/{classId} {
         allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        // A class teacher reads their own class by ID, to show its name on the attendance sheet.
+        allow get: if request.auth != null && classTeacherOf(classId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && classId.matches('[a-z0-9-]{1,20}') && validClass(request.resource.data);
       }
 
       match /sections/{sectionId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId));
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId)
+          || classTeacherOf(resource.data.classId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && sectionId.matches('[a-z0-9-]{1,31}') && validSection(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
@@ -264,6 +325,8 @@ service cloud.firestore {
       match /students/{studentId} {
         allow get, list: if request.auth != null && isSchoolOwner(schoolId);
         allow get: if request.auth != null && familyOwns(studentId);
+        // A class teacher reads, one by one, the students placed in their class in the active year.
+        allow get: if request.auth != null && classTeacherOfStudent(studentId);
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && studentId.matches('[a-z0-9-]{1,20}') && validStudentRecord(request.resource.data)
           && request.resource.data.admissionNo.lower() == studentId
@@ -278,7 +341,8 @@ service cloud.firestore {
       // studentId. The two are always written in one batch, so a roll number belongs to one
       // student per section per year. Closed years are frozen.
       match /enrollments/{enrollmentId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId));
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId)
+          || classTeacherOf(resource.data.classId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validEnrollment(request.resource.data)
           && enrollmentId == request.resource.data.yearId + '_' + request.resource.data.studentId
@@ -394,6 +458,32 @@ service cloud.firestore {
         && mark.enteredBy is string
         && mark.maxMarks is int && mark.maxMarks >= 1 && mark.maxMarks <= 1000
         && mark.score is int && mark.score >= 0 && mark.score <= mark.maxMarks;
+    }
+
+    function pad2(n) {
+      return n < 10 ? '0' + string(n) : string(n);
+    }
+
+    // Tomorrow's date in UTC as YYYY-MM-DD. One day of slack covers time zones ahead of UTC.
+    function latestAttendanceDate() {
+      let t = request.time + duration.value(1, 'd');
+      return string(t.year()) + '-' + pad2(t.month()) + '-' + pad2(t.day());
+    }
+
+    function validClassTeacher(item) {
+      return item.keys().hasOnly(['teacherUid']) && item.keys().hasAll(['teacherUid'])
+        && item.teacherUid is string && item.teacherUid.size() >= 1 && item.teacherUid.size() <= 128;
+    }
+
+    function validAttendance(item) {
+      return item.keys().hasOnly(['yearId', 'classId', 'studentId', 'date', 'status', 'markedBy'])
+        && item.keys().hasAll(['yearId', 'classId', 'studentId', 'date', 'status', 'markedBy'])
+        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.status in ['present', 'absent', 'late']
+        && item.markedBy is string;
     }
 
     function validFamilyAccess(item) {
