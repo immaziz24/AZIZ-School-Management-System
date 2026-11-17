@@ -188,6 +188,28 @@
           <tbody id="attendance-detail-body"></tbody>
         </table>
       </section>
+      <section id="staff-attendance" aria-labelledby="staff-attendance-title" hidden>
+        <h3 id="staff-attendance-title">Staff Attendance</h3>
+        <p>Mark each teacher's attendance for a day. Teachers see only their own record.</p>
+        <p id="staff-attendance-status" role="status"></p>
+        <p><label>Date <input id="staff-attendance-date" type="date"></label></p>
+        <form id="staff-attendance-form">
+          <table>
+            <thead><tr><th>Teacher</th><th>Attendance</th></tr></thead>
+            <tbody id="staff-attendance-body"></tbody>
+          </table>
+          <p id="staff-attendance-counts" role="status"></p>
+          <button id="staff-attendance-all-present" type="button">Mark all unmarked teachers present</button>
+          <button type="submit">Save staff attendance</button>
+        </form>
+        <h4>Monthly staff report</h4>
+        <p id="staff-report-status" role="status"></p>
+        <p><label>Month <input id="staff-report-month" type="month"></label></p>
+        <table>
+          <thead><tr><th>Teacher</th><th>Present</th><th>Absent</th><th>Late</th><th>Leave</th><th>Days marked</th><th>Attendance</th></tr></thead>
+          <tbody id="staff-report-body"></tbody>
+        </table>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -221,6 +243,16 @@
           <button id="attendance-all-present" type="button">Mark all unmarked students present</button>
           <button type="submit">Save attendance</button>
         </form>
+      </section>
+      <section id="my-attendance" aria-labelledby="my-attendance-title" hidden>
+        <h3 id="my-attendance-title">My Attendance</h3>
+        <p id="my-attendance-status" role="status"></p>
+        <p><label>Month <input id="my-attendance-month" type="month"></label></p>
+        <p id="my-attendance-total" role="status"></p>
+        <table>
+          <thead><tr><th>Date</th><th>Status</th></tr></thead>
+          <tbody id="my-attendance-body"></tbody>
+        </table>
       </section>
       <form id="marks-entry" hidden>
         <h3>Marks Entry (old form)</h3>
@@ -259,7 +291,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=attendance-2');
+      await import('./sign-in.mjs?v=staff-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

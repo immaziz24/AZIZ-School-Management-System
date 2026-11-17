@@ -1404,6 +1404,234 @@ async function loadPortalAttendance(tools, request, studentId) {
 
 portalAttMonth.addEventListener('change', renderPortalAttendance);
 
+// Owner: daily staff attendance sheet and monthly report. Teachers are the active members with
+// the teacher role; the owner marks them and no one else can.
+const STAFF_STATUS_LABEL = { present: 'Present', absent: 'Absent', late: 'Late', leave: 'Leave' };
+const staffAttSection = document.querySelector('#staff-attendance');
+const staffAttStatus = document.querySelector('#staff-attendance-status');
+const staffAttDate = document.querySelector('#staff-attendance-date');
+const staffAttForm = document.querySelector('#staff-attendance-form');
+const staffAttBody = document.querySelector('#staff-attendance-body');
+const staffAttCounts = document.querySelector('#staff-attendance-counts');
+const staffAttAllPresent = document.querySelector('#staff-attendance-all-present');
+const staffAttSave = staffAttForm.querySelector('button[type="submit"]');
+const staffReportStatus = document.querySelector('#staff-report-status');
+const staffReportMonth = document.querySelector('#staff-report-month');
+const staffReportBody = document.querySelector('#staff-report-body');
+let staffRoster = [];
+let staffAttToken = 0;
+let staffReportToken = 0;
+const staffSelects = () => [...staffAttBody.querySelectorAll('select')];
+
+function staffLabel(uid) {
+  const names = classTeacherData.filter((record) => record.data().teacherUid === uid)
+    .map((record) => examData.classes.find((item) => item.id === record.id)?.data().name ?? record.id);
+  return 'Teacher account ' + uid + (names.length ? ' (class teacher of ' + names.join(', ') + ')' : '');
+}
+
+function updateStaffCounts() {
+  const count = { present: 0, absent: 0, late: 0, leave: 0, '': 0 };
+  for (const select of staffSelects()) count[select.value] += 1;
+  staffAttCounts.textContent = staffSelects().length
+    ? 'Present ' + count.present + ', absent ' + count.absent + ', late ' + count.late
+      + ', leave ' + count.leave + ', not marked ' + count['']
+    : '';
+}
+
+async function renderStaffSheet() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++staffAttToken;
+  staffAttBody.replaceChildren();
+  staffAttCounts.textContent = '';
+  if (!tools) return;
+  const date = staffAttDate.value;
+  if (!DATE_TEXT.test(date) || date < '2020-01-01' || date > localToday()) {
+    staffAttStatus.textContent = 'Choose a date up to today.';
+    return;
+  }
+  if (!staffRoster.length) {
+    staffAttStatus.textContent = 'No active teacher accounts yet.';
+    return;
+  }
+  staffAttStatus.textContent = 'Loading staff attendance.';
+  try {
+    const saved = await tools.staffAttendanceOn(date);
+    if (request !== schoolRequest || token !== staffAttToken) return;
+    const marks = new Map(saved.docs.map((record) => [record.data().staffUid, record.data().status]));
+    for (const uid of staffRoster) {
+      const tr = document.createElement('tr');
+      const name = document.createElement('td');
+      name.textContent = staffLabel(uid);
+      const cell = document.createElement('td');
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', 'Attendance for ' + uid);
+      for (const [value, label] of [['', 'Not marked'], ...Object.entries(STAFF_STATUS_LABEL)]) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        select.append(option);
+      }
+      select.value = marks.get(uid) ?? '';
+      select.dataset.original = select.value;
+      select.dataset.uid = uid;
+      select.addEventListener('change', updateStaffCounts);
+      cell.append(select);
+      tr.append(name, cell);
+      staffAttBody.append(tr);
+    }
+    updateStaffCounts();
+    staffAttStatus.textContent = '';
+  } catch {
+    if (request === schoolRequest && token === staffAttToken) staffAttStatus.textContent = 'Could not load staff attendance. Try again.';
+  }
+}
+
+async function renderStaffReport() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++staffReportToken;
+  staffReportBody.replaceChildren();
+  if (!tools) return;
+  const month = staffReportMonth.value;
+  if (!/^[0-9]{4}-[0-9]{2}$/.test(month)) {
+    staffReportStatus.textContent = 'Choose a month.';
+    return;
+  }
+  staffReportStatus.textContent = 'Loading monthly report.';
+  try {
+    const saved = await tools.staffAttendanceBetween(month + '-01', month + '-31');
+    if (request !== schoolRequest || token !== staffReportToken) return;
+    const marks = saved.docs.map((record) => record.data());
+    for (const uid of staffRoster) {
+      const own = marks.filter((item) => item.staffUid === uid);
+      const count = { present: 0, absent: 0, late: 0, leave: 0 };
+      for (const item of own) count[item.status] += 1;
+      const worked = count.present + count.late + count.absent;
+      addRow(staffReportBody, [staffLabel(uid), String(count.present), String(count.absent), String(count.late),
+        String(count.leave), String(own.length),
+        worked ? Math.round((count.present + count.late) / worked * 1000) / 10 + '%' : '-']);
+    }
+    staffReportStatus.textContent = staffRoster.length ? '' : 'No active teacher accounts yet.';
+  } catch {
+    if (request === schoolRequest && token === staffReportToken) staffReportStatus.textContent = 'Could not load the monthly report. Try again.';
+  }
+}
+
+async function loadStaffAttendance(request) {
+  const tools = academic;
+  try {
+    const members = await tools.list('members');
+    if (request !== schoolRequest) return;
+    staffRoster = members.docs.filter((record) => record.data().role === 'teacher' && record.data().active === true)
+      .map((record) => record.id).sort();
+    staffAttSection.hidden = false;
+    staffAttDate.value = localToday();
+    staffReportMonth.value = localToday().slice(0, 7);
+    renderStaffSheet();
+    renderStaffReport();
+  } catch {
+    if (request === schoolRequest) {
+      staffAttSection.hidden = false;
+      staffAttStatus.textContent = 'Could not load staff attendance. Try again.';
+    }
+  }
+}
+
+staffAttDate.addEventListener('change', renderStaffSheet);
+staffReportMonth.addEventListener('change', renderStaffReport);
+staffAttAllPresent.addEventListener('click', () => {
+  for (const select of staffSelects()) if (select.value === '') select.value = 'present';
+  updateStaffCounts();
+});
+
+staffAttForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const date = staffAttDate.value;
+  const writes = staffSelects().filter((select) => select.value !== '' && select.value !== select.dataset.original)
+    .map((select) => ({ uid: select.dataset.uid, status: select.value }));
+  if (!writes.length) {
+    staffAttStatus.textContent = 'No new or changed attendance to save.';
+    return;
+  }
+  const request = schoolRequest;
+  tools.busy = true;
+  staffAttSave.disabled = true;
+  let done = 0;
+  try {
+    for (let start = 0; start < writes.length; start += ATTENDANCE_PER_GROUP) {
+      staffAttStatus.textContent = 'Saving staff attendance ' + (start + 1) + ' of ' + writes.length + '.';
+      const results = await Promise.allSettled(writes.slice(start, start + ATTENDANCE_PER_GROUP)
+        .map(({ uid, status }) => tools.saveStaffAttendance(date, uid, status)));
+      done += results.filter((result) => result.status === 'fulfilled').length;
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
+    }
+    if (request !== schoolRequest) return;
+    tools.busy = false;
+    staffAttSave.disabled = false;
+    await renderStaffSheet();
+    await renderStaffReport();
+    if (request === schoolRequest) staffAttStatus.textContent = 'Staff attendance saved (' + done + ').';
+  } catch (error) {
+    if (request !== schoolRequest) return;
+    staffAttStatus.textContent = (error.code === 'permission-denied'
+      ? 'Some staff attendance could not be saved. Check the date and that each account is an active teacher.'
+      : 'Could not save all staff attendance. Try again.') + (done ? ' ' + done + ' saved before the problem.' : '');
+  } finally {
+    if (request === schoolRequest) {
+      tools.busy = false;
+      staffAttSave.disabled = false;
+    }
+  }
+});
+
+// Teacher: my own attendance, by month.
+const myAttSection = document.querySelector('#my-attendance');
+const myAttStatus = document.querySelector('#my-attendance-status');
+const myAttMonth = document.querySelector('#my-attendance-month');
+const myAttTotal = document.querySelector('#my-attendance-total');
+const myAttBody = document.querySelector('#my-attendance-body');
+let myAttMarks = [];
+
+function renderMyAttendance() {
+  myAttBody.replaceChildren();
+  myAttTotal.textContent = '';
+  const month = myAttMonth.value;
+  const marks = myAttMarks.filter((item) => item.date.startsWith(month + '-')).sort((a, b) => a.date.localeCompare(b.date));
+  if (!marks.length) {
+    myAttStatus.textContent = 'No attendance marked for this month.';
+    return;
+  }
+  myAttStatus.textContent = '';
+  const count = { present: 0, absent: 0, late: 0, leave: 0 };
+  for (const item of marks) {
+    count[item.status] += 1;
+    addRow(myAttBody, [item.date, STAFF_STATUS_LABEL[item.status]]);
+  }
+  myAttTotal.textContent = 'Present ' + count.present + ', absent ' + count.absent + ', late ' + count.late
+    + ', leave ' + count.leave;
+}
+
+myAttMonth.addEventListener('change', renderMyAttendance);
+
+async function loadMyAttendance(request, schoolRef, uid) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  myAttSection.hidden = false;
+  myAttMonth.value = localToday().slice(0, 7);
+  myAttStatus.textContent = 'Loading your attendance.';
+  try {
+    const saved = await getDocsFromServer(query(collection(schoolRef, 'staffAttendance'), where('staffUid', '==', uid)));
+    if (request !== schoolRequest) return;
+    myAttMarks = saved.docs.map((record) => record.data());
+    renderMyAttendance();
+  } catch {
+    if (request === schoolRequest) myAttStatus.textContent = 'Could not load your attendance. Try again.';
+  }
+}
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -1416,6 +1644,23 @@ onAuthStateChanged(auth, async (user) => {
   attClass.replaceChildren();
   attDate.value = '';
   attPrev = { classId: '', date: '' };
+  staffAttSection.hidden = true;
+  staffAttStatus.textContent = '';
+  staffAttBody.replaceChildren();
+  staffAttCounts.textContent = '';
+  staffAttDate.value = '';
+  staffReportStatus.textContent = '';
+  staffReportBody.replaceChildren();
+  staffReportMonth.value = '';
+  staffRoster = [];
+  staffAttToken += 1;
+  staffReportToken += 1;
+  myAttSection.hidden = true;
+  myAttStatus.textContent = '';
+  myAttTotal.textContent = '';
+  myAttBody.replaceChildren();
+  myAttMonth.value = '';
+  myAttMarks = [];
   classTeacherSection.hidden = true;
   classTeacherStatus.textContent = '';
   classTeacherList.replaceChildren();
@@ -1561,6 +1806,7 @@ onAuthStateChanged(auth, async (user) => {
       }
       // A class teacher also gets the daily attendance sheet, with or without a subject assignment.
       await loadAttendanceClasses(request, schoolRef, user.uid);
+      if (request === schoolRequest) await loadMyAttendance(request, schoolRef, user.uid);
       return;
     }
     if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
@@ -1598,6 +1844,11 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: (name, id, data) => setDoc(doc(schoolRef, name, id), data),
       marksOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('studentId', '==', studentId))),
+      staffAttendanceOn: (date) => getDocsFromServer(query(collection(schoolRef, 'staffAttendance'), where('date', '==', date))),
+      staffAttendanceBetween: (from, to) => getDocsFromServer(query(collection(schoolRef, 'staffAttendance'),
+        where('date', '>=', from), where('date', '<=', to))),
+      saveStaffAttendance: (date, uid, status) => setDoc(doc(schoolRef, 'staffAttendance', date + '_' + uid),
+        { staffUid: uid, date, status, markedBy: user.uid }),
       attendanceOn: (date) => getDocsFromServer(query(collection(schoolRef, 'attendance'), where('date', '==', date))),
       marksFor: (examId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('examId', '==', examId))),
       // A year becomes active in one batch with the pointer the rules check.
@@ -1628,6 +1879,7 @@ onAuthStateChanged(auth, async (user) => {
     attReviewDate.value = localToday();
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
+    if (request === schoolRequest) await loadStaffAttendance(request);
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'

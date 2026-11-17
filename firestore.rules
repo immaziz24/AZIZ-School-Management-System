@@ -19,7 +19,8 @@ service cloud.firestore {
 
       // Staff profiles contain contact and job details only.
       match /members/{uid} {
-        allow get: if request.auth != null && request.auth.uid == uid;
+        allow get: if request.auth != null && (request.auth.uid == uid || isSchoolOwner(schoolId));
+        allow list: if request.auth != null && isSchoolOwner(schoolId);
       }
 
       // teacherAssignments/{uid}: className and subject (strings).
@@ -138,6 +139,28 @@ service cloud.firestore {
           && attendanceId == request.resource.data.date + '_' + request.resource.data.classId
             + '_' + request.resource.data.studentId
           && attendanceAllowed(request.resource.data);
+      }
+
+      // Staff attendance. staffAttendance/{date}_{staffUid}: staffUid, date (YYYY-MM-DD), status
+      // (present, absent, late or leave), markedBy. Only the owner marks and corrects it, for an
+      // active teacher, on any date up to tomorrow (UTC). A teacher reads only their own marks
+      // (query by staffUid). Records are never deleted.
+      match /staffAttendance/{recordId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || (resource.data.staffUid == request.auth.uid && isActiveTeacher()));
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && validStaffAttendance(request.resource.data)
+          && request.resource.data.markedBy == request.auth.uid
+          && recordId == request.resource.data.date + '_' + request.resource.data.staffUid
+          && request.resource.data.date <= latestAttendanceDate()
+          && activeTeacherMember(request.resource.data.staffUid);
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validStaffAttendance(request.resource.data)
+          && request.resource.data.markedBy == request.auth.uid
+          && recordId == request.resource.data.date + '_' + request.resource.data.staffUid
+          && request.resource.data.date <= latestAttendanceDate()
+          && request.resource.data.staffUid == resource.data.staffUid
+          && activeTeacherMember(request.resource.data.staffUid);
       }
 
       // Student and parent access (feature 048). familyAccess/{uid} links a student or parent
@@ -485,6 +508,15 @@ service cloud.firestore {
         && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
         && item.status in ['present', 'absent', 'late']
+        && item.markedBy is string;
+    }
+
+    function validStaffAttendance(item) {
+      return item.keys().hasOnly(['staffUid', 'date', 'status', 'markedBy'])
+        && item.keys().hasAll(['staffUid', 'date', 'status', 'markedBy'])
+        && item.staffUid is string && item.staffUid.size() >= 1 && item.staffUid.size() <= 128
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && item.status in ['present', 'absent', 'late', 'leave']
         && item.markedBy is string;
     }
 
