@@ -210,6 +210,14 @@
           <tbody id="staff-report-body"></tbody>
         </table>
       </section>
+      <section id="leave-review" aria-labelledby="leave-review-title" hidden>
+        <h3 id="leave-review-title">Leave Requests</h3>
+        <p id="leave-review-status" role="status"></p>
+        <table>
+          <thead><tr><th>Teacher</th><th>From</th><th>To</th><th>Reason</th><th>Status</th><th>Decision</th></tr></thead>
+          <tbody id="leave-review-body"></tbody>
+        </table>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -254,6 +262,20 @@
           <tbody id="my-attendance-body"></tbody>
         </table>
       </section>
+      <section id="leave-request" aria-labelledby="leave-request-title" hidden>
+        <h3 id="leave-request-title">Request Leave</h3>
+        <p id="leave-request-status" role="status"></p>
+        <form id="leave-request-form">
+          <p><label>From <input name="fromDate" type="date" required></label></p>
+          <p><label>To <input name="toDate" type="date" required></label></p>
+          <p><label>Reason <input name="reason" required maxlength="200"></label></p>
+          <button type="submit">Send leave request</button>
+        </form>
+        <table>
+          <thead><tr><th>From</th><th>To</th><th>Reason</th><th>Status</th></tr></thead>
+          <tbody id="leave-request-body"></tbody>
+        </table>
+      </section>
       <form id="marks-entry" hidden>
         <h3>Marks Entry (old form)</h3>
         <p><label>Exam code <input name="exam" required maxlength="40" pattern="[a-z0-9\-]+" placeholder="midterm"></label></p>
@@ -291,7 +313,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=staff-1');
+      await import('./sign-in.mjs?v=leave-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

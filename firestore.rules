@@ -163,6 +163,27 @@ service cloud.firestore {
           && activeTeacherMember(request.resource.data.staffUid);
       }
 
+      // Leave requests. leaveRequests/{staffUid}_{fromDate}: staffUid, fromDate, toDate (YYYY-MM-DD),
+      // reason (text), status (pending, approved or rejected), and decidedBy once decided. An
+      // active teacher creates their own pending request. Only the owner decides one, and only
+      // once. A teacher reads only their own requests (query by staffUid). Never deleted.
+      match /leaveRequests/{requestId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || (resource.data.staffUid == request.auth.uid && isActiveTeacher()));
+        allow create: if request.auth != null && isActiveTeacher()
+          && validLeaveRequest(request.resource.data)
+          && request.resource.data.status == 'pending'
+          && !request.resource.data.keys().hasAny(['decidedBy'])
+          && request.resource.data.staffUid == request.auth.uid
+          && requestId == request.resource.data.staffUid + '_' + request.resource.data.fromDate;
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && resource.data.status == 'pending'
+          && request.resource.data.status in ['approved', 'rejected']
+          && request.resource.data.decidedBy == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy'])
+          && validLeaveRequest(request.resource.data);
+      }
+
       // Student and parent access (feature 048). familyAccess/{uid} links a student or parent
       // account to one student and can be switched off by the owner. Family accounts read only
       // published results for that student. Each helper uses at most two access calls because a
@@ -518,6 +539,18 @@ service cloud.firestore {
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
         && item.status in ['present', 'absent', 'late', 'leave']
         && item.markedBy is string;
+    }
+
+    function validLeaveRequest(item) {
+      return item.keys().hasAll(['staffUid', 'fromDate', 'toDate', 'reason', 'status'])
+        && item.keys().hasOnly(['staffUid', 'fromDate', 'toDate', 'reason', 'status', 'decidedBy'])
+        && item.staffUid is string && item.staffUid.size() >= 1 && item.staffUid.size() <= 128
+        && item.fromDate is string && item.fromDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.fromDate >= '2020-01-01'
+        && item.toDate is string && item.toDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.toDate >= item.fromDate
+        && item.reason is string && item.reason.size() <= 200 && item.reason.matches('.*[^[:space:]].*')
+        && item.status in ['pending', 'approved', 'rejected']
+        && (!item.keys().hasAny(['decidedBy']) || item.decidedBy is string);
     }
 
     function validFamilyAccess(item) {

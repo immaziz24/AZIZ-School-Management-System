@@ -1632,6 +1632,146 @@ async function loadMyAttendance(request, schoolRef, uid) {
   }
 }
 
+// Leave requests. Teachers ask for their own leave; the owner approves or rejects each once.
+const LEAVE_LABEL = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' };
+const leaveReviewSection = document.querySelector('#leave-review');
+const leaveReviewStatus = document.querySelector('#leave-review-status');
+const leaveReviewBody = document.querySelector('#leave-review-body');
+const leaveRequestSection = document.querySelector('#leave-request');
+const leaveRequestStatus = document.querySelector('#leave-request-status');
+const leaveRequestForm = document.querySelector('#leave-request-form');
+const leaveRequestBody = document.querySelector('#leave-request-body');
+const leaveSend = leaveRequestForm.querySelector('button[type="submit"]');
+let leaveReviewToken = 0;
+let myLeave; // { schoolRef, uid, items: [{ id, data }], busy }
+
+async function renderLeaveReview() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++leaveReviewToken;
+  if (!tools) return;
+  leaveReviewStatus.textContent = 'Loading leave requests.';
+  try {
+    const saved = await tools.list('leaveRequests');
+    if (request !== schoolRequest || token !== leaveReviewToken) return;
+    leaveReviewBody.replaceChildren();
+    // Pending first, then the newest decisions.
+    const items = saved.docs.map((record) => ({ id: record.id, data: record.data() }))
+      .sort((a, b) => (a.data.status === 'pending' ? 0 : 1) - (b.data.status === 'pending' ? 0 : 1)
+        || b.data.fromDate.localeCompare(a.data.fromDate));
+    for (const item of items) {
+      const { staffUid, fromDate, toDate, reason, status } = item.data;
+      const tr = document.createElement('tr');
+      for (const text of [staffLabel(staffUid), fromDate, toDate, reason, LEAVE_LABEL[status]]) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.append(td);
+      }
+      const decision = document.createElement('td');
+      if (status === 'pending') {
+        for (const next of ['approved', 'rejected']) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = next === 'approved' ? 'Approve' : 'Reject';
+          button.addEventListener('click', async () => {
+            if (tools.busy) return;
+            tools.busy = true;
+            leaveReviewStatus.textContent = 'Saving decision.';
+            try {
+              await tools.decideLeave(item.id, item.data, next);
+              tools.busy = false;
+              if (request === schoolRequest) await renderLeaveReview();
+            } catch {
+              if (request === schoolRequest) leaveReviewStatus.textContent = 'Could not save the decision. Try again.';
+            } finally {
+              tools.busy = false;
+            }
+          });
+          decision.append(button);
+        }
+      } else {
+        decision.textContent = '-';
+      }
+      tr.append(decision);
+      leaveReviewBody.append(tr);
+    }
+    const pending = items.filter((item) => item.data.status === 'pending').length;
+    leaveReviewStatus.textContent = items.length
+      ? pending + ' pending of ' + items.length + ' leave requests.'
+      : 'No leave requests yet.';
+  } catch {
+    if (request === schoolRequest && token === leaveReviewToken) leaveReviewStatus.textContent = 'Could not load leave requests. Try again.';
+  }
+}
+
+function renderMyLeave() {
+  leaveRequestBody.replaceChildren();
+  if (!myLeave) return;
+  const items = [...myLeave.items].sort((a, b) => b.data.fromDate.localeCompare(a.data.fromDate));
+  for (const { data } of items) addRow(leaveRequestBody, [data.fromDate, data.toDate, data.reason, LEAVE_LABEL[data.status]]);
+}
+
+async function loadMyLeave(request, schoolRef, uid) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  leaveRequestSection.hidden = false;
+  myLeave = { schoolRef, uid, items: [], busy: false };
+  leaveRequestForm.elements.namedItem('fromDate').min = localToday();
+  leaveRequestForm.elements.namedItem('toDate').min = localToday();
+  leaveRequestStatus.textContent = 'Loading your leave requests.';
+  try {
+    const saved = await getDocsFromServer(query(collection(schoolRef, 'leaveRequests'), where('staffUid', '==', uid)));
+    if (request !== schoolRequest) return;
+    myLeave.items = saved.docs.map((record) => ({ id: record.id, data: record.data() }));
+    renderMyLeave();
+    leaveRequestStatus.textContent = '';
+  } catch {
+    if (request === schoolRequest) leaveRequestStatus.textContent = 'Could not load your leave requests. Try again.';
+  }
+}
+
+leaveRequestForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = myLeave;
+  if (!context || context.busy) return;
+  const fields = new FormData(leaveRequestForm);
+  const fromDate = String(fields.get('fromDate') ?? '');
+  const toDate = String(fields.get('toDate') ?? '');
+  const reason = String(fields.get('reason') ?? '').trim();
+  if (!DATE_TEXT.test(fromDate) || !DATE_TEXT.test(toDate) || toDate < fromDate) {
+    leaveRequestStatus.textContent = 'Choose a start date, and an end date that is not before it.';
+    return;
+  }
+  if (!reason) {
+    leaveRequestStatus.textContent = 'Enter a reason for the leave.';
+    return;
+  }
+  if (context.items.some((item) => item.id === context.uid + '_' + fromDate)) {
+    leaveRequestStatus.textContent = 'You already sent a leave request starting on that date.';
+    return;
+  }
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  leaveSend.disabled = true;
+  leaveRequestStatus.textContent = 'Sending leave request.';
+  try {
+    const data = { staffUid: context.uid, fromDate, toDate, reason, status: 'pending' };
+    await setDoc(doc(context.schoolRef, 'leaveRequests', context.uid + '_' + fromDate), data);
+    if (request !== schoolRequest) return;
+    context.items.push({ id: context.uid + '_' + fromDate, data });
+    leaveRequestForm.reset();
+    renderMyLeave();
+    leaveRequestStatus.textContent = 'Leave request sent. The principal will approve or reject it.';
+  } catch {
+    if (request === schoolRequest) leaveRequestStatus.textContent = 'Could not send the leave request. Try again.';
+  } finally {
+    if (request === schoolRequest) {
+      context.busy = false;
+      leaveSend.disabled = false;
+    }
+  }
+});
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -1644,6 +1784,16 @@ onAuthStateChanged(auth, async (user) => {
   attClass.replaceChildren();
   attDate.value = '';
   attPrev = { classId: '', date: '' };
+  leaveReviewSection.hidden = true;
+  leaveReviewStatus.textContent = '';
+  leaveReviewBody.replaceChildren();
+  leaveReviewToken += 1;
+  leaveRequestSection.hidden = true;
+  leaveRequestStatus.textContent = '';
+  leaveRequestForm.reset();
+  leaveRequestBody.replaceChildren();
+  leaveSend.disabled = false;
+  myLeave = undefined;
   staffAttSection.hidden = true;
   staffAttStatus.textContent = '';
   staffAttBody.replaceChildren();
@@ -1807,6 +1957,7 @@ onAuthStateChanged(auth, async (user) => {
       // A class teacher also gets the daily attendance sheet, with or without a subject assignment.
       await loadAttendanceClasses(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadMyAttendance(request, schoolRef, user.uid);
+      if (request === schoolRequest) await loadMyLeave(request, schoolRef, user.uid);
       return;
     }
     if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
@@ -1844,6 +1995,7 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: (name, id, data) => setDoc(doc(schoolRef, name, id), data),
       marksOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('studentId', '==', studentId))),
+      decideLeave: (id, data, status) => setDoc(doc(schoolRef, 'leaveRequests', id), { ...data, status, decidedBy: user.uid }),
       staffAttendanceOn: (date) => getDocsFromServer(query(collection(schoolRef, 'staffAttendance'), where('date', '==', date))),
       staffAttendanceBetween: (from, to) => getDocsFromServer(query(collection(schoolRef, 'staffAttendance'),
         where('date', '>=', from), where('date', '<=', to))),
@@ -1880,6 +2032,10 @@ onAuthStateChanged(auth, async (user) => {
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
     if (request === schoolRequest) await loadStaffAttendance(request);
+    if (request === schoolRequest) {
+      leaveReviewSection.hidden = false;
+      await renderLeaveReview();
+    }
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'
