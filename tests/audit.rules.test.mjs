@@ -73,6 +73,7 @@ beforeEach(async () => {
   const seed = [
     [`${A}/members/owner-a`, { role: 'owner', active: true }],
     [`${A}/members/teacher-a`, { role: 'teacher', active: true }],
+    [`${A}/members/teacher-off`, { role: 'teacher', active: false }],
     [`${A}/members/parent-1`, { role: 'parent', active: true }],
     [`${B}/members/owner-b`, { role: 'owner', active: true }],
     [path('L-seed'), entry()],
@@ -81,7 +82,7 @@ beforeEach(async () => {
 });
 
 test('owner can write an entry for each kind of action', async () => {
-  for (const action of ['save', 'remove', 'void', 'decide-leave', 'activate-year', 'close-year', 'bulk']) {
+  for (const action of ['save', 'remove', 'void', 'decide-leave', 'activate-year', 'close-year', 'bulk', 'marks', 'attendance']) {
     await allowed(set('owner-a', path('L-' + action), entry({ action })), action);
   }
   await allowed(set('owner-a', path('L-detail'), entry({ detail: 'Rs 500' })), 'with detail');
@@ -117,4 +118,17 @@ test('only the owner writes or reads the log', async () => {
   await denied(get(null, path('L-seed')), 'signed out reads');
   await allowed(query('owner-a', A, 'auditLog', [['action', 'save']]), 'owner lists');
   await denied(query('teacher-a', A, 'auditLog', [['action', 'save']]), 'teacher lists');
+});
+
+test('teachers can log only their own marks and attendance', async () => {
+  await allowed(set('teacher-a', path('L-t1'), entry({ actor: 'teacher-a', action: 'marks', target: 'marks', docId: 'exam-1', detail: '12 marks' })), 'marks');
+  await allowed(set('teacher-a', path('L-t2'), entry({ actor: 'teacher-a', action: 'attendance', target: 'attendance', docId: '2026-11-17_class-8' })), 'attendance');
+  await denied(set('teacher-a', path('L-t3'), entry({ actor: 'teacher-a', action: 'save' })), 'owner action');
+  await denied(set('teacher-a', path('L-t4'), entry({ actor: 'teacher-a', action: 'remove' })), 'remove action');
+  await denied(set('teacher-a', path('L-t5'), entry({ actor: 'owner-a', action: 'marks' })), 'someone else as actor');
+  await denied(set('teacher-off', path('L-t6'), entry({ actor: 'teacher-off', action: 'marks' })), 'inactive teacher');
+  await denied(set('parent-1', path('L-t7'), entry({ actor: 'parent-1', action: 'marks' })), 'parent');
+  await denied(set('teacher-a', path('L-seed'), entry({ actor: 'teacher-a', action: 'marks' })), 'overwrite an entry');
+  await denied(remove('teacher-a', path('L-seed')), 'delete');
+  await denied(get('teacher-a', path('L-seed')), 'teacher still cannot read the log');
 });

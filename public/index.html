@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AZIZ School Management System</title>
-  <link rel="stylesheet" href="./sign-in.css?v=print-1">
+  <link rel="stylesheet" href="./sign-in.css?v=audit-2">
 </head>
 <body>
   <main>
@@ -397,7 +397,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=print-1');
+      await import('./sign-in.mjs?v=audit-2');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

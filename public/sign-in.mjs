@@ -1041,6 +1041,7 @@ examMarksForm.addEventListener('submit', async (event) => {
         ? 'The rest could not be saved. The exam may be locked, or a student may have moved class.'
         : 'Could not save all marks. Check your connection and save again.');
   } finally {
+    if (done) await writeAudit(context.schoolRef, context.uid, 'marks', 'marks', examRecord.id, done + ' mark' + (done === 1 ? '' : 's'));
     context.busy = false;
   }
 });
@@ -1384,6 +1385,7 @@ attForm.addEventListener('submit', async (event) => {
         ? 'The rest could not be saved. Check the date, and that you are still this class\'s teacher.'
         : 'Could not save all attendance. Check your connection and save again.');
   } finally {
+    if (done) await writeAudit(context.schoolRef, context.uid, 'attendance', 'attendance', date + '_' + classId, done + ' student' + (done === 1 ? '' : 's'));
     context.busy = false;
   }
 });
@@ -2210,6 +2212,7 @@ const auditRefresh = document.querySelector('#audit-refresh');
 const AUDIT_ACTION_LABEL = {
   save: 'saved', remove: 'removed', void: 'voided a payment', 'decide-leave': 'decided leave',
   'activate-year': 'activated year', 'close-year': 'closed year', bulk: 'changed',
+  marks: 'teacher saved', attendance: 'teacher saved',
 };
 const AUDIT_SHOWN = 100;
 
@@ -2310,6 +2313,16 @@ document.querySelector('#portal-print').addEventListener('click', () => {
   }
   printCard('#portal-print-head', portalStudent.textContent);
 });
+
+// Teachers' saves are logged as one summary entry each (who, which exam or class day, how many).
+// The log never blocks the save itself: if the entry cannot be written, the save still stands.
+function writeAudit(schoolRef, uid, action, target, docId, detail) {
+  const { doc, setDoc } = firestoreTools;
+  return setDoc(
+    doc(schoolRef, 'auditLog', 'L-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase()),
+    { actor: uid, action, target, docId: String(docId), at: new Date().toISOString(), detail: String(detail) },
+  ).catch(() => {});
+}
 
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
