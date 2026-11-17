@@ -2504,12 +2504,12 @@ document.querySelector('#export-students').addEventListener('click', () => {
   const placement = new Map(placementData.enrollments.filter((record) => activeYear && record.data().yearId === activeYear.id)
     .map((record) => [record.data().studentId, record.data()]));
   const sectionName = (id) => placementData.sections.find((record) => record.id === id)?.data().name ?? id;
-  downloadCsv('students', [['Admission no', 'Name', 'Guardian', 'Guardian phone', 'Status', 'Class', 'Section', 'Roll no'],
+  downloadCsv('students', [['Admission no', 'Name', 'Guardian', 'Guardian phone', 'Status', 'Class', 'Section', 'Roll no', 'Date of birth', 'Address'],
     ...studentRecords.map((record) => {
       const s = record.data();
       const p = placement.get(record.id);
       return [s.admissionNo, s.name, s.guardianName, s.guardianPhone, s.status,
-        p ? nameOfClass(p.classId) : '', p ? sectionName(p.sectionId) : '', p ? p.rollNo : ''];
+        p ? nameOfClass(p.classId) : '', p ? sectionName(p.sectionId) : '', p ? p.rollNo : '', s.dob ?? '', s.address ?? ''];
     })]);
 });
 

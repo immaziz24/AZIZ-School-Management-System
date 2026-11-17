@@ -2,7 +2,7 @@
 X01,Expenses ledger with monthly category summary and CSV,Built
 X02,Certificates register with printable certificates,Built
 X03,Maintenance tickets,Built
-X04,Staff directory,Built
+X04,Staff contact directory,Built
 X05,Vendors directory,Built
 X06,Meeting minutes,Built
 X07,Lost and found,Built
@@ -16,3 +16,7 @@ X14,Staff training log,Built
 X15,Daily diary,Built
 X16,Find a screen on the owner page,Built
 X17,Principal can approve exam results,Built
+X18,Finance summary by month,Built
+X19,Student profile page,Built
+X20,Needs attention panel with birthdays,Built
+X21,Class roster print,Built
