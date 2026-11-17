@@ -2,6 +2,11 @@ AddType text/javascript .mjs
 AddType application/manifest+json .webmanifest
 RewriteEngine On
 RewriteRule ^public/?$ / [R=302,L]
-RewriteRule ^$ public/index.html [L]
+# Marketing website at the front; the school app lives at /app.
+RewriteRule ^$ public/site/index.html [L]
+RewriteRule ^app/$ /app [R=301,L]
+RewriteRule ^app$ public/index.html [L]
+RewriteRule ^(features|pricing|about|contact|security|privacy|terms)/?$ public/site/$1.html [L]
+RewriteRule ^(site\.css|site\.js)$ public/site/$1 [L]
 RewriteRule ^(sign-in\.css|sign-in\.mjs|firebase-client\.mjs|school\.mjs|platform\.mjs|sw\.js|manifest\.webmanifest|icon-192\.png|icon-512\.png)$ public/$1 [L]
 RewriteRule ^(school)(\.html)?$ public/school.html [L]

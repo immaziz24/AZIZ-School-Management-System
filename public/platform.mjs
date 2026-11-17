@@ -86,6 +86,7 @@ const run = async (statusEl, action, done) => {
 };
 
 // ---------- Signup ----------
+if (location.hash === '#signup') { signup.box.open = true; signup.box.scrollIntoView(); }
 onAuthStateChanged(auth, (user) => { signup.account.hidden = Boolean(user); });
 signup.form.addEventListener('submit', async (event) => {
   event.preventDefault();
