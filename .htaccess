@@ -1,5 +1,7 @@
 AddType text/javascript .mjs
+AddType application/manifest+json .webmanifest
 RewriteEngine On
 RewriteRule ^public/?$ / [R=302,L]
 RewriteRule ^$ public/index.html [L]
-RewriteRule ^(sign-in\.css|sign-in\.mjs|firebase-client\.mjs)$ public/$1 [L]
+RewriteRule ^(sign-in\.css|sign-in\.mjs|firebase-client\.mjs|school\.mjs|sw\.js|manifest\.webmanifest|icon-192\.png|icon-512\.png)$ public/$1 [L]
+RewriteRule ^(school)(\.html)?$ public/school.html [L]
