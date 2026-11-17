@@ -314,6 +314,64 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Library. books/{bookId}: title, author, copies. loans/{loanId}: bookId, studentId, issuedOn, dueOn,
+      // issuedBy, and returnedOn once it comes back. Office records: only the owner reads or writes them.
+      // A loan is never deleted; a return is the one allowed change, made once.
+      match /books/{bookId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && bookId.matches('[a-z0-9-]{1,20}') && validBook(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      match /loans/{loanId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && loanId.matches('[A-Za-z0-9-]{1,30}') && validLoan(request.resource.data)
+          && !request.resource.data.keys().hasAny(['returnedOn'])
+          && request.resource.data.issuedBy == request.auth.uid
+          && request.resource.data.issuedOn <= latestAttendanceDate()
+          && request.resource.data.dueOn >= request.resource.data.issuedOn
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/books/$(request.resource.data.bookId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validLoan(request.resource.data)
+          && !resource.data.keys().hasAny(['returnedOn'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['returnedOn'])
+          && request.resource.data.returnedOn >= resource.data.issuedOn
+          && request.resource.data.returnedOn <= latestAttendanceDate();
+        allow delete: if false;
+      }
+
+      // Behaviour notes. behaviour/{noteId}: studentId, date, kind (positive or concern), note,
+      // recordedBy. Owner only; written once and removed by the owner.
+      match /behaviour/{noteId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && noteId.matches('[A-Za-z0-9-]{1,30}') && validBehaviour(request.resource.data)
+          && request.resource.data.recordedBy == request.auth.uid
+          && request.resource.data.date <= latestAttendanceDate()
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Visitor log. visitors/{visitId}: name, purpose, whom, phone, date, timeIn, recordedBy, and
+      // timeOut once they leave. Owner only; never deleted.
+      match /visitors/{visitId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && visitId.matches('[A-Za-z0-9-]{1,30}') && validVisitor(request.resource.data)
+          && !request.resource.data.keys().hasAny(['timeOut'])
+          && request.resource.data.recordedBy == request.auth.uid
+          && request.resource.data.date <= latestAttendanceDate();
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validVisitor(request.resource.data)
+          && !resource.data.keys().hasAny(['timeOut'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['timeOut'])
+          && request.resource.data.timeOut >= resource.data.timeIn;
+        allow delete: if false;
+      }
+
       match /familyAccess/{uid} {
         function familyMember() {
           let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
@@ -768,6 +826,49 @@ service cloud.firestore {
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
         && item.kind in ['holiday', 'exam', 'event', 'meeting']
         && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 300));
+    }
+
+    function validBook(item) {
+      return item.keys().hasOnly(['title', 'author', 'copies'])
+        && item.keys().hasAll(['title', 'author', 'copies'])
+        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
+        && item.author is string && item.author.size() <= 80
+        && item.copies is int && item.copies >= 1 && item.copies <= 1000;
+    }
+
+    function validLoan(item) {
+      return item.keys().hasOnly(['bookId', 'studentId', 'issuedOn', 'dueOn', 'returnedOn', 'issuedBy'])
+        && item.keys().hasAll(['bookId', 'studentId', 'issuedOn', 'dueOn', 'issuedBy'])
+        && item.bookId is string && item.bookId.matches('[a-z0-9-]{1,20}')
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.issuedOn is string && item.issuedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.issuedOn >= '2020-01-01'
+        && item.dueOn is string && item.dueOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.issuedBy is string
+        && (!item.keys().hasAny(['returnedOn'])
+          || (item.returnedOn is string && item.returnedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+    }
+
+    function validBehaviour(item) {
+      return item.keys().hasOnly(['studentId', 'date', 'kind', 'note', 'recordedBy'])
+        && item.keys().hasAll(['studentId', 'date', 'kind', 'note', 'recordedBy'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && item.kind in ['positive', 'concern']
+        && item.note is string && item.note.size() <= 500 && item.note.matches('.*[^[:space:]].*')
+        && item.recordedBy is string;
+    }
+
+    function validVisitor(item) {
+      return item.keys().hasOnly(['name', 'purpose', 'whom', 'phone', 'date', 'timeIn', 'timeOut', 'recordedBy'])
+        && item.keys().hasAll(['name', 'purpose', 'date', 'timeIn', 'recordedBy'])
+        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
+        && item.purpose is string && item.purpose.size() <= 120 && item.purpose.matches('.*[^[:space:]].*')
+        && (!item.keys().hasAny(['whom']) || (item.whom is string && item.whom.size() <= 80))
+        && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')))
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && item.timeIn is string && item.timeIn.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
+        && (!item.keys().hasAny(['timeOut']) || (item.timeOut is string && item.timeOut.matches('([01][0-9]|2[0-3]):[0-5][0-9]')))
+        && item.recordedBy is string;
     }
 
     function validFamilyAccess(item) {

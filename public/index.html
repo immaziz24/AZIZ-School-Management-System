@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-2">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-3">
 </head>
 <body>
   <main>
@@ -315,6 +315,75 @@
           </table>
         </div>
       </section>
+      <section id="attendance-report" aria-labelledby="attrep-title" hidden>
+        <h3 id="attrep-title">Class Attendance Report</h3>
+        <p id="attrep-status" role="status"></p>
+        <p><label>Class <select id="attrep-class"></select></label></p>
+        <p><label>Month <input id="attrep-month" type="month"></label></p>
+        <button id="attrep-load" type="button">Show report</button>
+        <button id="attrep-csv" type="button">Download report (CSV)</button>
+        <table>
+          <thead><tr><th>Student</th><th>Present</th><th>Absent</th><th>Late</th><th>Days marked</th><th>Attendance</th></tr></thead>
+          <tbody id="attrep-body"></tbody>
+        </table>
+      </section>
+      <section id="bulk-import" aria-labelledby="import-title" hidden>
+        <h3 id="import-title">Import Students from a Spreadsheet</h3>
+        <p id="import-status" role="status"></p>
+        <p>Columns, in this order: admission number, student name, guardian name, guardian phone. Copy the rows from Excel and paste them here, or choose a CSV file. A header row is fine.</p>
+        <p><label>CSV file <input id="import-file" type="file" accept=".csv,.txt,text/csv"></label></p>
+        <p><label>Rows <textarea id="import-text" rows="8"></textarea></label></p>
+        <button id="import-check" type="button">Check rows</button>
+        <button id="import-run" type="button" disabled>Import the good rows</button>
+        <table>
+          <thead><tr><th>Row</th><th>Admission no</th><th>Name</th><th>Result</th></tr></thead>
+          <tbody id="import-body"></tbody>
+        </table>
+      </section>
+      <section id="library" aria-labelledby="library-title" hidden>
+        <h3 id="library-title">Library</h3>
+        <p id="library-status" role="status"></p>
+        <form id="book-form">
+          <p><label>Book title <input name="title" required maxlength="120"></label></p>
+          <p><label>Author <input name="author" maxlength="80"></label></p>
+          <p><label>Copies <input name="copies" type="number" min="1" max="1000" step="1" value="1" required></label></p>
+          <button type="submit">Add book</button>
+        </form>
+        <form id="loan-form">
+          <p><label>Book <select name="bookId"></select></label></p>
+          <p><label>Student <select name="studentId"></select></label></p>
+          <p><label>Days to keep it <input name="days" type="number" min="1" max="90" step="1" value="14" required></label></p>
+          <button type="submit">Issue book</button>
+        </form>
+        <h4>Books</h4>
+        <ul id="book-list"></ul>
+        <h4>Books out</h4>
+        <ul id="loan-list"></ul>
+      </section>
+      <section id="visitors" aria-labelledby="visitors-title" hidden>
+        <h3 id="visitors-title">Visitor Log</h3>
+        <p id="visitors-status" role="status"></p>
+        <form id="visitor-form">
+          <p><label>Visitor name <input name="name" required maxlength="80"></label></p>
+          <p><label>Purpose <input name="purpose" required maxlength="120"></label></p>
+          <p><label>To meet (optional) <input name="whom" maxlength="80"></label></p>
+          <p><label>Phone (optional) <input name="phone" maxlength="20"></label></p>
+          <button type="submit">Sign visitor in</button>
+        </form>
+        <ul id="visitor-list"></ul>
+        <button id="visitors-csv" type="button">Download visitor log (CSV)</button>
+      </section>
+      <section id="behaviour" aria-labelledby="behaviour-title" hidden>
+        <h3 id="behaviour-title">Behaviour Notes</h3>
+        <p id="behaviour-status" role="status"></p>
+        <form id="behaviour-form">
+          <p><label>Student <select name="studentId"></select></label></p>
+          <p><label>Kind <select name="kind"><option value="concern">Concern</option><option value="positive">Positive</option></select></label></p>
+          <p><label>Note <textarea name="note" required maxlength="500" rows="3"></textarea></label></p>
+          <button type="submit">Save note</button>
+        </form>
+        <ul id="behaviour-list"></ul>
+      </section>
       <section id="grading" aria-labelledby="grading-title" hidden>
         <h3 id="grading-title">Pass Marks and Grades</h3>
         <p id="grading-status" role="status"></p>
@@ -501,7 +570,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-2');
+      await import('./sign-in.mjs?v=batch-3');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

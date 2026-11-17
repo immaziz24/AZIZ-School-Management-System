@@ -222,6 +222,7 @@ async function loadAcademic(request) {
     renderMarksReview();
     renderReportStudents();
     renderCardStudents();
+    renderOfficeStudents();
     renderFamilyLinks();
     classTeacherData = classTeacherDocs.docs;
     renderClassTeachers();
@@ -2915,6 +2916,484 @@ function printStudentCard(kind) {
 document.querySelector('#card-id-print').addEventListener('click', () => printStudentCard('id'));
 document.querySelector('#card-admit-print').addEventListener('click', () => printStudentCard('admit'));
 
+// Class attendance report. One query per day of the month, filtered to the class on the screen.
+const attrepSection = document.querySelector('#attendance-report');
+const attrepStatus = document.querySelector('#attrep-status');
+const attrepClass = document.querySelector('#attrep-class');
+const attrepMonth = document.querySelector('#attrep-month');
+const attrepBody = document.querySelector('#attrep-body');
+let attrepRows = [];
+
+function renderAttrepClasses() {
+  fillSelect(attrepClass, [...examData.classes].sort(byClassOrder), (item) => item.name);
+  if (!attrepMonth.value) attrepMonth.value = localToday().slice(0, 7);
+  attrepSection.hidden = false;
+}
+
+document.querySelector('#attrep-load').addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools || !attrepClass.value || !/^[0-9]{4}-[0-9]{2}$/.test(attrepMonth.value)) {
+    attrepStatus.textContent = 'Choose a class and a month.';
+    return;
+  }
+  const request = schoolRequest;
+  const classId = attrepClass.value;
+  const [year, month] = attrepMonth.value.split('-').map(Number);
+  const days = new Date(year, month, 0).getDate();
+  const dates = Array.from({ length: days }, (_, index) => attrepMonth.value + '-' + pad(index + 1));
+  attrepStatus.textContent = 'Working out the report.';
+  try {
+    const results = await Promise.all(dates.map((date) => tools.attendanceOn(date)));
+    if (request !== schoolRequest) return;
+    const perStudent = new Map();
+    for (const result of results) {
+      for (const record of result.docs) {
+        const mark = record.data();
+        if (mark.classId !== classId) continue;
+        const count = perStudent.get(mark.studentId) ?? { present: 0, absent: 0, late: 0 };
+        count[mark.status] += 1;
+        perStudent.set(mark.studentId, count);
+      }
+    }
+    attrepRows = [...perStudent.entries()].map(([studentId, count]) => {
+      const marked = count.present + count.absent + count.late;
+      return [nameOfStudent(studentId), count.present, count.absent, count.late, marked,
+        Math.round((count.present + count.late) / marked * 1000) / 10 + '%'];
+    }).sort((a, b) => a[0].localeCompare(b[0]));
+    attrepBody.replaceChildren();
+    for (const row of attrepRows) addRow(attrepBody, row.map(String));
+    attrepStatus.textContent = attrepRows.length ? 'Attendance % counts present and late days out of days marked.'
+      : 'No attendance has been marked for this class in this month.';
+  } catch {
+    if (request === schoolRequest) attrepStatus.textContent = 'Could not load the report. Try again.';
+  }
+});
+
+document.querySelector('#attrep-csv').addEventListener('click', () => {
+  if (!attrepRows.length) {
+    attrepStatus.textContent = 'Show a report first.';
+    return;
+  }
+  downloadCsv('attendance-' + attrepMonth.value, [['Student', 'Present', 'Absent', 'Late', 'Days marked', 'Attendance'], ...attrepRows]);
+});
+
+// Bulk student import. Rows are pasted from a spreadsheet or read from a CSV file, checked with the same
+// rules as the student form, and only the good rows are saved (in batches, as one activity-log entry each).
+const importSection = document.querySelector('#bulk-import');
+const importStatus = document.querySelector('#import-status');
+const importText = document.querySelector('#import-text');
+const importBody = document.querySelector('#import-body');
+const importRun = document.querySelector('#import-run');
+const IMPORT_MAX_ROWS = 500;
+const IMPORT_BATCH = 100;
+let importReady = [];
+
+function parseDelimited(text) {
+  const delimiter = text.includes('\t') ? '\t' : ',';
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (quoted) {
+      if (char === '"' && text[i + 1] === '"') { cell += '"'; i += 1; }
+      else if (char === '"') quoted = false;
+      else cell += char;
+    } else if (char === '"') quoted = true;
+    else if (char === delimiter) { row.push(cell); cell = ''; }
+    else if (char === '\n' || char === '\r') {
+      if (char === '\r' && text[i + 1] === '\n') i += 1;
+      row.push(cell);
+      cell = '';
+      if (row.some((value) => value.trim() !== '')) rows.push(row);
+      row = [];
+    } else cell += char;
+  }
+  row.push(cell);
+  if (row.some((value) => value.trim() !== '')) rows.push(row);
+  return rows;
+}
+
+document.querySelector('#import-file').addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > 1000000) {
+    importStatus.textContent = 'That file is too large. Import up to ' + IMPORT_MAX_ROWS + ' students at a time.';
+    return;
+  }
+  importText.value = await file.text();
+  importStatus.textContent = 'File loaded. Click Check rows.';
+});
+
+document.querySelector('#import-check').addEventListener('click', () => {
+  importBody.replaceChildren();
+  importReady = [];
+  importRun.disabled = true;
+  let rows = parseDelimited(importText.value);
+  if (rows.length && /admission/i.test(rows[0][0] ?? '')) rows = rows.slice(1);
+  if (!rows.length) {
+    importStatus.textContent = 'Paste some rows first.';
+    return;
+  }
+  if (rows.length > IMPORT_MAX_ROWS) {
+    importStatus.textContent = 'Too many rows. Import up to ' + IMPORT_MAX_ROWS + ' students at a time.';
+    return;
+  }
+  const seen = new Set();
+  const existing = new Set(studentRecords.map((record) => record.id));
+  let bad = 0;
+  let skipped = 0;
+  rows.forEach((cells, index) => {
+    const [admissionNo = '', name = '', guardianName = '', guardianPhone = ''] = cells.map((value) => value.trim());
+    const id = admissionNo.toLowerCase();
+    let problem = '';
+    if (!/^[A-Za-z0-9-]{1,20}$/.test(admissionNo)) problem = 'Admission number: letters, numbers and hyphens only (up to 20).';
+    else if (!name || name.length > 120) problem = 'Student name is missing or too long.';
+    else if (!guardianName || guardianName.length > 120) problem = 'Guardian name is missing or too long.';
+    else if (!/^[0-9+() -]{0,20}$/.test(guardianPhone)) problem = 'Phone: digits, +, spaces, hyphens and brackets only.';
+    else if (seen.has(id)) problem = 'Repeated admission number in this list.';
+    let result = 'OK - will be added';
+    if (problem) { result = 'Problem: ' + problem; bad += 1; }
+    else if (existing.has(id)) { result = 'Skipped - this admission number already exists.'; skipped += 1; }
+    else importReady.push({ path: ['students', id], data: { admissionNo, name, guardianName, guardianPhone, status: 'active' } });
+    seen.add(id);
+    addRow(importBody, [String(index + 1), admissionNo, name, result]);
+  });
+  importRun.disabled = !importReady.length;
+  importStatus.textContent = importReady.length + ' ready to import, ' + skipped + ' skipped, ' + bad + ' with problems.'
+    + (bad ? ' Rows with problems are left out; fix them and check again.' : '');
+});
+
+importRun.addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools || tools.busy || !importReady.length) return;
+  const request = schoolRequest;
+  const ops = importReady;
+  tools.busy = true;
+  importRun.disabled = true;
+  let done = 0;
+  try {
+    for (let start = 0; start < ops.length; start += IMPORT_BATCH) {
+      importStatus.textContent = 'Importing ' + (start + 1) + ' of ' + ops.length + '.';
+      await tools.commit(ops.slice(start, start + IMPORT_BATCH));
+      done = Math.min(start + IMPORT_BATCH, ops.length);
+    }
+    tools.busy = false;
+    importReady = [];
+    importText.value = '';
+    importBody.replaceChildren();
+    await loadAcademic(request);
+    if (request === schoolRequest) importStatus.textContent = 'Imported ' + done + ' student' + (done === 1 ? '' : 's') + '.';
+  } catch {
+    tools.busy = false;
+    if (request === schoolRequest) {
+      importStatus.textContent = 'Imported ' + done + ' of ' + ops.length + ' before an error. Check the list and run Check rows again.';
+    }
+  } finally {
+    tools.busy = false;
+  }
+});
+
+// Office records (owner only): library, visitor log and behaviour notes.
+const addDays = (date, days) => {
+  const [y, m, d] = date.split('-').map(Number);
+  const next = new Date(y, m - 1, d + days);
+  return next.getFullYear() + '-' + pad(next.getMonth() + 1) + '-' + pad(next.getDate());
+};
+const nowTime = () => {
+  const now = new Date();
+  return pad(now.getHours()) + ':' + pad(now.getMinutes());
+};
+const newId = (prefix) => prefix + '-' + localToday().replaceAll('-', '') + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();
+
+const librarySection = document.querySelector('#library');
+const libraryStatus = document.querySelector('#library-status');
+const bookForm = document.querySelector('#book-form');
+const loanForm = document.querySelector('#loan-form');
+const bookList = document.querySelector('#book-list');
+const loanList = document.querySelector('#loan-list');
+let libBooks = [];
+let libLoans = [];
+
+function renderLibrary() {
+  const open = libLoans.filter((record) => !record.data().returnedOn);
+  const out = (bookId) => open.filter((record) => record.data().bookId === bookId).length;
+  const today = localToday();
+  fillSelect(loanForm.elements.namedItem('bookId'), [...libBooks].sort((a, b) => a.data().title.localeCompare(b.data().title)),
+    (book) => book.title);
+  bookList.replaceChildren();
+  for (const record of [...libBooks].sort((a, b) => a.data().title.localeCompare(b.data().title))) {
+    const book = record.data();
+    const available = book.copies - out(record.id);
+    let button;
+    if (!libLoans.some((loan) => loan.data().bookId === record.id)) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Remove';
+      button.addEventListener('click', () => runLibraryAction(() => academic.remove('books', record.id), 'Book removed.',
+        'Remove "' + book.title + '" from the library?'));
+    }
+    listItem(bookList, book.title + (book.author ? ' - ' + book.author : '') + ' - ' + available + ' of ' + book.copies + ' available', button);
+  }
+  loanList.replaceChildren();
+  for (const record of open.sort((a, b) => a.data().dueOn.localeCompare(b.data().dueOn))) {
+    const loan = record.data();
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Mark returned';
+    button.addEventListener('click', () => runLibraryAction(() => academic.save('loans', record.id, { ...loan, returnedOn: localToday() }),
+      'Book returned.'));
+    const title = libBooks.find((book) => book.id === loan.bookId)?.data().title ?? loan.bookId;
+    listItem(loanList, title + ' - ' + nameOfStudent(loan.studentId) + ' - due ' + loan.dueOn
+      + (loan.dueOn < today ? ' (OVERDUE)' : ''), button);
+  }
+  if (!libBooks.length) libraryStatus.textContent = 'No books yet. Add the first one above.';
+}
+
+async function loadLibrary(request) {
+  try {
+    const [books, loans] = await Promise.all([academic.list('books'), academic.list('loans')]);
+    if (request !== schoolRequest) return;
+    libBooks = books.docs;
+    libLoans = loans.docs;
+    librarySection.hidden = false;
+    libraryStatus.textContent = '';
+    renderLibrary();
+  } catch {
+    if (request === schoolRequest) {
+      librarySection.hidden = false;
+      libraryStatus.textContent = 'Could not load the library. Try again.';
+    }
+  }
+}
+
+async function runLibraryAction(action, message, question) {
+  const tools = academic;
+  if (!tools || tools.busy || (question && !confirm(question))) return;
+  const request = schoolRequest;
+  tools.busy = true;
+  try {
+    await action();
+    tools.busy = false;
+    await loadLibrary(request);
+    if (request === schoolRequest) libraryStatus.textContent = message;
+  } catch {
+    if (request === schoolRequest) libraryStatus.textContent = 'That did not work. Check the details and try again.';
+  } finally {
+    tools.busy = false;
+  }
+}
+
+bookForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const fields = new FormData(bookForm);
+  const title = String(fields.get('title') ?? '').trim();
+  const author = String(fields.get('author') ?? '').trim();
+  const copies = Number(fields.get('copies'));
+  if (!title || !Number.isInteger(copies) || copies < 1 || copies > 1000) {
+    libraryStatus.textContent = 'Enter a title and a number of copies from 1 to 1000.';
+    return;
+  }
+  runLibraryAction(async () => {
+    await academic.save('books', 'bk-' + Math.random().toString(36).slice(2, 10), { title, author, copies });
+    bookForm.reset();
+  }, 'Book added.');
+});
+
+loanForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const fields = new FormData(loanForm);
+  const bookId = String(fields.get('bookId') ?? '');
+  const studentId = String(fields.get('studentId') ?? '');
+  const days = Number(fields.get('days'));
+  const book = libBooks.find((record) => record.id === bookId);
+  if (!book || !studentId || !Number.isInteger(days) || days < 1 || days > 90) {
+    libraryStatus.textContent = 'Choose a book, a student and the number of days (1 to 90).';
+    return;
+  }
+  const out = libLoans.filter((record) => record.data().bookId === bookId && !record.data().returnedOn).length;
+  if (out >= book.data().copies) {
+    libraryStatus.textContent = 'All copies of this book are out.';
+    return;
+  }
+  const issuedOn = localToday();
+  runLibraryAction(() => academic.save('loans', newId('LN'), { bookId, studentId, issuedOn, dueOn: addDays(issuedOn, days), issuedBy: schoolUid }),
+    'Book issued. Due ' + addDays(issuedOn, days) + '.');
+});
+
+const visitorsSection = document.querySelector('#visitors');
+const visitorsStatus = document.querySelector('#visitors-status');
+const visitorForm = document.querySelector('#visitor-form');
+const visitorList = document.querySelector('#visitor-list');
+let visitorData = [];
+
+function renderVisitors() {
+  visitorList.replaceChildren();
+  const today = localToday();
+  const shown = visitorData.filter((record) => record.data().date === today || !record.data().timeOut)
+    .sort((a, b) => (b.data().date + b.data().timeIn).localeCompare(a.data().date + a.data().timeIn));
+  for (const record of shown) {
+    const visit = record.data();
+    let button;
+    if (!visit.timeOut) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Sign out';
+      button.addEventListener('click', () => runVisitorAction(() => academic.save('visitors', record.id, { ...visit, timeOut: nowTime() }),
+        'Visitor signed out.'));
+    }
+    listItem(visitorList, (visit.date === today ? '' : visit.date + ' ') + visit.timeIn + ' - ' + visit.name + ' - ' + visit.purpose
+      + (visit.whom ? ' (to see ' + visit.whom + ')' : '') + (visit.timeOut ? ' - left ' + visit.timeOut : ' - still inside'), button);
+  }
+  if (!shown.length) visitorsStatus.textContent = 'No visitors today.';
+}
+
+async function loadVisitors(request) {
+  try {
+    const saved = await academic.list('visitors');
+    if (request !== schoolRequest) return;
+    visitorData = saved.docs;
+    visitorsSection.hidden = false;
+    visitorsStatus.textContent = '';
+    renderVisitors();
+  } catch {
+    if (request === schoolRequest) {
+      visitorsSection.hidden = false;
+      visitorsStatus.textContent = 'Could not load the visitor log. Try again.';
+    }
+  }
+}
+
+async function runVisitorAction(action, message) {
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const request = schoolRequest;
+  tools.busy = true;
+  try {
+    await action();
+    tools.busy = false;
+    await loadVisitors(request);
+    if (request === schoolRequest) visitorsStatus.textContent = message;
+  } catch {
+    if (request === schoolRequest) visitorsStatus.textContent = 'That did not work. Check the details and try again.';
+  } finally {
+    tools.busy = false;
+  }
+}
+
+visitorForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const fields = new FormData(visitorForm);
+  const text = (key) => String(fields.get(key) ?? '').trim();
+  if (!text('name') || !text('purpose')) {
+    visitorsStatus.textContent = 'Enter the visitor name and the purpose.';
+    return;
+  }
+  if (!/^[0-9+() -]{0,20}$/.test(text('phone'))) {
+    visitorsStatus.textContent = 'Phone may use digits, +, spaces, hyphens and brackets only.';
+    return;
+  }
+  const data = { name: text('name'), purpose: text('purpose'), date: localToday(), timeIn: nowTime(), recordedBy: schoolUid,
+    ...(text('whom') ? { whom: text('whom') } : {}), ...(text('phone') ? { phone: text('phone') } : {}) };
+  runVisitorAction(async () => {
+    await academic.save('visitors', newId('V'), data);
+    visitorForm.reset();
+  }, 'Visitor signed in.');
+});
+
+document.querySelector('#visitors-csv').addEventListener('click', () => {
+  downloadCsv('visitors', [['Date', 'Time in', 'Time out', 'Name', 'Purpose', 'To meet', 'Phone'],
+    ...visitorData.map((record) => record.data()).sort((a, b) => (a.date + a.timeIn).localeCompare(b.date + b.timeIn))
+      .map((v) => [v.date, v.timeIn, v.timeOut ?? '', v.name, v.purpose, v.whom ?? '', v.phone ?? ''])]);
+});
+
+const behaviourSection = document.querySelector('#behaviour');
+const behaviourStatus = document.querySelector('#behaviour-status');
+const behaviourForm = document.querySelector('#behaviour-form');
+const behaviourList = document.querySelector('#behaviour-list');
+const BEHAVIOUR_SHOWN = 50;
+let behaviourData = [];
+
+function renderOfficeStudents() {
+  const sorted = [...studentRecords].sort((a, b) => a.data().name.localeCompare(b.data().name));
+  fillSelect(behaviourForm.elements.namedItem('studentId'), sorted, (item) => item.name + ' (' + item.admissionNo + ')');
+  fillSelect(loanForm.elements.namedItem('studentId'), sorted.filter((record) => record.data().status === 'active'),
+    (item) => item.name + ' (' + item.admissionNo + ')');
+  behaviourSection.hidden = false;
+}
+
+function renderBehaviour() {
+  behaviourList.replaceChildren();
+  for (const record of [...behaviourData].sort((a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id)).slice(0, BEHAVIOUR_SHOWN)) {
+    const item = record.data();
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Remove';
+    button.addEventListener('click', async () => {
+      const tools = academic;
+      if (!tools || tools.busy || !confirm('Remove this note?')) return;
+      const request = schoolRequest;
+      tools.busy = true;
+      try {
+        await tools.remove('behaviour', record.id);
+        tools.busy = false;
+        await loadBehaviour(request);
+      } catch {
+        if (request === schoolRequest) behaviourStatus.textContent = 'Could not remove the note. Try again.';
+      } finally {
+        tools.busy = false;
+      }
+    });
+    listItem(behaviourList, item.date + ' - ' + nameOfStudent(item.studentId) + ' - ' + (item.kind === 'positive' ? 'Positive' : 'Concern')
+      + ': ' + item.note, button);
+  }
+  behaviourStatus.textContent = behaviourData.length ? '' : 'No notes yet.';
+}
+
+async function loadBehaviour(request) {
+  try {
+    const saved = await academic.list('behaviour');
+    if (request !== schoolRequest) return;
+    behaviourData = saved.docs;
+    behaviourSection.hidden = false;
+    renderBehaviour();
+  } catch {
+    if (request === schoolRequest) {
+      behaviourSection.hidden = false;
+      behaviourStatus.textContent = 'Could not load the notes. Try again.';
+    }
+  }
+}
+
+behaviourForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const fields = new FormData(behaviourForm);
+  const studentId = String(fields.get('studentId') ?? '');
+  const kind = String(fields.get('kind') ?? '');
+  const note = String(fields.get('note') ?? '').trim();
+  if (!studentId || !note) {
+    behaviourStatus.textContent = 'Choose a student and write the note.';
+    return;
+  }
+  const request = schoolRequest;
+  tools.busy = true;
+  behaviourStatus.textContent = 'Saving.';
+  try {
+    await tools.save('behaviour', newId('BH'), { studentId, date: localToday(), kind, note, recordedBy: schoolUid });
+    tools.busy = false;
+    behaviourForm.elements.namedItem('note').value = '';
+    await loadBehaviour(request);
+    if (request === schoolRequest) behaviourStatus.textContent = 'Note saved.';
+  } catch {
+    if (request === schoolRequest) behaviourStatus.textContent = 'Could not save the note. Try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
+
 // Teachers' saves are logged as one summary entry each (who, which exam or class day, how many).
 // The log never blocks the save itself: if the entry cannot be written, the save still stands.
 function writeAudit(schoolRef, uid, action, target, docId, detail) {
@@ -2975,6 +3454,29 @@ onAuthStateChanged(auth, async (user) => {
   portalCalendarSection.hidden = true;
   portalCalendarStatus.textContent = '';
   portalCalendarList.replaceChildren();
+  attrepSection.hidden = true;
+  attrepStatus.textContent = '';
+  attrepBody.replaceChildren();
+  attrepRows = [];
+  importSection.hidden = true;
+  importStatus.textContent = '';
+  importText.value = '';
+  importBody.replaceChildren();
+  importReady = [];
+  librarySection.hidden = true;
+  libraryStatus.textContent = '';
+  bookList.replaceChildren();
+  loanList.replaceChildren();
+  libBooks = [];
+  libLoans = [];
+  visitorsSection.hidden = true;
+  visitorsStatus.textContent = '';
+  visitorList.replaceChildren();
+  visitorData = [];
+  behaviourSection.hidden = true;
+  behaviourStatus.textContent = '';
+  behaviourList.replaceChildren();
+  behaviourData = [];
   gradingSection.hidden = true;
   gradingStatus.textContent = '';
   grading = { ...DEFAULT_GRADING };
@@ -3296,6 +3798,13 @@ onAuthStateChanged(auth, async (user) => {
     if (request === schoolRequest) await loadOwnerHomework(request);
     if (request === schoolRequest) await loadCalendar(request);
     if (request === schoolRequest) renderCardStudents();
+    if (request === schoolRequest) {
+      renderAttrepClasses();
+      importSection.hidden = false;
+    }
+    if (request === schoolRequest) await loadLibrary(request);
+    if (request === schoolRequest) await loadVisitors(request);
+    if (request === schoolRequest) await loadBehaviour(request);
     if (request === schoolRequest) await renderSummary(request);
   } catch (error) {
     if (request !== schoolRequest) return;
