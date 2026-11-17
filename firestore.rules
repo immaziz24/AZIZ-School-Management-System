@@ -519,6 +519,40 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Fee concessions. concessions/{id}: studentId, studentName, kind, amount, givenOn, optional note. Owner only.
+      match /concessions/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validConcession(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Achievements. achievements/{id}: studentId, studentName, title, level, date. Owner only.
+      match /achievements/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validAchievement(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Complaints. complaints/{id}: title, raisedBy, date, status open/resolved, optional note. Owner only.
+      match /complaints/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validComplaint(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Assets register. assets/{id}: name, place, cost, condition, boughtOn. Owner only.
+      match /assets/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validAsset(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
       // Alumni. alumni/{id}: name, passoutYear, optional contact, occupation and note. Owner only.
       match /alumni/{alumniId} {
         allow get, list: if request.auth != null && isSchoolViewer(schoolId);
@@ -1297,6 +1331,47 @@ service cloud.firestore {
         && item.kind in ['lost', 'found'] && item.status in ['open', 'returned']
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
         && (!item.keys().hasAny(['place']) || (item.place is string && item.place.size() <= 60));
+    }
+
+    function validConcession(item) {
+      return item.keys().hasOnly(['studentId', 'studentName', 'kind', 'amount', 'givenOn', 'note'])
+        && item.keys().hasAll(['studentId', 'studentName', 'kind', 'amount', 'givenOn'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
+        && item.kind in ['Scholarship', 'Sibling discount', 'Staff ward', 'Other']
+        && item.amount is int && item.amount >= 1 && item.amount <= 10000000
+        && item.givenOn is string && item.givenOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+    }
+
+    function validAchievement(item) {
+      return item.keys().hasOnly(['studentId', 'studentName', 'title', 'level', 'date'])
+        && item.keys().hasAll(['studentId', 'studentName', 'title', 'level', 'date'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
+        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
+        && item.level in ['School', 'District', 'State', 'National']
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+    }
+
+    function validComplaint(item) {
+      return item.keys().hasOnly(['title', 'raisedBy', 'date', 'status', 'note'])
+        && item.keys().hasAll(['title', 'raisedBy', 'date', 'status'])
+        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
+        && item.raisedBy is string && item.raisedBy.size() <= 80 && item.raisedBy.matches('.*[^[:space:]].*')
+        && item.status in ['open', 'resolved']
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 500));
+    }
+
+    function validAsset(item) {
+      return item.keys().hasOnly(['name', 'place', 'cost', 'condition', 'boughtOn'])
+        && item.keys().hasAll(['name', 'place', 'cost', 'condition'])
+        && item.name is string && item.name.size() <= 100 && item.name.matches('.*[^[:space:]].*')
+        && item.place is string && item.place.size() <= 60 && item.place.matches('.*[^[:space:]].*')
+        && item.cost is int && item.cost >= 0 && item.cost <= 1000000000
+        && item.condition in ['Good', 'Fair', 'Poor']
+        && (!item.keys().hasAny(['boughtOn']) || (item.boughtOn is string && item.boughtOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
     }
 
     function validInventoryItem(item) {

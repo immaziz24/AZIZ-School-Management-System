@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-14">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-15">
 </head>
 <body>
   <main>
@@ -642,6 +642,54 @@
         </form>
         <ul id="lostfound-list"></ul>
       </section>
+      <section id="concessions" aria-labelledby="concessions-title" hidden>
+        <h3 id="concessions-title">Fee Concessions</h3>
+        <p id="concessions-status" role="status"></p>
+        <form id="concessions-form">
+          <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Kind <select name="kind"><option>Scholarship</option><option>Sibling discount</option><option>Staff ward</option><option>Other</option></select></label></p>
+          <p><label>Amount (Rs) <input name="amount" type="number" min="1" max="10000000" step="1" required></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <button type="submit">Record concession</button>
+        </form>
+        <ul id="concessions-list"></ul>
+      </section>
+      <section id="achievements" aria-labelledby="achievements-title" hidden>
+        <h3 id="achievements-title">Student Achievements</h3>
+        <p id="achievements-status" role="status"></p>
+        <form id="achievements-form">
+          <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Achievement <input name="title" type="text" maxlength="120" required></label></p>
+          <p><label>Level <select name="level"><option>School</option><option>District</option><option>State</option><option>National</option></select></label></p>
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <button type="submit">Add achievement</button>
+        </form>
+        <ul id="achievements-list"></ul>
+      </section>
+      <section id="complaints" aria-labelledby="complaints-title" hidden>
+        <h3 id="complaints-title">Complaints</h3>
+        <p id="complaints-status" role="status"></p>
+        <form id="complaints-form">
+          <p><label>Complaint <input name="title" type="text" maxlength="120" required></label></p>
+          <p><label>Raised by <input name="raisedBy" type="text" maxlength="80" required></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="500"></label></p>
+          <button type="submit">Log complaint</button>
+        </form>
+        <ul id="complaints-list"></ul>
+      </section>
+      <section id="assets" aria-labelledby="assets-title" hidden>
+        <h3 id="assets-title">Assets Register</h3>
+        <p id="assets-status" role="status"></p>
+        <form id="assets-form">
+          <p><label>Asset <input name="name" type="text" maxlength="100" required></label></p>
+          <p><label>Place <input name="place" type="text" maxlength="60" required></label></p>
+          <p><label>Cost (Rs) <input name="cost" type="number" min="0" max="1000000000" step="1" required></label></p>
+          <p><label>Condition <select name="condition"><option>Good</option><option>Fair</option><option>Poor</option></select></label></p>
+          <p><label>Bought on (optional) <input name="boughtOn" type="date"></label></p>
+          <button type="submit">Add asset</button>
+        </form>
+        <ul id="assets-list"></ul>
+      </section>
       <section id="alumni" aria-labelledby="alumni-title" hidden>
         <h3 id="alumni-title">Alumni</h3>
         <p id="alumni-status" role="status"></p>
@@ -936,7 +984,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-14');
+      await import('./sign-in.mjs?v=batch-15');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

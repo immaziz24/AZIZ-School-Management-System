@@ -3790,6 +3790,66 @@ lists.lostfound = ownerList({
   },
 });
 
+const pickedStudent = (fields) => studentRecords.find((item) => item.id === text(fields, 'studentId'));
+const activeStudents = () => [...studentRecords].sort(byStudentName);
+
+lists.concessions = ownerList({
+  id: 'concessions', collection: 'concessions', empty: 'No concessions recorded yet.', saved: 'Concession recorded.',
+  sort: (a, b) => b.data().givenOn.localeCompare(a.data().givenOn) || b.id.localeCompare(a.id),
+  prepare: (form) => fillSelect(form.elements.namedItem('studentId'), activeStudents(), studentOption),
+  build: (fields) => {
+    const student = pickedStudent(fields);
+    const amount = wholeNumber(fields, 'amount');
+    if (!student || !(amount >= 1 && amount <= 10000000)) return { error: 'Choose a student and enter the amount in whole rupees.' };
+    return { id: newId('CN'), data: { studentId: student.id, studentName: student.data().name, kind: text(fields, 'kind'),
+      amount, givenOn: localToday(), ...optional(fields, 'note') } };
+  },
+  line: (item) => item.givenOn + ' - ' + item.studentName + ' - ' + item.kind + ' - ' + rupees(item.amount) + (item.note ? ' (' + item.note + ')' : ''),
+});
+
+lists.achievements = ownerList({
+  id: 'achievements', collection: 'achievements', empty: 'No achievements recorded yet.', saved: 'Achievement added.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  prepare: (form) => fillSelect(form.elements.namedItem('studentId'), activeStudents(), studentOption),
+  build: (fields) => {
+    const student = pickedStudent(fields);
+    if (!student || !text(fields, 'title') || !DATE_TEXT.test(text(fields, 'date'))) return { error: 'Choose a student, then enter the achievement and the date.' };
+    return { id: newId('AC'), data: { studentId: student.id, studentName: student.data().name, title: text(fields, 'title'),
+      level: text(fields, 'level'), date: text(fields, 'date') } };
+  },
+  line: (item) => item.date + ' - ' + item.studentName + ' - ' + item.title + ' (' + item.level + ' level)',
+});
+
+lists.complaints = ownerList({
+  id: 'complaints', collection: 'complaints', empty: 'No complaints logged.', saved: 'Complaint logged.',
+  sort: (a, b) => (a.data().status === 'resolved') - (b.data().status === 'resolved') || b.id.localeCompare(a.id),
+  build: (fields) => {
+    if (!text(fields, 'title') || !text(fields, 'raisedBy')) return { error: 'Enter the complaint and who raised it.' };
+    return { id: newId('CP'), data: { title: text(fields, 'title'), raisedBy: text(fields, 'raisedBy'), date: localToday(), status: 'open', ...optional(fields, 'note') } };
+  },
+  line: (item) => '[' + item.status + '] ' + item.date + ' - ' + item.title + ' - by ' + item.raisedBy + (item.note ? ' (' + item.note + ')' : ''),
+  extra: (record, act) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    const resolved = record.data().status === 'resolved';
+    button.textContent = resolved ? 'Reopen' : 'Mark resolved';
+    button.addEventListener('click', () => act(() => academic.save('complaints', record.id,
+      { ...record.data(), status: resolved ? 'open' : 'resolved' }), 'Updated.'));
+    return [button];
+  },
+});
+
+lists.assets = ownerList({
+  id: 'assets', collection: 'assets', empty: 'No assets recorded yet.', saved: 'Asset added.',
+  sort: (a, b) => a.data().place.localeCompare(b.data().place) || a.data().name.localeCompare(b.data().name),
+  build: (fields) => {
+    const cost = wholeNumber(fields, 'cost');
+    if (!text(fields, 'name') || !text(fields, 'place') || !(cost >= 0 && cost <= 1000000000)) return { error: 'Enter the asset, the place and the cost in whole rupees.' };
+    return { id: newId('AS'), data: { name: text(fields, 'name'), place: text(fields, 'place'), cost, condition: text(fields, 'condition'), ...optional(fields, 'boughtOn') } };
+  },
+  line: (item) => item.place + ' - ' + item.name + ' - ' + rupees(item.cost) + ' - ' + item.condition + (item.boughtOn ? ' - bought ' + item.boughtOn : ''),
+});
+
 lists.alumni = ownerList({
   id: 'alumni', collection: 'alumni', empty: 'No alumni yet.', saved: 'Alumnus added.',
   sort: (a, b) => b.data().passoutYear - a.data().passoutYear || a.data().name.localeCompare(b.data().name),
@@ -4123,7 +4183,7 @@ function renderWorkload() {
 const BACKUP_COLLECTIONS = ['members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
   'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
-  'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
+  'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
   'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog'];
 
 backupRun.addEventListener('click', async () => {
@@ -4182,7 +4242,7 @@ const resetInsights = () => {
 };
 
 async function loadOwnerLists(request) {
-  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
+  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }
