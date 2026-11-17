@@ -799,6 +799,28 @@ dashboard.addEventListener('submit', (event) => {
   event.stopImmediatePropagation();
   viewOnlyNote.textContent = 'View only. You cannot change anything with this login.';
 }, true);
+// Find a screen: lists the visible headings of the dashboard, filtered by what is typed, and scrolls to the chosen one.
+const jumpSearch = document.querySelector('#jump-search');
+const jumpSelect = document.querySelector('#jump');
+let jumpTargets = [];
+function refreshJump() {
+  const words = jumpSearch.value.trim().toLowerCase();
+  jumpTargets = [...dashboard.querySelectorAll('h3')].filter((heading) => !heading.closest('[hidden]') && heading.textContent.trim()
+    && (!words || heading.textContent.toLowerCase().includes(words)));
+  jumpSelect.replaceChildren(new Option(jumpTargets.length ? 'Choose a screen (' + jumpTargets.length + ')' : 'No screen matches', ''),
+    ...jumpTargets.map((heading, index) => new Option(heading.textContent.trim(), String(index))));
+}
+jumpSearch.addEventListener('input', refreshJump);
+jumpSelect.addEventListener('focus', refreshJump);
+jumpSelect.addEventListener('mousedown', refreshJump);
+jumpSelect.addEventListener('change', () => {
+  const heading = jumpTargets[Number(jumpSelect.value)];
+  if (!heading || jumpSelect.value === '') return;
+  heading.tabIndex = -1;
+  heading.scrollIntoView({ block: 'start' });
+  heading.focus();
+});
+
 const portalChildWrap = document.querySelector('#portal-child-wrap');
 const portalChild = document.querySelector('#portal-child');
 let portalChoice = '';

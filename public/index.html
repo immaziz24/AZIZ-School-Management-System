@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-16">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-17">
 </head>
 <body>
   <main>
@@ -29,6 +29,8 @@
         <dt>Signed-in account</dt>
         <dd id="owner-email"></dd>
       </dl>
+      <p><label>Find a screen <input id="jump-search" type="search" maxlength="40" placeholder="e.g. fees, exams, expenses" autocomplete="off"></label>
+        <label>Go to <select id="jump"><option value="">Choose a screen</option></select></label></p>
       <h3>School Profile</h3>
       <form id="school-profile">
         <p><label>School name <input name="name" required maxlength="120"></label></p>
@@ -1029,7 +1031,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-16');
+      await import('./sign-in.mjs?v=batch-17');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
