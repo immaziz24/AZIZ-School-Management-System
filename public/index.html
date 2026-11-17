@@ -245,6 +245,20 @@
           <tbody id="fee-balance-body"></tbody>
         </table>
       </section>
+      <section id="grading" aria-labelledby="grading-title" hidden>
+        <h3 id="grading-title">Pass Marks and Grades</h3>
+        <p id="grading-status" role="status"></p>
+        <form id="grading-form">
+          <p><label>Pass mark (percent) <input name="passPercent" type="number" min="1" max="100" step="1" required></label></p>
+          <p><label>A+ from (percent) <input name="minAPlus" type="number" min="1" max="100" step="1" required></label></p>
+          <p><label>A from (percent) <input name="minA" type="number" min="1" max="100" step="1" required></label></p>
+          <p><label>B from (percent) <input name="minB" type="number" min="1" max="100" step="1" required></label></p>
+          <p><label>C from (percent) <input name="minC" type="number" min="1" max="100" step="1" required></label></p>
+          <p><label>D from (percent) <input name="minD" type="number" min="1" max="100" step="1" required></label></p>
+          <p><label>E from (percent) <input name="minE" type="number" min="1" max="100" step="1" required></label></p>
+          <button type="submit">Save grading rules</button>
+        </form>
+      </section>
       <section id="audit-log" aria-labelledby="audit-log-title" hidden>
         <h3 id="audit-log-title">Activity Log</h3>
         <p id="audit-log-status" role="status"></p>
@@ -377,7 +391,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=audit-1');
+      await import('./sign-in.mjs?v=grading-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

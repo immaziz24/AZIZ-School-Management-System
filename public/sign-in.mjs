@@ -532,8 +532,30 @@ function renderReviewExams() {
       + ' - ' + exam.yearId + (exam.status === 'open' ? '' : ' - ' + (exam.published ? 'published' : exam.status)));
 }
 
-const GRADE_SCALE = [[90, 'A+'], [80, 'A'], [70, 'B'], [60, 'C'], [50, 'D'], [40, 'E'], [0, 'F']];
-const gradeFor = (percent) => GRADE_SCALE.find(([min]) => percent >= min)[1];
+// Pass mark and grade bands. The owner sets them in settings/grading; until then these defaults apply.
+const DEFAULT_GRADING = { passPercent: 40, minAPlus: 90, minA: 80, minB: 70, minC: 60, minD: 50, minE: 40 };
+let grading = { ...DEFAULT_GRADING };
+const GRADING_FIELDS = Object.keys(DEFAULT_GRADING);
+const gradeFor = (percent) => {
+  const bands = [[grading.minAPlus, 'A+'], [grading.minA, 'A'], [grading.minB, 'B'],
+    [grading.minC, 'C'], [grading.minD, 'D'], [grading.minE, 'E']];
+  return (bands.find(([min]) => percent >= min) ?? [0, 'F'])[1];
+};
+const isPass = (percent) => percent >= grading.passPercent;
+const gradeText = (percent) => gradeFor(percent) + ' - ' + (isPass(percent) ? 'Pass' : 'Fail');
+const resultText = (failed) => (failed ? 'Fail in ' + failed + ' subject' + (failed === 1 ? '' : 's') : 'Pass');
+
+async function loadGrading(schoolRef) {
+  const { doc, getDocFromServer } = firestoreTools;
+  try {
+    const saved = await getDocFromServer(doc(schoolRef, 'settings', 'grading'));
+    grading = saved.exists() && GRADING_FIELDS.every((key) => Number.isInteger(saved.data()[key]))
+      ? Object.fromEntries(GRADING_FIELDS.map((key) => [key, saved.data()[key]]))
+      : { ...DEFAULT_GRADING };
+  } catch {
+    grading = { ...DEFAULT_GRADING };
+  }
+}
 
 async function renderMarksReview() {
   const tools = academic;
@@ -566,7 +588,7 @@ async function renderMarksReview() {
       const percent = has ? Math.round(scores.get(row.studentId) / exam.maxMarks * 1000) / 10 : null;
       for (const text of [sectionName(row.sectionId), String(row.rollNo),
         student ? student.name + ' (' + student.admissionNo + ')' : row.studentId, marks,
-        has ? percent + '%' : '-', has ? gradeFor(percent) : '-']) {
+        has ? percent + '%' : '-', has ? gradeText(percent) : '-']) {
         const td = document.createElement('td');
         td.textContent = text;
         tr.append(td);
@@ -660,13 +682,15 @@ async function renderReportCard() {
         || nameOf(examData.subjects, a.exam.subjectId).localeCompare(nameOf(examData.subjects, b.exam.subjectId)));
     let got = 0;
     let max = 0;
+    let failed = 0;
     for (const { exam, mark } of lines) {
       const percent = Math.round(mark.score / exam.maxMarks * 1000) / 10;
       got += mark.score;
       max += exam.maxMarks;
+      if (!isPass(percent)) failed += 1;
       const tr = document.createElement('tr');
       for (const text of [exam.yearId, nameOf(examData.subjects, exam.subjectId), exam.name,
-        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeFor(percent)]) {
+        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeText(percent)]) {
         const td = document.createElement('td');
         td.textContent = text;
         tr.append(td);
@@ -676,7 +700,7 @@ async function renderReportCard() {
     reportStatus.textContent = lines.length ? '' : 'No published results for this student yet.';
     if (lines.length) {
       const overall = Math.round(got / max * 1000) / 10;
-      reportTotal.textContent = 'Total ' + got + ' / ' + max + ' - ' + overall + '% - Grade ' + gradeFor(overall);
+      reportTotal.textContent = 'Total ' + got + ' / ' + max + ' - ' + overall + '% - Grade ' + gradeFor(overall) + ' - ' + resultText(failed);
     }
   } catch {
     if (request === schoolRequest && token === reportRequest) reportStatus.textContent = 'Could not load the report card. Try again.';
@@ -749,6 +773,7 @@ async function loadPortal(tools, request) {
   const { schoolRef, user, doc, collection, getDocFromServer, getDocsFromServer, query, where } = tools;
   portalEmail.textContent = user.email;
   portalDashboard.hidden = false;
+  await loadGrading(schoolRef);
   portalStatus.textContent = 'Loading results.';
   try {
     const link = await getDocFromServer(doc(schoolRef, 'familyAccess', user.uid));
@@ -779,13 +804,15 @@ async function loadPortal(tools, request) {
     portalStudent.textContent = student.exists() ? student.data().name + ' (' + student.data().admissionNo + ')' : '';
     let got = 0;
     let max = 0;
+    let failed = 0;
     for (const { exam, mark } of lines) {
       const percent = Math.round(mark.score / exam.maxMarks * 1000) / 10;
       got += mark.score;
       max += exam.maxMarks;
+      if (!isPass(percent)) failed += 1;
       const tr = document.createElement('tr');
       for (const text of [exam.yearId, subjectName.get(exam.subjectId), exam.name,
-        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeFor(percent)]) {
+        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeText(percent)]) {
         const td = document.createElement('td');
         td.textContent = text;
         tr.append(td);
@@ -795,7 +822,7 @@ async function loadPortal(tools, request) {
     portalStatus.textContent = lines.length ? '' : 'No results have been published yet.';
     if (lines.length) {
       const overall = Math.round(got / max * 1000) / 10;
-      portalTotal.textContent = 'Total ' + got + ' / ' + max + ' - ' + overall + '% - Grade ' + gradeFor(overall);
+      portalTotal.textContent = 'Total ' + got + ' / ' + max + ' - ' + overall + '% - Grade ' + gradeFor(overall) + ' - ' + resultText(failed);
     }
   } catch {
     if (request === schoolRequest) portalStatus.textContent = 'Could not load results. Try again.';
@@ -2214,6 +2241,46 @@ auditRefresh.addEventListener('click', () => {
   if (academic) loadAuditLog(schoolRequest);
 });
 
+// Pass marks and grades. The owner sets the pass percentage and the lowest percentage for each grade.
+const gradingSection = document.querySelector('#grading');
+const gradingStatus = document.querySelector('#grading-status');
+const gradingForm = document.querySelector('#grading-form');
+
+function showGrading() {
+  gradingSection.hidden = false;
+  for (const key of GRADING_FIELDS) gradingForm.elements.namedItem(key).value = grading[key];
+  gradingStatus.textContent = '';
+}
+
+gradingForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const fields = new FormData(gradingForm);
+  const next = Object.fromEntries(GRADING_FIELDS.map((key) => [key, Number(fields.get(key))]));
+  const bands = ['minAPlus', 'minA', 'minB', 'minC', 'minD', 'minE'].map((key) => next[key]);
+  if (!GRADING_FIELDS.every((key) => Number.isInteger(next[key]) && next[key] >= 1 && next[key] <= 100)) {
+    gradingStatus.textContent = 'Use whole numbers from 1 to 100.';
+    return;
+  }
+  if (bands.some((value, index) => index && value >= bands[index - 1])) {
+    gradingStatus.textContent = 'Each grade must start lower than the grade above it (A+ highest, E lowest).';
+    return;
+  }
+  const request = schoolRequest;
+  tools.busy = true;
+  gradingStatus.textContent = 'Saving.';
+  try {
+    await tools.save('settings', 'grading', next);
+    grading = next;
+    if (request === schoolRequest) gradingStatus.textContent = 'Saved. Open a result again to see the new grades.';
+  } catch {
+    if (request === schoolRequest) gradingStatus.textContent = 'Could not save the grading rules. Try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -2226,6 +2293,9 @@ onAuthStateChanged(auth, async (user) => {
   attClass.replaceChildren();
   attDate.value = '';
   attPrev = { classId: '', date: '' };
+  gradingSection.hidden = true;
+  gradingStatus.textContent = '';
+  grading = { ...DEFAULT_GRADING };
   auditSection.hidden = true;
   auditStatus.textContent = '';
   auditList.replaceChildren();
@@ -2524,6 +2594,8 @@ onAuthStateChanged(auth, async (user) => {
     classTeacherSection.hidden = false;
     attReviewSection.hidden = false;
     attReviewDate.value = localToday();
+    await loadGrading(schoolRef);
+    if (request === schoolRequest) showGrading();
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
     if (request === schoolRequest) await loadStaffAttendance(request);

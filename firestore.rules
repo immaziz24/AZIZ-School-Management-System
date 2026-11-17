@@ -325,6 +325,13 @@ service cloud.firestore {
             || getAfter(/databases/$(database)/documents/schools/$(schoolId)/academicYears/$(resource.data.activeYearId)).data.status == 'closed');
       }
 
+      // Grading rules. settings/grading: the pass percentage and the lowest percentage for each grade
+      // (A+ down to E; anything below E is F). The owner sets them; teachers and linked families read them.
+      match /settings/grading {
+        allow get: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher() || familyActive());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validGrading(request.resource.data);
+      }
+
       match /academicYears/{yearId} {
         // Teachers read years (label, dates, status only) so a class teacher can find the active year.
         allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher());
@@ -672,6 +679,16 @@ service cloud.firestore {
         && item.docId is string && item.docId.size() <= 100
         && item.at is string && item.at.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,14}Z') && item.at >= '2020-01-01'
         && (!item.keys().hasAny(['detail']) || (item.detail is string && item.detail.size() <= 200));
+    }
+
+    function validGrading(item) {
+      return item.keys().hasOnly(['passPercent', 'minAPlus', 'minA', 'minB', 'minC', 'minD', 'minE'])
+        && item.keys().hasAll(['passPercent', 'minAPlus', 'minA', 'minB', 'minC', 'minD', 'minE'])
+        && item.passPercent is int && item.passPercent >= 1 && item.passPercent <= 100
+        && item.minAPlus is int && item.minA is int && item.minB is int
+        && item.minC is int && item.minD is int && item.minE is int
+        && item.minAPlus <= 100 && item.minAPlus > item.minA && item.minA > item.minB
+        && item.minB > item.minC && item.minC > item.minD && item.minD > item.minE && item.minE >= 1;
     }
 
     function validFamilyAccess(item) {
