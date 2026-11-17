@@ -1154,7 +1154,7 @@ const localToday = () => {
   return now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
 };
 const DATE_TEXT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
-const STATUS_LABEL = { present: 'Present', absent: 'Absent', late: 'Late' };
+const STATUS_LABEL = { present: 'Present', absent: 'Absent', late: 'Late', leave: 'On approved leave' };
 const byClassOrder = (a, b) => a.data().order - b.data().order;
 
 const classTeacherSection = document.querySelector('#class-teachers');
@@ -1264,12 +1264,12 @@ async function renderAttendanceReview() {
       const list = placed.filter((item) => item.classId === record.id)
         .sort((a, b) => sectionName(a.sectionId).localeCompare(sectionName(b.sectionId)) || a.rollNo - b.rollNo);
       rows.set(record.id, list);
-      const count = { present: 0, absent: 0, late: 0 };
+      const count = { present: 0, absent: 0, late: 0, leave: 0 };
       for (const item of list) {
         const mark = marks.get(record.id + '/' + item.studentId);
         if (mark) count[mark] += 1;
       }
-      const done = count.present + count.absent + count.late;
+      const done = count.present + count.absent + count.late + count.leave;
       if (done) marked += 1;
       addRow(attReviewBody, [record.data().name,
         classTeacherData.find((item) => item.id === record.id)?.data().teacherUid ?? 'Not set',
@@ -1311,10 +1311,10 @@ const attSelects = () => [...attBody.querySelectorAll('select')];
 const attendanceDirty = () => attSelects().some((select) => select.value !== select.dataset.original);
 
 function updateAttendanceCounts() {
-  const count = { present: 0, absent: 0, late: 0, '': 0 };
+  const count = { present: 0, absent: 0, late: 0, leave: 0, '': 0 };
   for (const select of attSelects()) count[select.value] += 1;
   attCounts.textContent = attSelects().length
-    ? 'Present ' + count.present + ', absent ' + count.absent + ', late ' + count.late + ', not marked ' + count['']
+    ? 'Present ' + count.present + ', absent ' + count.absent + ', late ' + count.late + ', on leave ' + count.leave + ', not marked ' + count['']
     : '';
 }
 
@@ -1511,11 +1511,13 @@ function renderPortalAttendance() {
     return;
   }
   portalAttStatus.textContent = '';
-  const count = { present: 0, absent: 0, late: 0 };
+  const count = { present: 0, absent: 0, late: 0, leave: 0 };
   for (const mark of marks) count[mark.status] += 1;
-  const percent = Math.round((count.present + count.late) / marks.length * 1000) / 10;
+  const counted = marks.length - count.leave;
+  const percent = counted ? Math.round((count.present + count.late) / counted * 1000) / 10 : 100;
   portalAttTotal.textContent = 'Present ' + count.present + ', absent ' + count.absent + ', late ' + count.late
-    + ' - Attendance ' + percent + '% (present and late days out of ' + marks.length + ' marked)';
+    + (count.leave ? ', on approved leave ' + count.leave : '')
+    + ' - Attendance ' + percent + '% (present and late days out of ' + counted + ' school days marked; approved leave is not counted)';
 }
 
 async function loadPortalAttendance(tools, request, studentId) {
@@ -2452,7 +2454,7 @@ async function renderSummary(request) {
       'Placed in ' + (activeYear ? activeYear.data().label : 'no active year') + ': ' + placed,
       'Active teachers: ' + teachers,
       'Student attendance today (' + today + '): present ' + (att.present ?? 0) + ', absent ' + (att.absent ?? 0)
-        + ', late ' + (att.late ?? 0),
+        + ', late ' + (att.late ?? 0) + ', on leave ' + (att.leave ?? 0),
       'Staff attendance today: present ' + (staff.present ?? 0) + ', absent ' + (staff.absent ?? 0)
         + ', late ' + (staff.late ?? 0) + ', on leave ' + (staff.leave ?? 0),
       'Leave requests waiting: ' + pending,
@@ -3046,7 +3048,7 @@ document.querySelector('#attrep-load').addEventListener('click', async () => {
       for (const record of result.docs) {
         const mark = record.data();
         if (mark.classId !== classId) continue;
-        const count = perStudent.get(mark.studentId) ?? { present: 0, absent: 0, late: 0 };
+        const count = perStudent.get(mark.studentId) ?? { present: 0, absent: 0, late: 0, leave: 0 };
         count[mark.status] += 1;
         perStudent.set(mark.studentId, count);
       }
@@ -3054,11 +3056,11 @@ document.querySelector('#attrep-load').addEventListener('click', async () => {
     attrepRows = [...perStudent.entries()].map(([studentId, count]) => {
       const marked = count.present + count.absent + count.late;
       return [nameOfStudent(studentId), count.present, count.absent, count.late, marked,
-        Math.round((count.present + count.late) / marked * 1000) / 10 + '%'];
+        marked ? Math.round((count.present + count.late) / marked * 1000) / 10 + '%' : 'On leave'];
     }).sort((a, b) => a[0].localeCompare(b[0]));
     attrepBody.replaceChildren();
     for (const row of attrepRows) addRow(attrepBody, row.map(String));
-    attrepStatus.textContent = attrepRows.length ? 'Attendance % counts present and late days out of days marked.'
+    attrepStatus.textContent = attrepRows.length ? 'Attendance % counts present and late days out of days marked. Approved leave days are not counted.'
       : 'No attendance has been marked for this class in this month.';
   } catch {
     if (request === schoolRequest) attrepStatus.textContent = 'Could not load the report. Try again.';

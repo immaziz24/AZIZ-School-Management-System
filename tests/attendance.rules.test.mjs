@@ -123,6 +123,7 @@ test('class teacher can mark, correct and re-save attendance for their class', a
   await allowed(set('ct-a', path(), rec()), 'create present');
   await allowed(set('ct-a', path(), rec({ status: 'absent' })), 'correct to absent');
   await allowed(set('ct-a', path(), rec({ status: 'late' })), 'correct to late');
+  await allowed(set('ct-a', path(), rec({ status: 'leave' })), 'correct to approved leave');
   await allowed(set('ct-a', path(), rec({ status: 'late' })), 'identical repeat save');
   await allowed(set('ct-a', path(rec({ studentId: 's2' })), rec({ studentId: 's2', status: 'absent' })), 'second student');
   await allowed(set('ct-a', path(rec({ date: day(-1) })), rec({ date: day(-1) })), 'yesterday');
