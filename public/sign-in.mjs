@@ -7,6 +7,11 @@ import {
 import { app } from './firebase-client.mjs';
 
 const auth = getAuth(app);
+// The school comes from the page address (?school=green-valley); without it the original school is used.
+const SCHOOL_ID = (() => {
+  const wanted = new URLSearchParams(location.search).get('school') ?? '';
+  return /^[a-z][a-z0-9-]{2,29}$/.test(wanted) ? wanted : 'abcd-school';
+})();
 const form = document.querySelector('#sign-in');
 const signInButton = form.querySelector('button');
 const signOutButton = document.querySelector('#sign-out');
@@ -4522,7 +4527,7 @@ backupRun.addEventListener('click', async () => {
   const request = schoolRequest;
   tools.busy = true;
   backupRun.disabled = true;
-  const backup = { school: 'abcd-school', takenAt: new Date().toISOString(), collections: {}, notRead: [] };
+  const backup = { school: SCHOOL_ID, takenAt: new Date().toISOString(), collections: {}, notRead: [] };
   try {
     let done = 0;
     for (let start = 0; start < BACKUP_COLLECTIONS.length; start += 5) {
@@ -5547,7 +5552,7 @@ onAuthStateChanged(auth, async (user) => {
     );
     if (request !== schoolRequest) return;
     firestoreTools = { collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, query, setDoc, where };
-    const schoolRef = doc(getFirestore(app), 'schools', 'abcd-school');
+    const schoolRef = doc(getFirestore(app), 'schools', SCHOOL_ID);
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     if (request !== schoolRequest) return;
     if (membership.data()?.active === true && membership.data().role === 'teacher') {

@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-25">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-27">
 </head>
 <body>
   <main>
@@ -1064,12 +1064,128 @@
         <ul id="portal-notices-list"></ul>
       </section>
     </section>
+    <details id="signup">
+      <summary>Create a new school (free 30-day trial)</summary>
+      <form id="signup-form">
+        <p><label>School name <input name="name" required maxlength="120"></label></p>
+        <p><label>School web name <input name="slug" required minlength="3" maxlength="30" placeholder="e.g. green-valley" pattern="[a-z][a-z0-9\-]{2,29}"></label>
+          <small>Lowercase letters, numbers and dashes. It becomes the address ?school=green-valley.</small></p>
+        <p><label>Phone <input name="phone" type="tel" maxlength="40"></label></p>
+        <p><label>Address <input name="address" maxlength="500"></label></p>
+        <p id="signup-account"><label>Your email <input name="email" type="email" autocomplete="username"></label>
+          <label>Choose a password <input name="password" type="password" minlength="8" autocomplete="new-password"></label></p>
+        <button type="submit">Create school</button>
+        <p id="signup-status" role="status"></p>
+      </form>
+    </details>
+    <section id="invite-accept" hidden>
+      <h3>Invitations for you</h3>
+      <p id="invite-accept-status" role="status"></p>
+      <ul id="invite-accept-list"></ul>
+    </section>
+    <section id="plan-section" hidden>
+      <h2>Plan, billing and support</h2>
+      <p id="plan-banner" role="status"></p>
+      <div id="consent-box" hidden>
+        <p>Please accept the school data privacy policy (version <span id="consent-version"></span>).</p>
+        <button id="consent-accept" type="button">I accept</button>
+      </div>
+      <h3>Your plan</h3>
+      <dl id="plan-details"></dl>
+      <h3>Usage</h3>
+      <p id="usage-line"></p>
+      <button id="usage-refresh" type="button" class="owner-only">Update usage numbers</button>
+      <h3>Invoices</h3>
+      <ul id="plan-invoices"></ul>
+      <h3>Support tickets</h3>
+      <form id="ticket-form" class="owner-only">
+        <p><label>Subject <input name="subject" required maxlength="120"></label></p>
+        <p><label>Message <textarea name="body" required maxlength="2000" rows="3"></textarea></label></p>
+        <button type="submit">Send to support</button>
+      </form>
+      <ul id="ticket-list"></ul>
+      <h3>People and invitations</h3>
+      <form id="invite-form" class="owner-only">
+        <p><label>Email <input name="email" type="email" required maxlength="120"></label>
+          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
+        <button type="submit">Send invitation</button>
+      </form>
+      <p><small>The invited person signs in with that email on this page and accepts. To hand over ownership: invite the new owner, then they switch the old owner off.</small></p>
+      <ul id="invite-list"></ul>
+      <ul id="member-list"></ul>
+      <h3>Custom domain</h3>
+      <form id="domain-form" class="owner-only">
+        <p><label>Domain <input name="domain" required maxlength="100" placeholder="school.example.com"></label></p>
+        <button type="submit">Request domain</button>
+      </form>
+      <ul id="domain-list"></ul>
+      <h3>Data export or deletion</h3>
+      <form id="data-form" class="owner-only">
+        <p><label>Request <select name="kind"><option value="export">Export all school data</option><option value="deletion">Delete all school data</option></select></label></p>
+        <button type="submit">Send request</button>
+      </form>
+      <ul id="data-list"></ul>
+      <p id="plan-status" role="status"></p>
+    </section>
+    <section id="platform-section" hidden>
+      <h2>Platform administration</h2>
+      <p id="platform-status" role="status"></p>
+      <h3>Revenue</h3>
+      <p id="platform-revenue"></p>
+      <h3>Schools</h3>
+      <ul id="platform-schools"></ul>
+      <div id="platform-school" hidden>
+        <h3 id="platform-school-title"></h3>
+        <p id="platform-usage"></p>
+        <form id="billing-form">
+          <p><label>Plan <select name="plan"><option>trial</option><option>basic</option><option>standard</option><option>premium</option></select></label>
+            <label>Status <select name="status"><option>trial</option><option>active</option><option>suspended</option><option>cancelled</option><option>pending</option></select></label></p>
+          <p><label>Trial ends <input name="trialEnds" type="date"></label>
+            <label>Renews on <input name="renewsOn" type="date"></label>
+            <label>Grace days <input name="graceDays" type="number" min="0" max="90"></label></p>
+          <p><label>Student limit <input name="studentLimit" type="number" min="0"></label>
+            <label>Staff limit <input name="staffLimit" type="number" min="0"></label>
+            <label>Storage MB <input name="storageMb" type="number" min="0"></label>
+            <label>Monthly price (Rs) <input name="monthlyPrice" type="number" min="0"></label></p>
+          <p><label><input name="legalHold" type="checkbox"> Legal hold (no deletion)</label>
+            <label>Note <input name="note" maxlength="200"></label></p>
+          <button type="submit">Save plan</button>
+        </form>
+        <h4>Invoices</h4>
+        <form id="invoice-form">
+          <p><label>Month <input name="period" type="month" required></label>
+            <label>Amount (Rs) <input name="amount" type="number" min="0" required></label>
+            <label>Due on <input name="dueOn" type="date" required></label></p>
+          <button type="submit">Add invoice</button>
+        </form>
+        <ul id="platform-invoices"></ul>
+        <h4>Domain and data requests</h4>
+        <ul id="platform-requests"></ul>
+      </div>
+      <h3>Open support tickets</h3>
+      <ul id="platform-tickets"></ul>
+      <h3>Feature switches</h3>
+      <form id="flags-form">
+        <p id="flags-boxes"></p>
+        <button type="submit">Save switches</button>
+      </form>
+      <h3>Disaster-recovery drills</h3>
+      <form id="drill-form">
+        <p><label>Date <input name="date" type="date" required></label>
+          <label>What was tested <input name="what" required maxlength="200"></label></p>
+        <p><label>Result <input name="result" required maxlength="500"></label>
+          <label>Minutes <input name="minutes" type="number" min="0"></label></p>
+        <button type="submit">Log drill</button>
+      </form>
+      <ul id="drill-list"></ul>
+    </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-25');
+      await import('./sign-in.mjs?v=batch-27');
+      await import('./platform.mjs?v=batch-27');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

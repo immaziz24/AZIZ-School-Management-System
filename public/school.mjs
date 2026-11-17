@@ -4,7 +4,9 @@ import { getFirestore, doc, getDoc, setDoc } from 'https://www.gstatic.com/fireb
 import { app } from './firebase-client.mjs';
 
 const db = getFirestore(app);
-const schoolRef = doc(db, 'schools', 'abcd-school');
+const wanted = new URLSearchParams(location.search).get('school') ?? '';
+const SCHOOL_ID = /^[a-z][a-z0-9-]{2,29}$/.test(wanted) ? wanted : 'abcd-school';
+const schoolRef = doc(db, 'schools', SCHOOL_ID);
 const status = document.querySelector('#site-status');
 const MAP = /^https:\/\/www\.google\.com\/maps\/embed\?[^ ]*$/;
 const SECTIONS = [['about', 'About'], ['vision', 'Vision'], ['leadership', 'Leadership'], ['programmes', 'Programmes'],
