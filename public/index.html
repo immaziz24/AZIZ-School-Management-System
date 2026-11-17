@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-9">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-10">
 </head>
 <body>
   <main>
@@ -22,9 +22,10 @@
     </form>
     <section id="owner-dashboard" aria-labelledby="school-name" hidden>
       <h2 id="school-name"></h2>
+      <p id="view-only-note" role="status" hidden><strong>View only.</strong> You can look at everything, download reports and print, but you cannot change anything.</p>
       <dl>
         <dt>Role</dt>
-        <dd>School Owner</dd>
+        <dd id="owner-role">School Owner</dd>
         <dt>Signed-in account</dt>
         <dd id="owner-email"></dd>
       </dl>
@@ -852,7 +853,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-9');
+      await import('./sign-in.mjs?v=batch-10');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

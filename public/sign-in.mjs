@@ -780,6 +780,25 @@ linkForm.addEventListener('submit', (event) => {
   }, 'Access saved.', linkStatus);
 });
 const portalDashboard = document.querySelector('#portal-dashboard');
+const viewOnlyNote = document.querySelector('#view-only-note');
+const ownerRole = document.querySelector('#owner-role');
+let viewOnly = false;
+// A principal sees every owner screen but cannot change anything: the rules refuse writes, and these
+// two capture handlers stop the buttons and forms first so the page says why.
+dashboard.addEventListener('click', (event) => {
+  const button = viewOnly ? event.target.closest('button') : null;
+  if (!button || /^(download|print|show|refresh|view|preview)/i.test(button.textContent.trim())) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  viewOnlyNote.focus?.();
+  viewOnlyNote.textContent = 'View only. You cannot change anything with this login.';
+}, true);
+dashboard.addEventListener('submit', (event) => {
+  if (!viewOnly) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  viewOnlyNote.textContent = 'View only. You cannot change anything with this login.';
+}, true);
 const portalChildWrap = document.querySelector('#portal-child-wrap');
 const portalChild = document.querySelector('#portal-child');
 let portalChoice = '';
@@ -4814,6 +4833,8 @@ onAuthStateChanged(auth, async (user) => {
   portalMessaging = undefined;
   portalChoice = '';
   portalTools = undefined;
+  viewOnly = false;
+  viewOnlyNote.hidden = true;
   portalChildWrap.hidden = true;
   portalChild.replaceChildren();
   portalEventsSection.hidden = true;
@@ -5076,6 +5097,9 @@ onAuthStateChanged(auth, async (user) => {
       profileForm.elements.namedItem(field).value = school.data()[field] ?? '';
     }
     schoolUid = user.uid;
+    viewOnly = membership.data()?.role === 'principal';
+    viewOnlyNote.hidden = !viewOnly;
+    ownerRole.textContent = viewOnly ? 'Principal (view only)' : 'School Owner';
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);
     saveAssignment = (uid, assignment) => setDoc(doc(schoolRef, 'teacherAssignments', uid), assignment);
     ownerEmail.textContent = user.email;

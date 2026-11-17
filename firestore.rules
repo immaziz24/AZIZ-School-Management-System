@@ -10,8 +10,13 @@ service cloud.firestore {
       return exists(path) && get(path).data.active == true && get(path).data.role == 'owner';
     }
 
+    function isSchoolViewer(schoolId) {
+      let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
+      return exists(path) && get(path).data.active == true && get(path).data.role in ['owner', 'principal'];
+    }
+
     match /schools/{schoolId} {
-      allow get: if request.auth != null && isSchoolOwner(schoolId);
+      allow get: if request.auth != null && isSchoolViewer(schoolId);
       allow update: if request.auth != null && isSchoolOwner(schoolId)
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['name', 'contactEmail', 'phone', 'address'])
@@ -19,8 +24,8 @@ service cloud.firestore {
 
       // Staff profiles contain contact and job details only.
       match /members/{uid} {
-        allow get: if request.auth != null && (request.auth.uid == uid || isSchoolOwner(schoolId));
-        allow list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get: if request.auth != null && (request.auth.uid == uid || isSchoolViewer(schoolId));
+        allow list: if request.auth != null && isSchoolViewer(schoolId);
       }
 
       // teacherAssignments/{uid}: className and subject (strings).
@@ -30,7 +35,7 @@ service cloud.firestore {
           return exists(path) && get(path).data.active == true && get(path).data.role == 'teacher';
         }
 
-        allow get: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get: if request.auth != null && (isSchoolViewer(schoolId)
           || (request.auth.uid == uid && activeTeacher()));
         // An ID-based assignment must link a subject that is taught in the class, and its
         // display names must match those records.
@@ -47,7 +52,7 @@ service cloud.firestore {
       }
 
       match /staff/{staffId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validStaff(request.resource.data);
       }
@@ -112,7 +117,7 @@ service cloud.firestore {
       }
 
       match /classTeachers/{classId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (isActiveTeacher() && resource.data.teacherUid == request.auth.uid));
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && classId.matches('[a-z0-9-]{1,20}') && validClassTeacher(request.resource.data)
@@ -126,7 +131,7 @@ service cloud.firestore {
       // reads and reviews every mark. A linked student or parent reads only that student's marks
       // (query by studentId). Records are never deleted.
       match /attendance/{attendanceId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || classTeacherOf(resource.data.classId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || classTeacherOf(resource.data.classId)
           || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && validAttendance(request.resource.data)
           && request.resource.data.markedBy == request.auth.uid
@@ -146,7 +151,7 @@ service cloud.firestore {
       // active teacher, on any date up to tomorrow (UTC). A teacher reads only their own marks
       // (query by staffUid). Records are never deleted.
       match /staffAttendance/{recordId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (resource.data.staffUid == request.auth.uid && isActiveTeacher()));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validStaffAttendance(request.resource.data)
@@ -168,7 +173,7 @@ service cloud.firestore {
       // active teacher creates their own pending request. Only the owner decides one, and only
       // once. A teacher reads only their own requests (query by staffUid). Never deleted.
       match /leaveRequests/{requestId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (resource.data.staffUid == request.auth.uid && isActiveTeacher()));
         allow create: if request.auth != null && isActiveTeacher()
           && validLeaveRequest(request.resource.data)
@@ -191,7 +196,7 @@ service cloud.firestore {
       // mistake is voided once. Family accounts read only their own student's payments. Teachers
       // read neither.
       match /feeStructures/{feeId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyActive());
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyActive());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validFeeStructure(request.resource.data)
           && feeId == request.resource.data.yearId + '_' + request.resource.data.classId + '_' + request.resource.data.head
@@ -201,7 +206,7 @@ service cloud.firestore {
       }
 
       match /payments/{paymentId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validPayment(request.resource.data)
           && !request.resource.data.keys().hasAny(['voided'])
@@ -259,7 +264,7 @@ service cloud.firestore {
       }
 
       match /notices/{noticeId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (resource.data.audience in ['all', 'teachers'] && isActiveTeacher())
           || (resource.data.audience in ['all', 'families'] && familyActive())
           || (resource.data.audience == 'class' && (classTeacherOf(resource.data.classId)
@@ -279,7 +284,7 @@ service cloud.firestore {
       // and never edited or deleted, and only the owner reads them. Teachers can add entries only for the
       // marks and attendance they save.
       match /auditLog/{logId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create: if request.auth != null
           && (isSchoolOwner(schoolId)
             || (isActiveTeacher() && request.resource.data.action in ['marks', 'attendance']))
@@ -293,7 +298,7 @@ service cloud.firestore {
       // Timetable. timetable/{classId}_{day}_{period}: one lesson slot of a class's week. The owner
       // manages it; any active teacher reads it, and a linked family reads their own class's slots.
       match /timetable/{slotId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher()
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher()
           || familyInClass(resource.data.classId));
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validTimetableSlot(request.resource.data)
@@ -306,7 +311,7 @@ service cloud.firestore {
       // createdBy. The subject teacher of a class (or the owner) posts it and removes their own; it is
       // never edited. Read by the owner, the class's teachers, and families whose student is in the class.
       match /homework/{homeworkId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || teachesClass(resource.data.classId) || classTeacherOf(resource.data.classId)
           || familyInClass(resource.data.classId));
         allow create: if request.auth != null
@@ -325,7 +330,7 @@ service cloud.firestore {
       // School calendar. calendar/{eventId}: title, date, kind (holiday, exam, event or meeting), optional
       // note. The owner manages it; every active teacher and linked family reads it.
       match /calendar/{eventId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher() || familyActive());
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && eventId.matches('[A-Za-z0-9-]{1,30}') && validCalendarEvent(request.resource.data);
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
@@ -335,14 +340,14 @@ service cloud.firestore {
       // issuedBy, and returnedOn once it comes back. Office records: only the owner reads or writes them.
       // A loan is never deleted; a return is the one allowed change, made once.
       match /books/{bookId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && bookId.matches('[a-z0-9-]{1,20}') && validBook(request.resource.data);
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
       match /loans/{loanId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && loanId.matches('[A-Za-z0-9-]{1,30}') && validLoan(request.resource.data)
           && !request.resource.data.keys().hasAny(['returnedOn'])
@@ -363,7 +368,7 @@ service cloud.firestore {
       // Behaviour notes. behaviour/{noteId}: studentId, date, kind (positive or concern), note,
       // recordedBy. Owner only; written once and removed by the owner.
       match /behaviour/{noteId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && noteId.matches('[A-Za-z0-9-]{1,30}') && validBehaviour(request.resource.data)
           && request.resource.data.recordedBy == request.auth.uid
@@ -375,7 +380,7 @@ service cloud.firestore {
       // Visitor log. visitors/{visitId}: name, purpose, whom, phone, date, timeIn, recordedBy, and
       // timeOut once they leave. Owner only; never deleted.
       match /visitors/{visitId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && visitId.matches('[A-Za-z0-9-]{1,30}') && validVisitor(request.resource.data)
           && !request.resource.data.keys().hasAny(['timeOut'])
@@ -393,7 +398,7 @@ service cloud.firestore {
       // absentTeacher and note, createdBy. The owner arranges and removes it; the substitute teacher
       // (and the owner) read it.
       match /substitutions/{subId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (isActiveTeacher() && resource.data.substituteUid == request.auth.uid));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && subId.matches('[A-Za-z0-9-]{1,30}') && validSubstitution(request.resource.data)
@@ -407,14 +412,14 @@ service cloud.firestore {
       // studentId, routeId, optional stop. The owner manages both; linked families read routes and their
       // own student's rider record.
       match /routes/{routeId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyActive());
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyActive());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && routeId.matches('[A-Za-z0-9-]{1,30}') && validRoute(request.resource.data);
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
       match /transportRiders/{riderId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validRider(request.resource.data) && riderId == request.resource.data.studentId
           && exists(/databases/$(database)/documents/schools/$(schoolId)/routes/$(request.resource.data.routeId))
@@ -426,14 +431,14 @@ service cloud.firestore {
       // activityMembers/{activityId}_{studentId}: activityId, studentId, joinedOn. The owner manages both;
       // teachers and linked families read activities, and families read their own student's memberships.
       match /activities/{activityId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher() || familyActive());
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && activityId.matches('[A-Za-z0-9-]{1,30}') && validActivity(request.resource.data);
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
       match /activityMembers/{memberId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validActivityMember(request.resource.data)
           && memberId == request.resource.data.activityId + '_' + request.resource.data.studentId
@@ -445,7 +450,7 @@ service cloud.firestore {
 
       // Inventory. inventory/{itemId}: name, optional category and unit, quantity, minQuantity. Owner only.
       match /inventory/{itemId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && itemId.matches('[A-Za-z0-9-]{1,30}') && validInventoryItem(request.resource.data);
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
@@ -453,7 +458,7 @@ service cloud.firestore {
 
       // Alumni. alumni/{id}: name, passoutYear, optional contact, occupation and note. Owner only.
       match /alumni/{alumniId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && alumniId.matches('[A-Za-z0-9-]{1,30}') && validAlumnus(request.resource.data);
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
@@ -462,7 +467,7 @@ service cloud.firestore {
       // Health records. healthRecords/{studentId}: studentId, bloodGroup, allergies, conditions,
       // emergencyContact, notes. The owner writes them; the owner and the linked family read them.
       match /healthRecords/{recordId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validHealthRecord(request.resource.data) && recordId == request.resource.data.studentId
           && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
@@ -473,7 +478,7 @@ service cloud.firestore {
       // createdBy. The subject teacher of a class (or the owner) writes one and removes their own; plans
       // are never edited. Read by the owner and by the teacher who wrote it.
       match /lessonPlans/{planId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
         allow create: if request.auth != null
           && planId.matches('[A-Za-z0-9-]{1,30}') && validLessonPlan(request.resource.data)
@@ -490,7 +495,7 @@ service cloud.firestore {
       // The owner schedules and removes them; teachers read all, and a linked family reads the meetings
       // of the class their student is placed in this year.
       match /ptmSlots/{slotId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher() || familyInClass(resource.data.classId));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyInClass(resource.data.classId));
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && slotId.matches('[A-Za-z0-9-]{1,30}') && validPtmSlot(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
@@ -512,7 +517,7 @@ service cloud.firestore {
       // owner's reply and repliedAt. A linked family sends one for its own student and reads only its own
       // messages (query createdBy == uid). The owner reads all, adds a reply (nothing else changes) and removes.
       match /messages/{messageId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (resource.data.createdBy == request.auth.uid && familyActive()));
         allow create: if request.auth != null && messageId.matches('[A-Za-z0-9-]{1,30}')
           && validMessage(request.resource.data)
@@ -539,7 +544,7 @@ service cloud.firestore {
       // status new. Only the owner reads them, moves them through the pipeline (status and note change
       // and nothing else) and removes them.
       match /enquiries/{enquiryId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create: if enquiryId.matches('EQ-[A-Za-z0-9-]{1,30}') && validEnquiry(request.resource.data)
           && request.resource.data.status == 'new' && !request.resource.data.keys().hasAny(['note']);
         allow update: if request.auth != null && isSchoolOwner(schoolId) && validEnquiry(request.resource.data)
@@ -550,7 +555,7 @@ service cloud.firestore {
       // Event registration. eventRegistrations/{eventId}_{studentId}: a linked family registers its own
       // student for a calendar event and may cancel it; the owner reads and removes any.
       match /eventRegistrations/{regId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && validEventReg(request.resource.data)
           && regId == request.resource.data.eventId + '_' + request.resource.data.studentId
           && request.resource.data.createdBy == request.auth.uid
@@ -564,7 +569,7 @@ service cloud.firestore {
       // reads the class's submissions and adds feedback (feedback and feedbackAt are the only changes);
       // the family reads its own; the owner reads all and removes.
       match /submissions/{submissionId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || teachesClass(resource.data.classId) || classTeacherOf(resource.data.classId)
           || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && validSubmission(request.resource.data)
@@ -586,7 +591,7 @@ service cloud.firestore {
       // against the assessment, written by the subject teacher, read by the teacher, the owner and
       // the student's own family.
       match /assessments/{assessmentId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || teachesClass(resource.data.classId));
         allow create: if request.auth != null && assessmentId.matches('[A-Za-z0-9-]{1,30}')
           && validAssessment(request.resource.data)
           && request.resource.data.createdBy == request.auth.uid
@@ -598,7 +603,7 @@ service cloud.firestore {
       }
 
       match /assessmentScores/{scoreId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || teachesClass(resource.data.classId) || familyOwns(resource.data.studentId));
         allow create, update: if request.auth != null && validScore(request.resource.data)
           && scoreId == request.resource.data.assessmentId + '_' + request.resource.data.studentId
@@ -613,8 +618,8 @@ service cloud.firestore {
           let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
           return exists(path) && get(path).data.active == true && get(path).data.role in ['student', 'parent'];
         }
-        allow get: if request.auth != null && (isSchoolOwner(schoolId) || (request.auth.uid == uid && familyMember()));
-        allow list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || (request.auth.uid == uid && familyMember()));
+        allow list: if request.auth != null && isSchoolViewer(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId) && familyMember()
           && validFamilyAccess(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
@@ -653,7 +658,7 @@ service cloud.firestore {
       //   draft -> active -> closed. settings/academic.activeYearId points at the one
       //   active year; it must be written in the same batch as the year's status change.
       match /settings/academic {
-        allow get: if request.auth != null && isSchoolOwner(schoolId);
+        allow get: if request.auth != null && isSchoolViewer(schoolId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && request.resource.data.keys().hasOnly(['activeYearId'])
           && request.resource.data.activeYearId is string
@@ -666,13 +671,13 @@ service cloud.firestore {
       // Grading rules. settings/grading: the pass percentage and the lowest percentage for each grade
       // (A+ down to E; anything below E is F). The owner sets them; teachers and linked families read them.
       match /settings/grading {
-        allow get: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher() || familyActive());
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validGrading(request.resource.data);
       }
 
       match /academicYears/{yearId} {
         // Teachers read years (label, dates, status only) so a class teacher can find the active year.
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher());
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher());
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && yearId.matches('[a-z0-9-]{1,20}')
           && validYear(request.resource.data) && request.resource.data.status == 'draft';
@@ -689,7 +694,7 @@ service cloud.firestore {
 
       // classes/{classId}: name, order. sections/{sectionId}: classId, name.
       match /classes/{classId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         // A class teacher reads their own class by ID, to show its name on the attendance sheet.
         allow get: if request.auth != null && classTeacherOf(classId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
@@ -697,7 +702,7 @@ service cloud.firestore {
       }
 
       match /sections/{sectionId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || teachesClass(resource.data.classId)
           || classTeacherOf(resource.data.classId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && sectionId.matches('[a-z0-9-]{1,31}') && validSection(request.resource.data)
@@ -709,14 +714,14 @@ service cloud.firestore {
 
       // subjects/{subjectId}: name, code. classSubjects/{classId}_{subjectId}: classId, subjectId.
       match /subjects/{subjectId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow get: if request.auth != null && familyActive();
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && subjectId.matches('[a-z0-9-]{1,30}') && validSubject(request.resource.data);
       }
 
       match /classSubjects/{mappingId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && request.resource.data.keys().hasOnly(['classId', 'subjectId'])
           && request.resource.data.classId is string && request.resource.data.classId.matches('[a-z0-9-]{1,20}')
@@ -734,7 +739,7 @@ service cloud.firestore {
       // Status changes may not change anything else. Teachers can only mark open exams.
       // exams/{examId}: yearId, classId, subjectId, examKey, name, maxMarks (1-1000), status.
       match /exams/{examId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesExam(resource.data));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || teachesExam(resource.data));
         allow get, list: if request.auth != null && resource.data.published == true && familyActive();
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validExam(request.resource.data)
@@ -765,7 +770,7 @@ service cloud.firestore {
       // student is placed in that class. The maximum comes from the exam, not the teacher.
       // Owners can read every mark; a teacher can read only the marks they entered.
       match /marks/{markId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (isActiveTeacher() && resource.data.enteredBy == request.auth.uid));
         // A student or parent reads only their own student's mark, by ID, once the exam is published.
         allow get: if request.auth != null && familyOwns(resource.data.studentId)
@@ -788,7 +793,7 @@ service cloud.firestore {
       // lowercase admission number, so admission numbers are unique by construction.
       // students/{studentId}: admissionNo, name, guardianName, guardianPhone, status.
       match /students/{studentId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow get: if request.auth != null && familyOwns(studentId);
         // A class teacher reads, one by one, the students placed in their class in the active year.
         allow get: if request.auth != null && classTeacherOfStudent(studentId);
@@ -806,7 +811,7 @@ service cloud.firestore {
       // studentId. The two are always written in one batch, so a roll number belongs to one
       // student per section per year. Closed years are frozen.
       match /enrollments/{enrollmentId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId)
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || teachesClass(resource.data.classId)
           || classTeacherOf(resource.data.classId) || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validEnrollment(request.resource.data)
@@ -826,7 +831,7 @@ service cloud.firestore {
       }
 
       match /rollKeys/{rollKeyId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validRollKey(request.resource.data)
           && rollKeyId == request.resource.data.yearId + '_' + request.resource.data.sectionId
