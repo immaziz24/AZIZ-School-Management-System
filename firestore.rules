@@ -372,6 +372,103 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // Substitute cover. substitutions/{id}: date, classId, className, period, substituteUid, optional
+      // absentTeacher and note, createdBy. The owner arranges and removes it; the substitute teacher
+      // (and the owner) read it.
+      match /substitutions/{subId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || (isActiveTeacher() && resource.data.substituteUid == request.auth.uid));
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && subId.matches('[A-Za-z0-9-]{1,30}') && validSubstitution(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && activeTeacherMember(request.resource.data.substituteUid)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Transport. routes/{routeId}: name, vehicle, driver, driverPhone, stops. transportRiders/{studentId}:
+      // studentId, routeId, optional stop. The owner manages both; linked families read routes and their
+      // own student's rider record.
+      match /routes/{routeId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyActive());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && routeId.matches('[A-Za-z0-9-]{1,30}') && validRoute(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      match /transportRiders/{riderId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && validRider(request.resource.data) && riderId == request.resource.data.studentId
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/routes/$(request.resource.data.routeId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Activities. activities/{activityId}: name, optional teacher and schedule.
+      // activityMembers/{activityId}_{studentId}: activityId, studentId, joinedOn. The owner manages both;
+      // teachers and linked families read activities, and families read their own student's memberships.
+      match /activities/{activityId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher() || familyActive());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && activityId.matches('[A-Za-z0-9-]{1,30}') && validActivity(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      match /activityMembers/{memberId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && validActivityMember(request.resource.data)
+          && memberId == request.resource.data.activityId + '_' + request.resource.data.studentId
+          && request.resource.data.joinedOn <= latestAttendanceDate()
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/activities/$(request.resource.data.activityId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Inventory. inventory/{itemId}: name, optional category and unit, quantity, minQuantity. Owner only.
+      match /inventory/{itemId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && itemId.matches('[A-Za-z0-9-]{1,30}') && validInventoryItem(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Alumni. alumni/{id}: name, passoutYear, optional contact, occupation and note. Owner only.
+      match /alumni/{alumniId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && alumniId.matches('[A-Za-z0-9-]{1,30}') && validAlumnus(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Health records. healthRecords/{studentId}: studentId, bloodGroup, allergies, conditions,
+      // emergencyContact, notes. The owner writes them; the owner and the linked family read them.
+      match /healthRecords/{recordId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && validHealthRecord(request.resource.data) && recordId == request.resource.data.studentId
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Lesson plans. lessonPlans/{id}: classId, subjectId, subject, date, topic, objectives, createdAt,
+      // createdBy. The subject teacher of a class (or the owner) writes one and removes their own; plans
+      // are never edited. Read by the owner and by the teacher who wrote it.
+      match /lessonPlans/{planId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
+        allow create: if request.auth != null
+          && planId.matches('[A-Za-z0-9-]{1,30}') && validLessonPlan(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt <= latestAttendanceDate()
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && (isSchoolOwner(schoolId)
+            || (teachesClass(request.resource.data.classId) && teacherSubjectId() == request.resource.data.subjectId));
+        allow delete: if request.auth != null && (isSchoolOwner(schoolId)
+          || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
+      }
+
       match /familyAccess/{uid} {
         function familyMember() {
           let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
@@ -869,6 +966,96 @@ service cloud.firestore {
         && item.timeIn is string && item.timeIn.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
         && (!item.keys().hasAny(['timeOut']) || (item.timeOut is string && item.timeOut.matches('([01][0-9]|2[0-3]):[0-5][0-9]')))
         && item.recordedBy is string;
+    }
+
+    function validSubstitution(item) {
+      return item.keys().hasOnly(['date', 'classId', 'className', 'period', 'substituteUid', 'absentTeacher', 'note', 'createdBy'])
+        && item.keys().hasAll(['date', 'classId', 'className', 'period', 'substituteUid', 'createdBy'])
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.className is string && item.className.size() >= 1 && item.className.size() <= 40
+        && item.period is int && item.period >= 1 && item.period <= 12
+        && item.substituteUid is string && item.createdBy is string
+        && (!item.keys().hasAny(['absentTeacher']) || (item.absentTeacher is string && item.absentTeacher.size() <= 60))
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+    }
+
+    function validRoute(item) {
+      return item.keys().hasOnly(['name', 'vehicle', 'driver', 'driverPhone', 'stops'])
+        && item.keys().hasAll(['name'])
+        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
+        && (!item.keys().hasAny(['vehicle']) || (item.vehicle is string && item.vehicle.size() <= 30))
+        && (!item.keys().hasAny(['driver']) || (item.driver is string && item.driver.size() <= 60))
+        && (!item.keys().hasAny(['driverPhone']) || (item.driverPhone is string && item.driverPhone.matches('[0-9+() -]{0,20}')))
+        && (!item.keys().hasAny(['stops']) || (item.stops is string && item.stops.size() <= 300));
+    }
+
+    function validRider(item) {
+      return item.keys().hasOnly(['studentId', 'routeId', 'stop'])
+        && item.keys().hasAll(['studentId', 'routeId'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.routeId is string && item.routeId.matches('[A-Za-z0-9-]{1,30}')
+        && (!item.keys().hasAny(['stop']) || (item.stop is string && item.stop.size() <= 60));
+    }
+
+    function validActivity(item) {
+      return item.keys().hasOnly(['name', 'teacher', 'schedule'])
+        && item.keys().hasAll(['name'])
+        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
+        && (!item.keys().hasAny(['teacher']) || (item.teacher is string && item.teacher.size() <= 60))
+        && (!item.keys().hasAny(['schedule']) || (item.schedule is string && item.schedule.size() <= 100));
+    }
+
+    function validActivityMember(item) {
+      return item.keys().hasOnly(['activityId', 'studentId', 'joinedOn'])
+        && item.keys().hasAll(['activityId', 'studentId', 'joinedOn'])
+        && item.activityId is string && item.activityId.matches('[A-Za-z0-9-]{1,30}')
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.joinedOn is string && item.joinedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.joinedOn >= '2020-01-01';
+    }
+
+    function validInventoryItem(item) {
+      return item.keys().hasOnly(['name', 'category', 'unit', 'quantity', 'minQuantity'])
+        && item.keys().hasAll(['name', 'quantity', 'minQuantity'])
+        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
+        && (!item.keys().hasAny(['category']) || (item.category is string && item.category.size() <= 40))
+        && (!item.keys().hasAny(['unit']) || (item.unit is string && item.unit.size() <= 20))
+        && item.quantity is int && item.quantity >= 0 && item.quantity <= 1000000
+        && item.minQuantity is int && item.minQuantity >= 0 && item.minQuantity <= 1000000;
+    }
+
+    function validAlumnus(item) {
+      return item.keys().hasOnly(['name', 'passoutYear', 'contact', 'occupation', 'note'])
+        && item.keys().hasAll(['name', 'passoutYear'])
+        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
+        && item.passoutYear is int && item.passoutYear >= 1950 && item.passoutYear <= 2100
+        && (!item.keys().hasAny(['contact']) || (item.contact is string && item.contact.size() <= 100))
+        && (!item.keys().hasAny(['occupation']) || (item.occupation is string && item.occupation.size() <= 100))
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 300));
+    }
+
+    function validHealthRecord(item) {
+      return item.keys().hasOnly(['studentId', 'bloodGroup', 'allergies', 'conditions', 'emergencyContact', 'notes'])
+        && item.keys().hasAll(['studentId', 'bloodGroup'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.bloodGroup in ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+        && (!item.keys().hasAny(['allergies']) || (item.allergies is string && item.allergies.size() <= 200))
+        && (!item.keys().hasAny(['conditions']) || (item.conditions is string && item.conditions.size() <= 200))
+        && (!item.keys().hasAny(['emergencyContact']) || (item.emergencyContact is string && item.emergencyContact.size() <= 100))
+        && (!item.keys().hasAny(['notes']) || (item.notes is string && item.notes.size() <= 300));
+    }
+
+    function validLessonPlan(item) {
+      return item.keys().hasOnly(['classId', 'subjectId', 'subject', 'date', 'topic', 'objectives', 'createdAt', 'createdBy'])
+        && item.keys().hasAll(['classId', 'subjectId', 'subject', 'date', 'topic', 'objectives', 'createdAt', 'createdBy'])
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
+        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && item.topic is string && item.topic.size() <= 100 && item.topic.matches('.*[^[:space:]].*')
+        && item.objectives is string && item.objectives.size() <= 1000 && item.objectives.matches('.*[^[:space:]].*')
+        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && item.createdBy is string;
     }
 
     function validFamilyAccess(item) {

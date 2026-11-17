@@ -223,6 +223,8 @@ async function loadAcademic(request) {
     renderReportStudents();
     renderCardStudents();
     renderOfficeStudents();
+    refreshOwnerLists();
+    renderPromotionYears();
     renderFamilyLinks();
     classTeacherData = classTeacherDocs.docs;
     renderClassTeachers();
@@ -789,6 +791,7 @@ async function loadPortal(tools, request) {
     loadPortalFees(tools, request, studentId);
     loadPortalNotices(tools, request, studentId);
     loadPortalSchoolwork(tools, request, studentId);
+    loadPortalLife(tools, request, studentId);
     loadUpcomingEvents(tools.schoolRef, portalCalendarSection, portalCalendarStatus, portalCalendarList);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
@@ -3394,6 +3397,532 @@ behaviourForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Owner record lists. Each of these sections is a small form plus a list: the owner adds records,
+// sees them, and removes them. Every save and removal goes through academic.save / academic.remove,
+// so it lands in the activity log. Records are never edited in place unless the rules say so.
+const ownerLists = [];
+
+function ownerList(cfg) {
+  const section = document.querySelector('#' + cfg.id);
+  const status = document.querySelector('#' + cfg.id + '-status');
+  const form = document.querySelector('#' + cfg.id + '-form');
+  const list = document.querySelector('#' + cfg.id + '-list');
+  const api = { cfg, items: [] };
+
+  async function act(action, message, question) {
+    const tools = academic;
+    if (!tools || tools.busy || (question && !confirm(question))) return;
+    const request = schoolRequest;
+    tools.busy = true;
+    try {
+      await action();
+      tools.busy = false;
+      await api.load(request);
+      if (request === schoolRequest) status.textContent = message;
+    } catch {
+      if (request === schoolRequest) status.textContent = 'That did not work. Check the details and try again.';
+    } finally {
+      tools.busy = false;
+    }
+  }
+
+  api.render = () => {
+    if (form && cfg.prepare) cfg.prepare(form, api.items);
+    list.replaceChildren();
+    for (const record of [...api.items].sort(cfg.sort ?? ((a, b) => a.id.localeCompare(b.id)))) {
+      const item = document.createElement('li');
+      item.textContent = cfg.line(record.data(), record) + ' ';
+      for (const extra of cfg.extra?.(record, act) ?? []) item.append(extra, ' ');
+      if (!cfg.noRemove && (!cfg.canRemove || cfg.canRemove(record))) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Remove';
+        button.addEventListener('click', () => act(() => academic.remove(cfg.collection, record.id), 'Removed.',
+          'Remove this record? ' + cfg.line(record.data(), record)));
+        item.append(button);
+      }
+      list.append(item);
+    }
+    if (!api.items.length) status.textContent = cfg.empty;
+  };
+
+  api.load = async (request) => {
+    try {
+      const saved = await academic.list(cfg.collection);
+      if (request !== schoolRequest) return;
+      api.items = saved.docs;
+      section.hidden = false;
+      status.textContent = '';
+      api.render();
+    } catch {
+      if (request === schoolRequest) {
+        section.hidden = false;
+        status.textContent = 'Could not load this list. Try again.';
+      }
+    }
+  };
+
+  api.reset = () => {
+    section.hidden = true;
+    status.textContent = '';
+    list.replaceChildren();
+    api.items = [];
+    form?.reset();
+  };
+
+  form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const built = cfg.build(new FormData(form), api.items);
+    if (built.error) {
+      status.textContent = built.error;
+      return;
+    }
+    act(async () => {
+      await academic.save(cfg.collection, built.id, built.data);
+      form.reset();
+    }, cfg.saved ?? 'Saved.');
+  });
+
+  ownerLists.push(api);
+  return api;
+}
+
+const text = (fields, key) => String(fields.get(key) ?? '').trim();
+const optional = (fields, ...keys) => Object.fromEntries(keys.filter((key) => text(fields, key)).map((key) => [key, text(fields, key)]));
+const wholeNumber = (fields, key) => (/^[0-9]+$/.test(text(fields, key)) ? Number(text(fields, key)) : NaN);
+const phoneOk = (value) => /^[0-9+() -]{0,20}$/.test(value);
+const byStudentName = (a, b) => a.data().name.localeCompare(b.data().name);
+const studentOption = (item) => item.name + ' (' + item.admissionNo + ')';
+const teacherRecords = () => staffRoster.map((uid) => ({ id: uid, data: () => ({ label: staffLabel(uid) }) }));
+const routeName = (id) => lists.routes.items.find((record) => record.id === id)?.data().name ?? id;
+const activityName = (id) => lists.activities.items.find((record) => record.id === id)?.data().name ?? id;
+
+const lists = {};
+lists.substitutions = ownerList({
+  id: 'substitutions', collection: 'substitutions', empty: 'No cover has been arranged yet.', saved: 'Cover arranged.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('classId'), [...examData.classes].sort(byClassOrder), (item) => item.name);
+    fillSelect(form.elements.namedItem('substituteUid'), teacherRecords(), (item) => item.label);
+  },
+  build: (fields) => {
+    const date = text(fields, 'date');
+    const period = wholeNumber(fields, 'period');
+    const classId = text(fields, 'classId');
+    const substituteUid = text(fields, 'substituteUid');
+    if (!DATE_TEXT.test(date) || !classId || !substituteUid) return { error: 'Choose the date, the class and the substitute teacher.' };
+    if (!(period >= 1 && period <= 12)) return { error: 'Period number must be from 1 to 12.' };
+    return { id: newId('SB'), data: { date, classId, className: nameOfClass(classId), period, substituteUid,
+      ...optional(fields, 'absentTeacher', 'note'), createdBy: schoolUid } };
+  },
+  line: (item) => item.date + ' - ' + item.className + ' period ' + item.period + ' - ' + staffLabel(item.substituteUid)
+    + (item.absentTeacher ? ' - covering ' + item.absentTeacher : '') + (item.note ? ' (' + item.note + ')' : ''),
+});
+
+lists.routes = ownerList({
+  id: 'routes', collection: 'routes', empty: 'No routes yet.', saved: 'Route added.',
+  sort: (a, b) => a.data().name.localeCompare(b.data().name),
+  canRemove: (record) => !lists.riders.items.some((rider) => rider.data().routeId === record.id),
+  build: (fields) => {
+    if (!text(fields, 'name')) return { error: 'Enter the route name.' };
+    if (!phoneOk(text(fields, 'driverPhone'))) return { error: 'Phone may use digits, +, spaces, hyphens and brackets only.' };
+    return { id: newId('RT'), data: { name: text(fields, 'name'), ...optional(fields, 'vehicle', 'driver', 'driverPhone', 'stops') } };
+  },
+  line: (item) => item.name + (item.vehicle ? ' - ' + item.vehicle : '') + (item.driver ? ' - driver ' + item.driver : '')
+    + (item.driverPhone ? ' (' + item.driverPhone + ')' : '') + (item.stops ? ' - stops: ' + item.stops : ''),
+});
+
+lists.riders = ownerList({
+  id: 'riders', collection: 'transportRiders', empty: 'No students have been assigned to a route yet.', saved: 'Student assigned. Saving again changes their route.',
+  sort: (a, b) => nameOfStudent(a.id).localeCompare(nameOfStudent(b.id)),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('studentId'), studentRecords.filter((record) => record.data().status === 'active').sort(byStudentName),
+      studentOption);
+    fillSelect(form.elements.namedItem('routeId'), lists.routes.items, (item) => item.name);
+  },
+  build: (fields) => {
+    if (!text(fields, 'studentId') || !text(fields, 'routeId')) return { error: 'Choose a student and a route. Add a route first if there is none.' };
+    return { id: text(fields, 'studentId'), data: { studentId: text(fields, 'studentId'), routeId: text(fields, 'routeId'), ...optional(fields, 'stop') } };
+  },
+  line: (item) => nameOfStudent(item.studentId) + ' - ' + routeName(item.routeId) + (item.stop ? ' - stop ' + item.stop : ''),
+});
+
+lists.activities = ownerList({
+  id: 'activities', collection: 'activities', empty: 'No activities yet.', saved: 'Activity added.',
+  sort: (a, b) => a.data().name.localeCompare(b.data().name),
+  canRemove: (record) => !lists.members.items.some((member) => member.data().activityId === record.id),
+  build: (fields) => {
+    if (!text(fields, 'name')) return { error: 'Enter the activity name.' };
+    return { id: newId('AC'), data: { name: text(fields, 'name'), ...optional(fields, 'teacher', 'schedule') } };
+  },
+  line: (item) => item.name + (item.teacher ? ' - ' + item.teacher : '') + (item.schedule ? ' - ' + item.schedule : ''),
+});
+
+lists.members = ownerList({
+  id: 'members', collection: 'activityMembers', empty: 'No members yet.', saved: 'Member added.',
+  sort: (a, b) => activityName(a.data().activityId).localeCompare(activityName(b.data().activityId)) || nameOfStudent(a.data().studentId).localeCompare(nameOfStudent(b.data().studentId)),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('activityId'), lists.activities.items, (item) => item.name);
+    fillSelect(form.elements.namedItem('studentId'), studentRecords.filter((record) => record.data().status === 'active').sort(byStudentName),
+      studentOption);
+  },
+  build: (fields, items) => {
+    const activityId = text(fields, 'activityId');
+    const studentId = text(fields, 'studentId');
+    if (!activityId || !studentId) return { error: 'Choose an activity and a student. Add an activity first if there is none.' };
+    if (items.some((record) => record.id === activityId + '_' + studentId)) return { error: 'This student is already a member.' };
+    return { id: activityId + '_' + studentId, data: { activityId, studentId, joinedOn: localToday() } };
+  },
+  line: (item) => activityName(item.activityId) + ' - ' + nameOfStudent(item.studentId) + ' (joined ' + item.joinedOn + ')',
+});
+
+lists.inventory = ownerList({
+  id: 'inventory', collection: 'inventory', empty: 'No items yet.', saved: 'Item added.',
+  sort: (a, b) => a.data().name.localeCompare(b.data().name),
+  build: (fields) => {
+    const quantity = wholeNumber(fields, 'quantity');
+    const minQuantity = wholeNumber(fields, 'minQuantity');
+    if (!text(fields, 'name') || Number.isNaN(quantity) || Number.isNaN(minQuantity)) return { error: 'Enter the item and whole numbers for the quantities.' };
+    return { id: newId('IV'), data: { name: text(fields, 'name'), ...optional(fields, 'category', 'unit'), quantity, minQuantity } };
+  },
+  line: (item) => item.name + (item.category ? ' (' + item.category + ')' : '') + ' - ' + item.quantity + (item.unit ? ' ' + item.unit : '')
+    + (item.quantity <= item.minQuantity ? ' - LOW STOCK' : ''),
+  extra: (record, act) => ['Add stock', 'Use stock'].map((label, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', () => {
+      const amount = Number(prompt(label + ': how many?') ?? '');
+      if (!Number.isInteger(amount) || amount < 1) return;
+      const item = record.data();
+      const quantity = item.quantity + (index === 0 ? amount : -amount);
+      if (quantity < 0 || quantity > 1000000) {
+        lists.inventory.status?.();
+        return;
+      }
+      act(() => academic.save('inventory', record.id, { ...item, quantity }), 'Stock updated.');
+    });
+    return button;
+  }),
+});
+
+lists.alumni = ownerList({
+  id: 'alumni', collection: 'alumni', empty: 'No alumni yet.', saved: 'Alumnus added.',
+  sort: (a, b) => b.data().passoutYear - a.data().passoutYear || a.data().name.localeCompare(b.data().name),
+  build: (fields) => {
+    const year = wholeNumber(fields, 'passoutYear');
+    if (!text(fields, 'name') || !(year >= 1950 && year <= 2100)) return { error: 'Enter the name and the year they left (1950 to 2100).' };
+    return { id: newId('AL'), data: { name: text(fields, 'name'), passoutYear: year, ...optional(fields, 'contact', 'occupation', 'note') } };
+  },
+  line: (item) => item.passoutYear + ' - ' + item.name + (item.occupation ? ' - ' + item.occupation : '')
+    + (item.contact ? ' - ' + item.contact : '') + (item.note ? ' (' + item.note + ')' : ''),
+});
+
+lists.health = ownerList({
+  id: 'health', collection: 'healthRecords', empty: 'No health records yet.', saved: 'Health record saved. Saving again for the same student replaces it.',
+  sort: (a, b) => nameOfStudent(a.id).localeCompare(nameOfStudent(b.id)),
+  prepare: (form) => fillSelect(form.elements.namedItem('studentId'), [...studentRecords].sort(byStudentName), studentOption),
+  build: (fields) => {
+    if (!text(fields, 'studentId')) return { error: 'Choose a student.' };
+    return { id: text(fields, 'studentId'), data: { studentId: text(fields, 'studentId'), bloodGroup: text(fields, 'bloodGroup'),
+      ...optional(fields, 'allergies', 'conditions', 'emergencyContact', 'notes') } };
+  },
+  line: (item) => nameOfStudent(item.studentId) + (item.bloodGroup ? ' - blood group ' + item.bloodGroup : '')
+    + (item.allergies ? ' - allergies: ' + item.allergies : '') + (item.conditions ? ' - conditions: ' + item.conditions : '')
+    + (item.emergencyContact ? ' - emergency: ' + item.emergencyContact : '') + (item.notes ? ' (' + item.notes + ')' : ''),
+});
+
+lists.lessons = ownerList({
+  id: 'lessons-owner', collection: 'lessonPlans', empty: 'No lesson plans yet.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  line: (item) => item.date + ' - ' + nameOfClass(item.classId) + ' - ' + item.subject + ': ' + item.topic + ' - ' + item.objectives,
+});
+
+async function loadOwnerLists(request) {
+  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'health', 'lessons']) {
+    if (request !== schoolRequest) return;
+    await lists[name].load(request);
+  }
+}
+const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.render(); };
+const resetOwnerLists = () => { for (const api of ownerLists) api.reset(); };
+
+// Class promotion. Each student of the "from" year gets a placement in the "to" year through the same
+// enrollment and roll-number records the placement screen writes, so every existing rule still applies.
+const promotionSection = document.querySelector('#promotion');
+const promotionStatus = document.querySelector('#promotion-status');
+const promotionFrom = document.querySelector('#promotion-from');
+const promotionTo = document.querySelector('#promotion-to');
+const promotionMap = document.querySelector('#promotion-map');
+const promotionRun = document.querySelector('#promotion-run');
+const PROMOTION_PARALLEL = 10;
+let promotionPlan = [];
+
+function renderPromotionYears() {
+  const years = [...examData.years].sort((a, b) => a.data().startDate.localeCompare(b.data().startDate));
+  fillSelect(promotionFrom, years, (year) => year.label + ' (' + year.status + ')');
+  fillSelect(promotionTo, years.filter((record) => ['draft', 'active'].includes(record.data().status)),
+    (year) => year.label + ' (' + year.status + ')');
+  promotionSection.hidden = false;
+}
+
+document.querySelector('#promotion-preview').addEventListener('click', () => {
+  promotionMap.replaceChildren();
+  promotionPlan = [];
+  promotionRun.disabled = true;
+  const from = promotionFrom.value;
+  const to = promotionTo.value;
+  if (!from || !to || from === to) {
+    promotionStatus.textContent = 'Choose two different years. The "to" year must be a draft or active year.';
+    return;
+  }
+  const classes = [...examData.classes].sort(byClassOrder);
+  const counts = new Map();
+  for (const record of placementData.enrollments) {
+    if (record.data().yearId === from) counts.set(record.data().classId, (counts.get(record.data().classId) ?? 0) + 1);
+  }
+  if (!counts.size) {
+    promotionStatus.textContent = 'No students are placed in the "from" year.';
+    return;
+  }
+  for (const record of classes.filter((item) => counts.has(item.id))) {
+    const index = classes.indexOf(record);
+    const row = document.createElement('p');
+    const label = document.createElement('label');
+    label.textContent = record.data().name + ' (' + counts.get(record.id) + ' students) moves to ';
+    const select = document.createElement('select');
+    select.dataset.from = record.id;
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'Nobody - they leave or graduate';
+    select.append(none);
+    for (const target of classes) {
+      const option = document.createElement('option');
+      option.value = target.id;
+      option.textContent = target.data().name;
+      select.append(option);
+    }
+    select.value = classes[index + 1]?.id ?? '';
+    label.append(select);
+    row.append(label);
+    promotionMap.append(row);
+  }
+  promotionRun.disabled = false;
+  promotionStatus.textContent = 'Check where each class goes, then click Promote students.';
+});
+
+promotionRun.addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const from = promotionFrom.value;
+  const to = promotionTo.value;
+  const target = new Map([...promotionMap.querySelectorAll('select')].map((select) => [select.dataset.from, select.value]));
+  const active = new Set(studentRecords.filter((record) => record.data().status === 'active').map((record) => record.id));
+  const sectionOf = (id) => placementData.sections.find((record) => record.id === id)?.data();
+  const used = new Map();
+  const taken = new Set();
+  for (const record of placementData.enrollments) {
+    const item = record.data();
+    if (item.yearId !== to) continue;
+    taken.add(item.studentId);
+    if (!used.has(item.sectionId)) used.set(item.sectionId, new Set());
+    used.get(item.sectionId).add(item.rollNo);
+  }
+  const movers = placementData.enrollments.map((record) => record.data())
+    .filter((item) => item.yearId === from && target.get(item.classId) && active.has(item.studentId) && !taken.has(item.studentId))
+    .sort((a, b) => (sectionOf(a.sectionId)?.name ?? '').localeCompare(sectionOf(b.sectionId)?.name ?? '') || a.rollNo - b.rollNo);
+  const plan = [];
+  let skipped = 0;
+  for (const item of movers) {
+    const classId = target.get(item.classId);
+    const sections = placementData.sections.filter((record) => record.data().classId === classId)
+      .sort((a, b) => a.data().name.localeCompare(b.data().name));
+    const section = sections.find((record) => record.data().name === sectionOf(item.sectionId)?.name) ?? sections[0];
+    if (!section) { skipped += 1; continue; }
+    const rolls = used.get(section.id) ?? new Set();
+    used.set(section.id, rolls);
+    let rollNo = item.rollNo;
+    while (rolls.has(rollNo) && rollNo < 999) rollNo += 1;
+    if (rolls.has(rollNo)) {
+      rollNo = 1;
+      while (rolls.has(rollNo) && rollNo < 999) rollNo += 1;
+    }
+    if (rolls.has(rollNo)) { skipped += 1; continue; }
+    rolls.add(rollNo);
+    plan.push([
+      { path: ['enrollments', to + '_' + item.studentId], data: { yearId: to, studentId: item.studentId, classId, sectionId: section.id, rollNo } },
+      { path: ['rollKeys', to + '_' + section.id + '_' + rollNo], data: { yearId: to, sectionId: section.id, rollNo, studentId: item.studentId } },
+    ]);
+  }
+  if (!plan.length) {
+    promotionStatus.textContent = 'There is nobody to promote. Everyone may already be placed in the new year, or the new classes have no sections yet.'
+      + (skipped ? ' (' + skipped + ' could not be placed.)' : '');
+    return;
+  }
+  const yearName = (id) => examData.years.find((record) => record.id === id)?.data().label ?? id;
+  if (!confirm('Promote ' + plan.length + ' students from ' + yearName(from) + ' to ' + yearName(to) + '?'
+    + (skipped ? ' ' + skipped + ' cannot be placed and will be left out.' : ''))) return;
+  const request = schoolRequest;
+  tools.busy = true;
+  promotionRun.disabled = true;
+  let done = 0;
+  try {
+    for (let start = 0; start < plan.length; start += PROMOTION_PARALLEL) {
+      promotionStatus.textContent = 'Promoting ' + (start + 1) + ' of ' + plan.length + '.';
+      const results = await Promise.allSettled(plan.slice(start, start + PROMOTION_PARALLEL).map((ops) => tools.commit(ops, true)));
+      done += results.filter((result) => result.status === 'fulfilled').length;
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
+    }
+    tools.busy = false;
+    await tools.log('bulk', 'enrollments', 'promotion ' + from + ' to ' + to, done + ' students');
+    promotionMap.replaceChildren();
+    await loadAcademic(request);
+    if (request === schoolRequest) promotionStatus.textContent = 'Promoted ' + done + ' students.' + (skipped ? ' ' + skipped + ' could not be placed.' : '');
+  } catch {
+    tools.busy = false;
+    await tools.log('bulk', 'enrollments', 'promotion ' + from + ' to ' + to, done + ' students (stopped early)');
+    if (request === schoolRequest) {
+      promotionStatus.textContent = 'Promoted ' + done + ' of ' + plan.length + ' before an error. Click Show classes and run it again; students already moved are skipped.';
+    }
+  } finally {
+    tools.busy = false;
+  }
+});
+
+// Teacher side: cover duties and lesson plans.
+const teacherCoverSection = document.querySelector('#teacher-cover');
+const teacherCoverStatus = document.querySelector('#teacher-cover-status');
+const teacherCoverList = document.querySelector('#teacher-cover-list');
+const teacherLessonsSection = document.querySelector('#teacher-lessons');
+const teacherLessonsStatus = document.querySelector('#teacher-lessons-status');
+const teacherLessonsList = document.querySelector('#teacher-lessons-list');
+const lessonForm = document.querySelector('#lesson-form');
+
+async function loadTeacherCover(request, schoolRef, uid) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  teacherCoverSection.hidden = false;
+  teacherCoverStatus.textContent = 'Loading cover duties.';
+  try {
+    const saved = await getDocsFromServer(query(collection(schoolRef, 'substitutions'), where('substituteUid', '==', uid)));
+    if (request !== schoolRequest) return;
+    const today = localToday();
+    const upcoming = saved.docs.map((record) => record.data()).filter((item) => item.date >= today)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
+    teacherCoverList.replaceChildren();
+    for (const item of upcoming) {
+      listItem(teacherCoverList, item.date + ' - ' + item.className + ' period ' + item.period
+        + (item.absentTeacher ? ' - covering ' + item.absentTeacher : '') + (item.note ? ' (' + item.note + ')' : ''));
+    }
+    teacherCoverStatus.textContent = upcoming.length ? '' : 'You have no cover duties coming up.';
+  } catch {
+    if (request === schoolRequest) teacherCoverStatus.textContent = 'Could not load cover duties. Try again.';
+  }
+}
+
+async function loadTeacherLessons(request) {
+  const context = teacherHomework;
+  if (!context) return;
+  const { collection, query, where, getDocsFromServer, doc, deleteDoc } = firestoreTools;
+  teacherLessonsSection.hidden = false;
+  teacherLessonsStatus.textContent = 'Loading lesson plans.';
+  try {
+    const saved = await getDocsFromServer(query(collection(context.schoolRef, 'lessonPlans'), where('createdBy', '==', context.uid)));
+    if (request !== schoolRequest || context !== teacherHomework) return;
+    teacherLessonsList.replaceChildren();
+    for (const record of saved.docs.sort((a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id))) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Remove';
+      button.addEventListener('click', async () => {
+        if (context.busy || !confirm('Remove this lesson plan?')) return;
+        context.busy = true;
+        try {
+          await deleteDoc(doc(context.schoolRef, 'lessonPlans', record.id));
+        } catch {
+          teacherLessonsStatus.textContent = 'Could not remove the lesson plan. Try again.';
+        } finally {
+          context.busy = false;
+        }
+        await loadTeacherLessons(request);
+      });
+      const item = record.data();
+      listItem(teacherLessonsList, item.date + ' - ' + item.topic + ': ' + item.objectives, button);
+    }
+    teacherLessonsStatus.textContent = saved.docs.length ? '' : 'No lesson plans yet.';
+  } catch {
+    if (request === schoolRequest) teacherLessonsStatus.textContent = 'Could not load lesson plans. Try again.';
+  }
+}
+
+lessonForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = teacherHomework;
+  if (!context || context.busy) return;
+  const fields = new FormData(lessonForm);
+  const date = text(fields, 'date');
+  const topic = text(fields, 'topic');
+  const objectives = text(fields, 'objectives');
+  if (!DATE_TEXT.test(date) || !topic || !objectives) {
+    teacherLessonsStatus.textContent = 'Enter the date, the topic and the objectives.';
+    return;
+  }
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  teacherLessonsStatus.textContent = 'Saving.';
+  try {
+    await setDoc(doc(context.schoolRef, 'lessonPlans', newId('LP')), {
+      classId: context.classId, subjectId: context.subjectId, subject: context.subject,
+      date, topic, objectives, createdAt: localToday(), createdBy: context.uid,
+    });
+    context.busy = false;
+    lessonForm.reset();
+    await loadTeacherLessons(request);
+    if (request === schoolRequest) teacherLessonsStatus.textContent = 'Lesson plan saved.';
+  } catch {
+    if (request === schoolRequest) teacherLessonsStatus.textContent = 'Could not save the lesson plan. Check the details and try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+
+// Student and parent page: the child's bus route and activities.
+const portalLifeSection = document.querySelector('#portal-life');
+const portalLifeStatus = document.querySelector('#portal-life-status');
+const portalLifeList = document.querySelector('#portal-life-list');
+
+async function loadPortalLife(tools, request, studentId) {
+  const { schoolRef, collection, doc, getDocFromServer, getDocsFromServer, query, where } = tools;
+  portalLifeSection.hidden = false;
+  portalLifeStatus.textContent = 'Loading.';
+  try {
+    const [riders, members] = await Promise.all([
+      getDocsFromServer(query(collection(schoolRef, 'transportRiders'), where('studentId', '==', studentId))),
+      getDocsFromServer(query(collection(schoolRef, 'activityMembers'), where('studentId', '==', studentId)))]);
+    const lines = [];
+    for (const rider of riders.docs) {
+      const route = await getDocFromServer(doc(schoolRef, 'routes', rider.data().routeId));
+      const data = route.exists() ? route.data() : {};
+      lines.push('Bus: ' + (data.name ?? rider.data().routeId) + (rider.data().stop ? ' - stop ' + rider.data().stop : '')
+        + (data.vehicle ? ' - vehicle ' + data.vehicle : '') + (data.driver ? ' - driver ' + data.driver : '')
+        + (data.driverPhone ? ' (' + data.driverPhone + ')' : ''));
+    }
+    for (const member of members.docs) {
+      const activity = await getDocFromServer(doc(schoolRef, 'activities', member.data().activityId));
+      const data = activity.exists() ? activity.data() : {};
+      lines.push('Activity: ' + (data.name ?? member.data().activityId) + (data.schedule ? ' - ' + data.schedule : '')
+        + (data.teacher ? ' - ' + data.teacher : ''));
+    }
+    if (request !== schoolRequest) return;
+    portalLifeList.replaceChildren();
+    for (const line of lines) listItem(portalLifeList, line);
+    portalLifeStatus.textContent = lines.length ? '' : 'No bus route or activities are recorded yet.';
+  } catch {
+    if (request === schoolRequest) portalLifeStatus.textContent = 'Could not load this information. Try again.';
+  }
+}
+
 // Teachers' saves are logged as one summary entry each (who, which exam or class day, how many).
 // The log never blocks the save itself: if the entry cannot be written, the save still stands.
 function writeAudit(schoolRef, uid, action, target, docId, detail) {
@@ -3477,6 +4006,21 @@ onAuthStateChanged(auth, async (user) => {
   behaviourStatus.textContent = '';
   behaviourList.replaceChildren();
   behaviourData = [];
+  resetOwnerLists();
+  promotionSection.hidden = true;
+  promotionStatus.textContent = '';
+  promotionMap.replaceChildren();
+  promotionPlan = [];
+  teacherCoverSection.hidden = true;
+  teacherCoverStatus.textContent = '';
+  teacherCoverList.replaceChildren();
+  teacherLessonsSection.hidden = true;
+  teacherLessonsStatus.textContent = '';
+  teacherLessonsList.replaceChildren();
+  lessonForm.reset();
+  portalLifeSection.hidden = true;
+  portalLifeStatus.textContent = '';
+  portalLifeList.replaceChildren();
   gradingSection.hidden = true;
   gradingStatus.textContent = '';
   grading = { ...DEFAULT_GRADING };
@@ -3691,6 +4235,8 @@ onAuthStateChanged(auth, async (user) => {
       if (request === schoolRequest) await loadTeacherNotices(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadTeacherHomework(request);
       if (request === schoolRequest) await loadTeacherTimetable(request, schoolRef, user.uid);
+      if (request === schoolRequest) await loadTeacherCover(request, schoolRef, user.uid);
+      if (request === schoolRequest) await loadTeacherLessons(request);
       if (request === schoolRequest) await loadUpcomingEvents(schoolRef, teacherCalendarSection, teacherCalendarStatus, teacherCalendarList);
       return;
     }
@@ -3764,13 +4310,14 @@ onAuthStateChanged(auth, async (user) => {
       },
       close: (id) => updateDoc(doc(schoolRef, 'academicYears', id), { status: 'closed' })
         .then(() => log('close-year', 'academicYears', id, '')),
-      commit: (ops) => {
+      log,
+      commit: (ops, quiet) => {
         const batch = writeBatch(firestore);
         for (const op of ops) {
           const ref = doc(schoolRef, ...op.path);
           if (op.delete) batch.delete(ref); else batch.set(ref, op.data);
         }
-        return batch.commit().then(() => log('bulk', ops[0]?.path[0] ?? 'records', ops.length + ' records', ''));
+        return batch.commit().then(() => (quiet ? undefined : log('bulk', ops[0]?.path[0] ?? 'records', ops.length + ' records', '')));
       },
     };
     academicSection.hidden = false;
@@ -3805,6 +4352,8 @@ onAuthStateChanged(auth, async (user) => {
     if (request === schoolRequest) await loadLibrary(request);
     if (request === schoolRequest) await loadVisitors(request);
     if (request === schoolRequest) await loadBehaviour(request);
+    if (request === schoolRequest) renderPromotionYears();
+    if (request === schoolRequest) await loadOwnerLists(request);
     if (request === schoolRequest) await renderSummary(request);
   } catch (error) {
     if (request !== schoolRequest) return;

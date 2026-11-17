@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-3">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-4">
 </head>
 <body>
   <main>
@@ -384,6 +384,120 @@
         </form>
         <ul id="behaviour-list"></ul>
       </section>
+      <section id="promotion" aria-labelledby="promotion-title" hidden>
+        <h3 id="promotion-title">Promote Students to the Next Year</h3>
+        <p id="promotion-status" role="status"></p>
+        <p>Moves each student from one academic year to the next. Create the new year and its classes and sections first. Roll numbers are kept where free, and sections are matched by name.</p>
+        <p><label>From year <select id="promotion-from"></select></label></p>
+        <p><label>To year <select id="promotion-to"></select></label></p>
+        <button id="promotion-preview" type="button">Show classes</button>
+        <div id="promotion-map"></div>
+        <button id="promotion-run" type="button" disabled>Promote students</button>
+      </section>
+      <section id="substitutions" aria-labelledby="substitutions-title" hidden>
+        <h3 id="substitutions-title">Substitute Cover</h3>
+        <p id="substitutions-status" role="status"></p>
+        <form id="substitutions-form">
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Class <select name="classId"></select></label></p>
+          <p><label>Period number <input name="period" type="number" min="1" max="12" step="1" required></label></p>
+          <p><label>Substitute teacher <select name="substituteUid"></select></label></p>
+          <p><label>Teacher who is away (optional) <input name="absentTeacher" type="text" maxlength="60"></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <button type="submit">Arrange cover</button>
+        </form>
+        <ul id="substitutions-list"></ul>
+      </section>
+      <section id="routes" aria-labelledby="routes-title" hidden>
+        <h3 id="routes-title">Transport Routes</h3>
+        <p id="routes-status" role="status"></p>
+        <form id="routes-form">
+          <p><label>Route name <input name="name" type="text" maxlength="60" required></label></p>
+          <p><label>Vehicle number <input name="vehicle" type="text" maxlength="30"></label></p>
+          <p><label>Driver <input name="driver" type="text" maxlength="60"></label></p>
+          <p><label>Driver phone <input name="driverPhone" type="text" maxlength="20"></label></p>
+          <p><label>Stops (in order) <input name="stops" type="text" maxlength="300"></label></p>
+          <button type="submit">Add route</button>
+        </form>
+        <ul id="routes-list"></ul>
+      </section>
+      <section id="riders" aria-labelledby="riders-title" hidden>
+        <h3 id="riders-title">Transport Riders</h3>
+        <p id="riders-status" role="status"></p>
+        <form id="riders-form">
+          <p><label>Student <select name="studentId"></select></label></p>
+          <p><label>Route <select name="routeId"></select></label></p>
+          <p><label>Stop (optional) <input name="stop" type="text" maxlength="60"></label></p>
+          <button type="submit">Assign student to route</button>
+        </form>
+        <ul id="riders-list"></ul>
+      </section>
+      <section id="activities" aria-labelledby="activities-title" hidden>
+        <h3 id="activities-title">Activities and Clubs</h3>
+        <p id="activities-status" role="status"></p>
+        <form id="activities-form">
+          <p><label>Activity name <input name="name" type="text" maxlength="60" required></label></p>
+          <p><label>In charge (optional) <input name="teacher" type="text" maxlength="60"></label></p>
+          <p><label>When (optional) <input name="schedule" type="text" maxlength="100"></label></p>
+          <button type="submit">Add activity</button>
+        </form>
+        <ul id="activities-list"></ul>
+      </section>
+      <section id="members" aria-labelledby="members-title" hidden>
+        <h3 id="members-title">Activity Members</h3>
+        <p id="members-status" role="status"></p>
+        <form id="members-form">
+          <p><label>Activity <select name="activityId"></select></label></p>
+          <p><label>Student <select name="studentId"></select></label></p>
+          <button type="submit">Add member</button>
+        </form>
+        <ul id="members-list"></ul>
+      </section>
+      <section id="inventory" aria-labelledby="inventory-title" hidden>
+        <h3 id="inventory-title">Inventory</h3>
+        <p id="inventory-status" role="status"></p>
+        <form id="inventory-form">
+          <p><label>Item <input name="name" type="text" maxlength="80" required></label></p>
+          <p><label>Category (optional) <input name="category" type="text" maxlength="40"></label></p>
+          <p><label>Unit, e.g. box (optional) <input name="unit" type="text" maxlength="20"></label></p>
+          <p><label>Quantity in stock <input name="quantity" type="number" min="0" max="1000000" step="1" value="0" required></label></p>
+          <p><label>Warn when stock is at or below <input name="minQuantity" type="number" min="0" max="1000000" step="1" value="0" required></label></p>
+          <button type="submit">Add item</button>
+        </form>
+        <ul id="inventory-list"></ul>
+      </section>
+      <section id="alumni" aria-labelledby="alumni-title" hidden>
+        <h3 id="alumni-title">Alumni</h3>
+        <p id="alumni-status" role="status"></p>
+        <form id="alumni-form">
+          <p><label>Name <input name="name" type="text" maxlength="80" required></label></p>
+          <p><label>Year they left <input name="passoutYear" type="number" min="1950" max="2100" step="1" required></label></p>
+          <p><label>Contact (optional) <input name="contact" type="text" maxlength="100"></label></p>
+          <p><label>Occupation (optional) <input name="occupation" type="text" maxlength="100"></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="300"></label></p>
+          <button type="submit">Add alumnus</button>
+        </form>
+        <ul id="alumni-list"></ul>
+      </section>
+      <section id="health" aria-labelledby="health-title" hidden>
+        <h3 id="health-title">Student Health Records</h3>
+        <p id="health-status" role="status"></p>
+        <form id="health-form">
+          <p><label>Student <select name="studentId"></select></label></p>
+          <p><label>Blood group <select name="bloodGroup"><option value="">Not known</option><option>A+</option><option>A-</option><option>B+</option><option>B-</option><option>AB+</option><option>AB-</option><option>O+</option><option>O-</option></select></label></p>
+          <p><label>Allergies <input name="allergies" type="text" maxlength="200"></label></p>
+          <p><label>Medical conditions <input name="conditions" type="text" maxlength="200"></label></p>
+          <p><label>Emergency contact (name and phone) <input name="emergencyContact" type="text" maxlength="100"></label></p>
+          <p><label>Notes <input name="notes" type="text" maxlength="300"></label></p>
+          <button type="submit">Save health record</button>
+        </form>
+        <ul id="health-list"></ul>
+      </section>
+      <section id="lessons-owner" aria-labelledby="lessons-owner-title" hidden>
+        <h3 id="lessons-owner-title">Lesson Plans (all teachers)</h3>
+        <p id="lessons-owner-status" role="status"></p>
+        <ul id="lessons-owner-list"></ul>
+      </section>
       <section id="grading" aria-labelledby="grading-title" hidden>
         <h3 id="grading-title">Pass Marks and Grades</h3>
         <p id="grading-status" role="status"></p>
@@ -495,6 +609,22 @@
         <p id="teacher-calendar-status" role="status"></p>
         <ul id="teacher-calendar-list"></ul>
       </section>
+      <section id="teacher-cover" aria-labelledby="teacher-cover-title" hidden>
+        <h3 id="teacher-cover-title">Cover Duties</h3>
+        <p id="teacher-cover-status" role="status"></p>
+        <ul id="teacher-cover-list"></ul>
+      </section>
+      <section id="teacher-lessons" aria-labelledby="teacher-lessons-title" hidden>
+        <h3 id="teacher-lessons-title">Lesson Plans</h3>
+        <p id="teacher-lessons-status" role="status"></p>
+        <form id="lesson-form">
+          <p><label>Lesson date <input name="date" type="date" required></label></p>
+          <p><label>Topic <input name="topic" required maxlength="100"></label></p>
+          <p><label>Objectives and activities <textarea name="objectives" required maxlength="1000" rows="4"></textarea></label></p>
+          <button type="submit">Save lesson plan</button>
+        </form>
+        <ul id="teacher-lessons-list"></ul>
+      </section>
       <section id="teacher-notices" aria-labelledby="teacher-notices-title" hidden>
         <h3 id="teacher-notices-title">Notices</h3>
         <p id="teacher-notices-status" role="status"></p>
@@ -559,6 +689,11 @@
         <p id="portal-calendar-status" role="status"></p>
         <ul id="portal-calendar-list"></ul>
       </section>
+      <section id="portal-life" aria-labelledby="portal-life-title" hidden>
+        <h3 id="portal-life-title">Transport and Activities</h3>
+        <p id="portal-life-status" role="status"></p>
+        <ul id="portal-life-list"></ul>
+      </section>
       <section id="portal-notices" aria-labelledby="portal-notices-title" hidden>
         <h3 id="portal-notices-title">Notices</h3>
         <p id="portal-notices-status" role="status"></p>
@@ -570,7 +705,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-3');
+      await import('./sign-in.mjs?v=batch-4');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
