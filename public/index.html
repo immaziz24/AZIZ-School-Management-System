@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-4">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-5">
 </head>
 <body>
   <main>
@@ -408,6 +408,40 @@
         </form>
         <ul id="substitutions-list"></ul>
       </section>
+      <section id="ptm" aria-labelledby="ptm-title" hidden>
+        <h3 id="ptm-title">Parent-Teacher Meetings</h3>
+        <p id="ptm-status" role="status"></p>
+        <form id="ptm-form">
+          <p><label>Class <select name="classId"></select></label></p>
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Time <input name="time" type="time" required></label></p>
+          <p><label>Teacher (optional) <input name="teacher" type="text" maxlength="60"></label></p>
+          <p><label>Place (optional) <input name="place" type="text" maxlength="60"></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <button type="submit">Schedule meeting</button>
+        </form>
+        <ul id="ptm-list"></ul>
+      </section>
+      <section id="payroll" aria-labelledby="payroll-title" hidden>
+        <h3 id="payroll-title">Staff Payroll</h3>
+        <p id="payroll-status" role="status"></p>
+        <form id="payroll-form">
+          <p><label>Staff member <select name="staffUid"></select></label></p>
+          <p><label>Month <input name="month" type="month" required></label></p>
+          <p><label>Basic pay (Rs) <input name="basic" type="number" min="0" step="1" required></label></p>
+          <p><label>Allowances (Rs) <input name="allowances" type="number" min="0" step="1" value="0" required></label></p>
+          <p><label>Deductions (Rs) <input name="deductions" type="number" min="0" step="1" value="0" required></label></p>
+          <p><label>Paid on (optional) <input name="paidOn" type="date"></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <button type="submit">Save salary record</button>
+        </form>
+        <ul id="payroll-list"></ul>
+      </section>
+      <section id="inbox" aria-labelledby="inbox-title" hidden>
+        <h3 id="inbox-title">Messages from Parents</h3>
+        <p id="inbox-status" role="status"></p>
+        <ul id="inbox-list"></ul>
+      </section>
       <section id="routes" aria-labelledby="routes-title" hidden>
         <h3 id="routes-title">Transport Routes</h3>
         <p id="routes-status" role="status"></p>
@@ -694,6 +728,21 @@
         <p id="portal-life-status" role="status"></p>
         <ul id="portal-life-list"></ul>
       </section>
+      <section id="portal-ptm" aria-labelledby="portal-ptm-title" hidden>
+        <h3 id="portal-ptm-title">Parent-Teacher Meetings</h3>
+        <p id="portal-ptm-status" role="status"></p>
+        <ul id="portal-ptm-list"></ul>
+      </section>
+      <section id="portal-messages" aria-labelledby="portal-messages-title" hidden>
+        <h3 id="portal-messages-title">Message the School</h3>
+        <p id="portal-messages-status" role="status"></p>
+        <form id="message-form">
+          <p><label>Subject <input name="subject" type="text" maxlength="100" required></label></p>
+          <p><label>Message <textarea name="body" rows="4" maxlength="1000" required></textarea></label></p>
+          <button type="submit">Send message</button>
+        </form>
+        <ul id="portal-messages-list"></ul>
+      </section>
       <section id="portal-notices" aria-labelledby="portal-notices-title" hidden>
         <h3 id="portal-notices-title">Notices</h3>
         <p id="portal-notices-status" role="status"></p>
@@ -705,7 +754,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-4');
+      await import('./sign-in.mjs?v=batch-5');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

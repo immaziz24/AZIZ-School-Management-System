@@ -792,6 +792,7 @@ async function loadPortal(tools, request) {
     loadPortalNotices(tools, request, studentId);
     loadPortalSchoolwork(tools, request, studentId);
     loadPortalLife(tools, request, studentId);
+    loadPortalCommunity(tools, request, studentId);
     loadUpcomingEvents(tools.schoolRef, portalCalendarSection, portalCalendarStatus, portalCalendarList);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
@@ -3638,8 +3639,62 @@ lists.lessons = ownerList({
   line: (item) => item.date + ' - ' + nameOfClass(item.classId) + ' - ' + item.subject + ': ' + item.topic + ' - ' + item.objectives,
 });
 
+lists.ptm = ownerList({
+  id: 'ptm', collection: 'ptmSlots', empty: 'No meetings scheduled.', saved: 'Meeting scheduled.',
+  sort: (a, b) => a.data().date.localeCompare(b.data().date) || a.data().time.localeCompare(b.data().time),
+  prepare: (form) => fillSelect(form.elements.namedItem('classId'), [...examData.classes].sort(byClassOrder), (item) => item.name),
+  build: (fields) => {
+    if (!text(fields, 'classId') || !DATE_TEXT.test(text(fields, 'date')) || !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(text(fields, 'time'))) {
+      return { error: 'Choose the class, the date and the time.' };
+    }
+    return { id: newId('PT'), data: { classId: text(fields, 'classId'), date: text(fields, 'date'), time: text(fields, 'time'),
+      ...optional(fields, 'teacher', 'place', 'note') } };
+  },
+  line: (item) => item.date + ' ' + item.time + ' - ' + nameOfClass(item.classId) + (item.teacher ? ' - ' + item.teacher : '')
+    + (item.place ? ' - ' + item.place : '') + (item.note ? ' (' + item.note + ')' : ''),
+});
+
+lists.payroll = ownerList({
+  id: 'payroll', collection: 'payroll', empty: 'No salary records yet.', saved: 'Salary record saved. Saving the same person and month again replaces it.',
+  sort: (a, b) => b.data().month.localeCompare(a.data().month) || a.id.localeCompare(b.id),
+  prepare: (form) => fillSelect(form.elements.namedItem('staffUid'), teacherRecords(), (item) => item.label),
+  build: (fields) => {
+    const basic = wholeNumber(fields, 'basic');
+    const allowances = wholeNumber(fields, 'allowances');
+    const deductions = wholeNumber(fields, 'deductions');
+    const staffUid = text(fields, 'staffUid');
+    const month = text(fields, 'month');
+    if (!staffUid || !/^20[0-9]{2}-(0[1-9]|1[0-2])$/.test(month)) return { error: 'Choose the staff member and the month.' };
+    if ([basic, allowances, deductions].some(Number.isNaN)) return { error: 'Pay amounts must be whole rupees.' };
+    if (deductions > basic + allowances) return { error: 'Deductions cannot be more than the pay.' };
+    return { id: staffUid + '_' + month, data: { staffUid, month, basic, allowances, deductions,
+      ...(DATE_TEXT.test(text(fields, 'paidOn')) ? { paidOn: text(fields, 'paidOn') } : {}), ...optional(fields, 'note') } };
+  },
+  line: (item) => item.month + ' - ' + staffLabel(item.staffUid) + ' - net ' + rupees(item.basic + item.allowances - item.deductions)
+    + ' (basic ' + rupees(item.basic) + ', allowances ' + rupees(item.allowances) + ', deductions ' + rupees(item.deductions) + ')'
+    + (item.paidOn ? ' - paid ' + item.paidOn : ' - NOT PAID') + (item.note ? ' (' + item.note + ')' : ''),
+});
+
+lists.inbox = ownerList({
+  id: 'inbox', collection: 'messages', empty: 'No messages yet.',
+  sort: (a, b) => b.data().createdAt.localeCompare(a.data().createdAt) || b.id.localeCompare(a.id),
+  line: (item) => item.createdAt + ' - ' + nameOfStudent(item.studentId) + ' - ' + item.subject + ': ' + item.body
+    + (item.reply ? ' | REPLY (' + item.repliedAt + '): ' + item.reply : ' | NOT ANSWERED'),
+  extra: (record, act) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = record.data().reply ? 'Change reply' : 'Reply';
+    button.addEventListener('click', () => {
+      const reply = (prompt('Your reply to the parent:', record.data().reply ?? '') ?? '').trim();
+      if (!reply || reply.length > 1000) return;
+      act(() => academic.save('messages', record.id, { ...record.data(), reply, repliedAt: localToday() }), 'Reply saved.');
+    });
+    return [button];
+  },
+});
+
 async function loadOwnerLists(request) {
-  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'health', 'lessons']) {
+  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'health', 'lessons', 'ptm', 'payroll', 'inbox']) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }
@@ -3923,6 +3978,92 @@ async function loadPortalLife(tools, request, studentId) {
   }
 }
 
+// Student and parent page: meetings for the student's class, and messages to the school.
+const portalPtmSection = document.querySelector('#portal-ptm');
+const portalPtmStatus = document.querySelector('#portal-ptm-status');
+const portalPtmList = document.querySelector('#portal-ptm-list');
+const portalMessagesSection = document.querySelector('#portal-messages');
+const portalMessagesStatus = document.querySelector('#portal-messages-status');
+const portalMessagesList = document.querySelector('#portal-messages-list');
+const messageForm = document.querySelector('#message-form');
+let portalMessaging; // { tools, studentId, uid, busy }
+
+async function loadPortalCommunity(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalMessaging = { tools, studentId, uid: tools.user.uid, busy: false };
+  portalPtmSection.hidden = false;
+  portalMessagesSection.hidden = false;
+  portalPtmStatus.textContent = 'Loading.';
+  portalMessagesStatus.textContent = 'Loading.';
+  try {
+    const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId)));
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    const meetings = latest ? await getDocsFromServer(query(collection(schoolRef, 'ptmSlots'), where('classId', '==', latest.classId))) : { docs: [] };
+    const today = localToday();
+    const upcoming = meetings.docs.map((record) => record.data()).filter((item) => item.date >= today)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+    if (request !== schoolRequest) return;
+    portalPtmList.replaceChildren();
+    for (const item of upcoming) {
+      listItem(portalPtmList, item.date + ' ' + item.time + (item.teacher ? ' - ' + item.teacher : '')
+        + (item.place ? ' - ' + item.place : '') + (item.note ? ' (' + item.note + ')' : ''));
+    }
+    portalPtmStatus.textContent = upcoming.length ? '' : 'No meetings are scheduled for your class.';
+  } catch {
+    if (request === schoolRequest) portalPtmStatus.textContent = 'Could not load meetings. Try again.';
+  }
+  await loadPortalMessages(request);
+}
+
+async function loadPortalMessages(request) {
+  const context = portalMessaging;
+  if (!context) return;
+  const { schoolRef, collection, getDocsFromServer, query, where } = context.tools;
+  try {
+    const saved = await getDocsFromServer(query(collection(schoolRef, 'messages'), where('createdBy', '==', context.uid)));
+    if (request !== schoolRequest || context !== portalMessaging) return;
+    portalMessagesList.replaceChildren();
+    for (const record of saved.docs.sort((a, b) => b.data().createdAt.localeCompare(a.data().createdAt) || b.id.localeCompare(a.id))) {
+      const item = record.data();
+      listItem(portalMessagesList, item.createdAt + ' - ' + item.subject + ': ' + item.body
+        + (item.reply ? ' | School replied (' + item.repliedAt + '): ' + item.reply : ' | Waiting for a reply'));
+    }
+    portalMessagesStatus.textContent = saved.docs.length ? '' : 'You have not sent any messages yet.';
+  } catch {
+    if (request === schoolRequest) portalMessagesStatus.textContent = 'Could not load messages. Try again.';
+  }
+}
+
+messageForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = portalMessaging;
+  if (!context || context.busy) return;
+  const fields = new FormData(messageForm);
+  const subject = text(fields, 'subject');
+  const body = text(fields, 'body');
+  if (!subject || !body) {
+    portalMessagesStatus.textContent = 'Enter a subject and a message.';
+    return;
+  }
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  portalMessagesStatus.textContent = 'Sending.';
+  try {
+    await setDoc(doc(context.tools.schoolRef, 'messages', newId('MS')), {
+      studentId: context.studentId, subject, body, createdAt: localToday(), createdBy: context.uid,
+    });
+    context.busy = false;
+    messageForm.reset();
+    await loadPortalMessages(request);
+    if (request === schoolRequest) portalMessagesStatus.textContent = 'Message sent. The school will reply here.';
+  } catch {
+    if (request === schoolRequest) portalMessagesStatus.textContent = 'Could not send the message. Try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+
 // Teachers' saves are logged as one summary entry each (who, which exam or class day, how many).
 // The log never blocks the save itself: if the entry cannot be written, the save still stands.
 function writeAudit(schoolRef, uid, action, target, docId, detail) {
@@ -4021,6 +4162,14 @@ onAuthStateChanged(auth, async (user) => {
   portalLifeSection.hidden = true;
   portalLifeStatus.textContent = '';
   portalLifeList.replaceChildren();
+  portalPtmSection.hidden = true;
+  portalPtmStatus.textContent = '';
+  portalPtmList.replaceChildren();
+  portalMessagesSection.hidden = true;
+  portalMessagesStatus.textContent = '';
+  portalMessagesList.replaceChildren();
+  messageForm.reset();
+  portalMessaging = undefined;
   gradingSection.hidden = true;
   gradingStatus.textContent = '';
   grading = { ...DEFAULT_GRADING };

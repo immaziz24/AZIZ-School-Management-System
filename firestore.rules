@@ -469,6 +469,46 @@ service cloud.firestore {
           || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
       }
 
+      // Parent-teacher meetings. ptmSlots/{id}: classId, date, time (HH:MM), optional teacher, place, note.
+      // The owner schedules and removes them; teachers read all, and a linked family reads the meetings
+      // of the class their student is placed in this year.
+      match /ptmSlots/{slotId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || isActiveTeacher() || familyInClass(resource.data.classId));
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && slotId.matches('[A-Za-z0-9-]{1,30}') && validPtmSlot(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Payroll. payroll/{staffUid}_{YYYY-MM}: staffUid, month, basic, allowances, deductions (whole
+      // rupees), optional paidOn and note. Salary details are for the owner only: nobody else can read them.
+      match /payroll/{payrollId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && validPayroll(request.resource.data)
+          && payrollId == request.resource.data.staffUid + '_' + request.resource.data.month
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.resource.data.staffUid));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Messages from families. messages/{id}: studentId, subject, body, createdAt, createdBy, and the
+      // owner's reply and repliedAt. A linked family sends one for its own student and reads only its own
+      // messages (query createdBy == uid). The owner reads all, adds a reply (nothing else changes) and removes.
+      match /messages/{messageId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || (resource.data.createdBy == request.auth.uid && familyActive()));
+        allow create: if request.auth != null && messageId.matches('[A-Za-z0-9-]{1,30}')
+          && validMessage(request.resource.data)
+          && !request.resource.data.keys().hasAny(['reply', 'repliedAt'])
+          && request.resource.data.createdBy == request.auth.uid
+          && familyOwns(request.resource.data.studentId);
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validMessage(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reply', 'repliedAt'])
+          && request.resource.data.keys().hasAll(['reply', 'repliedAt']);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
       match /familyAccess/{uid} {
         function familyMember() {
           let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
@@ -1056,6 +1096,42 @@ service cloud.firestore {
         && item.objectives is string && item.objectives.size() <= 1000 && item.objectives.matches('.*[^[:space:]].*')
         && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
         && item.createdBy is string;
+    }
+
+    function validPtmSlot(item) {
+      return item.keys().hasOnly(['classId', 'date', 'time', 'teacher', 'place', 'note'])
+        && item.keys().hasAll(['classId', 'date', 'time'])
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && item.time is string && item.time.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
+        && (!item.keys().hasAny(['teacher']) || (item.teacher is string && item.teacher.size() <= 60))
+        && (!item.keys().hasAny(['place']) || (item.place is string && item.place.size() <= 60))
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+    }
+
+    function validPayroll(item) {
+      return item.keys().hasOnly(['staffUid', 'month', 'basic', 'allowances', 'deductions', 'paidOn', 'note'])
+        && item.keys().hasAll(['staffUid', 'month', 'basic', 'allowances', 'deductions'])
+        && item.staffUid is string && item.staffUid.size() >= 1 && item.staffUid.size() <= 40
+        && item.month is string && item.month.matches('20[0-9]{2}-(0[1-9]|1[0-2])')
+        && item.basic is int && item.basic >= 0 && item.basic <= 10000000
+        && item.allowances is int && item.allowances >= 0 && item.allowances <= 10000000
+        && item.deductions is int && item.deductions >= 0 && item.deductions <= 10000000
+        && item.deductions <= item.basic + item.allowances
+        && (!item.keys().hasAny(['paidOn']) || (item.paidOn is string && item.paidOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+    }
+
+    function validMessage(item) {
+      return item.keys().hasOnly(['studentId', 'subject', 'body', 'createdAt', 'createdBy', 'reply', 'repliedAt'])
+        && item.keys().hasAll(['studentId', 'subject', 'body', 'createdAt', 'createdBy'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.subject is string && item.subject.size() <= 100 && item.subject.matches('.*[^[:space:]].*')
+        && item.body is string && item.body.size() <= 1000 && item.body.matches('.*[^[:space:]].*')
+        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && item.createdBy is string
+        && (!item.keys().hasAny(['reply']) || (item.reply is string && item.reply.size() <= 1000 && item.reply.matches('.*[^[:space:]].*')))
+        && (!item.keys().hasAny(['repliedAt']) || (item.repliedAt is string && item.repliedAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
     }
 
     function validFamilyAccess(item) {
