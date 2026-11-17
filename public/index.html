@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-20">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-21">
 </head>
 <body>
   <main>
@@ -598,7 +598,7 @@
         <ul id="tickets-list"></ul>
       </section>
       <section id="staffdir" aria-labelledby="staffdir-title" hidden>
-        <h3 id="staffdir-title">Staff Directory</h3>
+        <h3 id="staffdir-title">Staff Contact Directory</h3>
         <p id="staffdir-status" role="status"></p>
         <form id="staffdir-form">
           <p><label>Name <input name="name" type="text" maxlength="80" required></label></p>
@@ -1050,7 +1050,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-20');
+      await import('./sign-in.mjs?v=batch-21');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
