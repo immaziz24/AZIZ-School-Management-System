@@ -461,6 +461,32 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Expenses. expenses/{id}: date, category, amount (whole rupees), optional note. Owner only.
+      match /expenses/{expenseId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && expenseId.matches('[A-Za-z0-9-]{1,30}') && validExpense(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Certificates register. certificates/{certNo}: type, studentId, studentName, issuedOn, optional purpose.
+      // Owner creates; an entry cannot be edited, only removed.
+      match /certificates/{certNo} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && certNo.matches('[A-Za-z0-9-]{1,30}') && validCertificate(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Maintenance tickets. tickets/{id}: title, optional place, priority, status open/done.
+      match /tickets/{ticketId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && ticketId.matches('[A-Za-z0-9-]{1,30}') && validTicket(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
       // Alumni. alumni/{id}: name, passoutYear, optional contact, occupation and note. Owner only.
       match /alumni/{alumniId} {
         allow get, list: if request.auth != null && isSchoolViewer(schoolId);
@@ -901,7 +927,7 @@ service cloud.firestore {
     function validMark(mark, markId) {
       return mark.keys().hasAll(['className', 'subject', 'exam', 'roll', 'score', 'maximum'])
         && mark.keys().hasOnly(['className', 'subject', 'exam', 'roll', 'score', 'maximum'])
-        && mark.exam is string && mark.exam.matches('[a-z0-9-]{1,40}')
+        && mark.exam is string && mark.exam.matches('[a-z0-9-]{1,20}')
         && mark.roll is string && mark.roll.matches('[a-z0-9-]{1,24}')
         && markId == mark.exam + '_' + mark.roll
         && mark.maximum is int && mark.maximum > 0 && mark.maximum <= 1000
@@ -1175,6 +1201,34 @@ service cloud.firestore {
         && item.activityId is string && item.activityId.matches('[A-Za-z0-9-]{1,30}')
         && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
         && item.joinedOn is string && item.joinedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.joinedOn >= '2020-01-01';
+    }
+
+    function validExpense(item) {
+      return item.keys().hasOnly(['date', 'category', 'amount', 'note'])
+        && item.keys().hasAll(['date', 'category', 'amount'])
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.category is string && item.category.size() <= 40 && item.category.matches('.*[^[:space:]].*')
+        && item.amount is int && item.amount >= 1 && item.amount <= 100000000
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+    }
+
+    function validCertificate(item) {
+      return item.keys().hasOnly(['type', 'studentId', 'studentName', 'issuedOn', 'purpose'])
+        && item.keys().hasAll(['type', 'studentId', 'studentName', 'issuedOn'])
+        && item.type in ['Bonafide', 'Transfer', 'Character']
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
+        && item.issuedOn is string && item.issuedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && (!item.keys().hasAny(['purpose']) || (item.purpose is string && item.purpose.size() <= 200));
+    }
+
+    function validTicket(item) {
+      return item.keys().hasOnly(['title', 'place', 'priority', 'status', 'createdOn'])
+        && item.keys().hasAll(['title', 'priority', 'status', 'createdOn'])
+        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
+        && (!item.keys().hasAny(['place']) || (item.place is string && item.place.size() <= 60))
+        && item.priority in ['low', 'normal', 'high'] && item.status in ['open', 'done']
+        && item.createdOn is string && item.createdOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
     }
 
     function validInventoryItem(item) {

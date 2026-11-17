@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-12">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-13">
 </head>
 <body>
   <main>
@@ -559,6 +559,42 @@
         </form>
         <ul id="inventory-list"></ul>
       </section>
+      <section id="expenses" aria-labelledby="expenses-title" hidden>
+        <h3 id="expenses-title">Expenses</h3>
+        <p id="expenses-status" role="status"></p>
+        <form id="expenses-form">
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Category, e.g. Electricity <input name="category" type="text" maxlength="40" required></label></p>
+          <p><label>Amount (Rs) <input name="amount" type="number" min="1" max="100000000" step="1" required></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <button type="submit">Add expense</button>
+        </form>
+        <p id="expenses-total" role="status"></p>
+        <button id="expenses-csv" type="button">Download expenses (CSV)</button>
+        <ul id="expenses-list"></ul>
+      </section>
+      <section id="certificates" aria-labelledby="certificates-title" hidden>
+        <h3 id="certificates-title">Certificates Issued</h3>
+        <p id="certificates-status" role="status"></p>
+        <form id="certificates-form">
+          <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Type <select name="type"><option>Bonafide</option><option>Transfer</option><option>Character</option></select></label></p>
+          <p><label>Purpose (optional) <input name="purpose" type="text" maxlength="200"></label></p>
+          <button type="submit">Record certificate</button>
+        </form>
+        <ul id="certificates-list"></ul>
+      </section>
+      <section id="tickets" aria-labelledby="tickets-title" hidden>
+        <h3 id="tickets-title">Maintenance Tickets</h3>
+        <p id="tickets-status" role="status"></p>
+        <form id="tickets-form">
+          <p><label>Problem <input name="title" type="text" maxlength="120" required></label></p>
+          <p><label>Where, e.g. Room 4 (optional) <input name="place" type="text" maxlength="60"></label></p>
+          <p><label>Priority <select name="priority"><option value="normal">Normal</option><option value="high">High</option><option value="low">Low</option></select></label></p>
+          <button type="submit">Add ticket</button>
+        </form>
+        <ul id="tickets-list"></ul>
+      </section>
       <section id="alumni" aria-labelledby="alumni-title" hidden>
         <h3 id="alumni-title">Alumni</h3>
         <p id="alumni-status" role="status"></p>
@@ -853,7 +889,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-12');
+      await import('./sign-in.mjs?v=batch-13');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

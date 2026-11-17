@@ -3677,6 +3677,68 @@ lists.inventory = ownerList({
   }),
 });
 
+lists.expenses = ownerList({
+  id: 'expenses', collection: 'expenses', empty: 'No expenses yet.', saved: 'Expense added.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  build: (fields) => {
+    const amount = wholeNumber(fields, 'amount');
+    if (!DATE_TEXT.test(text(fields, 'date')) || !text(fields, 'category') || !(amount >= 1 && amount <= 100000000)) {
+      return { error: 'Enter the date, the category and the amount in whole rupees.' };
+    }
+    return { id: newId('EX'), data: { date: text(fields, 'date'), category: text(fields, 'category'), amount, ...optional(fields, 'note') } };
+  },
+  line: (item) => item.date + ' - ' + item.category + ' - ' + rupees(item.amount) + (item.note ? ' (' + item.note + ')' : ''),
+  extra: () => {
+    const month = localToday().slice(0, 7);
+    const total = lists.expenses.items.filter((record) => record.data().date.startsWith(month))
+      .reduce((sum, record) => sum + record.data().amount, 0);
+    document.querySelector('#expenses-total').textContent = 'Spent this month (' + month + '): ' + rupees(total);
+    return [];
+  },
+});
+document.querySelector('#expenses-csv').addEventListener('click', () => {
+  downloadCsv('expenses.csv', [['Date', 'Category', 'Amount', 'Note'],
+    ...[...lists.expenses.items].sort((a, b) => a.data().date.localeCompare(b.data().date))
+      .map((record) => [record.data().date, record.data().category, record.data().amount, record.data().note ?? ''])]);
+});
+
+lists.certificates = ownerList({
+  id: 'certificates', collection: 'certificates', empty: 'No certificates recorded yet.', saved: 'Certificate recorded.',
+  sort: (a, b) => b.data().issuedOn.localeCompare(a.data().issuedOn) || b.id.localeCompare(a.id),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('studentId'), [...studentRecords].sort(byStudentName), studentOption);
+  },
+  build: (fields) => {
+    const record = studentRecords.find((item) => item.id === text(fields, 'studentId'));
+    if (!record) return { error: 'Choose a student.' };
+    const type = text(fields, 'type');
+    return { id: newId(type.slice(0, 2).toUpperCase()), data: { type, studentId: record.id, studentName: record.data().name,
+      issuedOn: localToday(), ...optional(fields, 'purpose') } };
+  },
+  line: (item, record) => record.id + ' - ' + item.type + ' certificate - ' + item.studentName + ' - ' + item.issuedOn
+    + (item.purpose ? ' (' + item.purpose + ')' : ''),
+});
+
+lists.tickets = ownerList({
+  id: 'tickets', collection: 'tickets', empty: 'No tickets yet.', saved: 'Ticket added.',
+  sort: (a, b) => (a.data().status === 'done') - (b.data().status === 'done') || b.id.localeCompare(a.id),
+  build: (fields) => {
+    if (!text(fields, 'title')) return { error: 'Describe the problem.' };
+    return { id: newId('TK'), data: { title: text(fields, 'title'), ...optional(fields, 'place'),
+      priority: text(fields, 'priority'), status: 'open', createdOn: localToday() } };
+  },
+  line: (item) => '[' + item.status + '] ' + item.title + (item.place ? ' - ' + item.place : '') + ' - ' + item.priority + ' priority - ' + item.createdOn,
+  extra: (record, act) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    const done = record.data().status === 'done';
+    button.textContent = done ? 'Reopen' : 'Mark done';
+    button.addEventListener('click', () => act(() => academic.save('tickets', record.id,
+      { ...record.data(), status: done ? 'open' : 'done' }), 'Ticket updated.'));
+    return [button];
+  },
+});
+
 lists.alumni = ownerList({
   id: 'alumni', collection: 'alumni', empty: 'No alumni yet.', saved: 'Alumnus added.',
   sort: (a, b) => b.data().passoutYear - a.data().passoutYear || a.data().name.localeCompare(b.data().name),
@@ -4010,7 +4072,7 @@ function renderWorkload() {
 const BACKUP_COLLECTIONS = ['members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
   'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
-  'activities', 'activityMembers', 'inventory', 'alumni', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
+  'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
   'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog'];
 
 backupRun.addEventListener('click', async () => {
@@ -4069,7 +4131,7 @@ const resetInsights = () => {
 };
 
 async function loadOwnerLists(request) {
-  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
+  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }
