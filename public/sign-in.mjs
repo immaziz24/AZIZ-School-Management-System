@@ -3714,7 +3714,13 @@ lists.expenses = ownerList({
     const month = localToday().slice(0, 7);
     const total = lists.expenses.items.filter((record) => record.data().date.startsWith(month))
       .reduce((sum, record) => sum + record.data().amount, 0);
-    document.querySelector('#expenses-total').textContent = 'Spent this month (' + month + '): ' + rupees(total);
+    const byCategory = new Map();
+    for (const record of lists.expenses.items) {
+      if (record.data().date.startsWith(month)) byCategory.set(record.data().category, (byCategory.get(record.data().category) ?? 0) + record.data().amount);
+    }
+    const parts = [...byCategory].sort((a, b) => b[1] - a[1]).map(([name, amount]) => name + ' ' + rupees(amount));
+    document.querySelector('#expenses-total').textContent = 'Spent this month (' + month + '): ' + rupees(total)
+      + (parts.length ? ' - ' + parts.join(', ') : '');
     return [];
   },
 });
@@ -3739,7 +3745,55 @@ lists.certificates = ownerList({
   },
   line: (item, record) => record.id + ' - ' + item.type + ' certificate - ' + item.studentName + ' - ' + item.issuedOn
     + (item.purpose ? ' (' + item.purpose + ')' : ''),
+  extra: (record) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Print certificate';
+    button.addEventListener('click', () => printCertificate(record.id, record.data()));
+    return [button];
+  },
 });
+
+// Opens a clean page with the certificate wording and starts printing. Text is placed with textContent only.
+function printCertificate(certNo, item) {
+  const win = window.open('', '_blank');
+  if (!win) {
+    document.querySelector('#certificates-status').textContent = 'Your browser blocked the print window. Allow pop-ups for this site and try again.';
+    return;
+  }
+  const school = document.querySelector('#school-name').textContent.trim() || 'School';
+  const body = {
+    Bonafide: 'This is to certify that ' + item.studentName + ' is a bonafide student of this school.',
+    Transfer: 'This is to certify that ' + item.studentName + ' has studied in this school and is granted a transfer certificate.',
+    Character: 'This is to certify that ' + item.studentName + ' has shown good conduct and character while studying in this school.',
+  }[item.type];
+  const doc = win.document;
+  doc.title = item.type + ' Certificate ' + certNo;
+  const style = doc.createElement('style');
+  style.textContent = 'body{font-family:Georgia,serif;max-width:700px;margin:60px auto;padding:40px;border:4px double #1b2a49;text-align:center}'
+    + 'h1{color:#1b2a49;margin-bottom:0}h2{font-weight:normal;letter-spacing:2px}p{font-size:18px;line-height:1.7}.meta{margin-top:60px;display:flex;justify-content:space-between;font-size:15px}';
+  doc.head.append(style);
+  const add = (tag, textValue, className) => {
+    const element = doc.createElement(tag);
+    element.textContent = textValue;
+    if (className) element.className = className;
+    doc.body.append(element);
+    return element;
+  };
+  add('h1', school);
+  add('h2', item.type.toUpperCase() + ' CERTIFICATE');
+  add('p', 'Certificate no. ' + certNo);
+  add('p', body);
+  if (item.purpose) add('p', 'Issued for: ' + item.purpose);
+  const meta = add('div', '', 'meta');
+  for (const label of ['Date: ' + item.issuedOn, 'Principal signature']) {
+    const span = doc.createElement('span');
+    span.textContent = label;
+    meta.append(span);
+  }
+  win.focus();
+  win.print();
+}
 
 lists.tickets = ownerList({
   id: 'tickets', collection: 'tickets', empty: 'No tickets yet.', saved: 'Ticket added.',
