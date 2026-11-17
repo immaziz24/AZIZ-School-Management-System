@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>School website</title>
+  <meta name="description" content="School information, programmes, facilities, contact details and admission enquiries.">
+  <meta name="theme-color" content="#14243d">
+  <link rel="icon" href="./icon-192.png" type="image/png">
+  <style>
+    :root { --navy: #14243d; --ivory: #faf6ec; --gold: #b8913a; --ink: #1d2433; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Georgia, 'Times New Roman', serif; color: var(--ink); background: var(--ivory); line-height: 1.6; }
+    header.site { background: var(--navy); color: var(--ivory); padding: 2.5rem 1.25rem 2rem; text-align: center; border-bottom: 4px solid var(--gold); }
+    header.site h1 { margin: 0 0 .4rem; font-size: clamp(1.6rem, 5vw, 2.6rem); }
+    header.site p { margin: 0; color: #e6d9b5; font-style: italic; }
+    nav.site { background: #0f1b2f; text-align: center; padding: .5rem; position: sticky; top: 0; z-index: 2; }
+    nav.site a { color: var(--ivory); text-decoration: none; margin: 0 .6rem; font-size: .95rem; display: inline-block; padding: .35rem .25rem; }
+    nav.site a:hover, nav.site a:focus { color: var(--gold); text-decoration: underline; }
+    main { max-width: 880px; margin: 0 auto; padding: 1rem 1.25rem 3rem; }
+    section { padding: 1.25rem 0; border-bottom: 1px solid #e4dcc4; }
+    h2 { color: var(--navy); border-left: 5px solid var(--gold); padding-left: .6rem; margin: 0 0 .7rem; }
+    ul { padding-left: 1.2rem; }
+    iframe { width: 100%; height: 320px; border: 0; border-radius: 6px; }
+    form p { margin: .6rem 0; }
+    label { display: block; font-weight: bold; }
+    input, textarea, select { width: 100%; padding: .55rem; font: inherit; border: 1px solid #b9ad88; border-radius: 4px; background: #fff; }
+    .hp { position: absolute; left: -9999px; }
+    button { background: var(--navy); color: var(--ivory); border: 2px solid var(--gold); padding: .65rem 1.4rem; font: inherit; border-radius: 4px; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    footer { text-align: center; padding: 1.25rem; color: #5a6270; font-size: .9rem; }
+    footer a { color: var(--navy); }
+    [hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <header class="site">
+    <h1 id="site-name">Loading</h1>
+    <p id="site-tagline"></p>
+  </header>
+  <nav class="site" aria-label="Page sections" id="site-nav"></nav>
+  <main>
+    <p id="site-status" role="status">Loading the school page.</p>
+    <section id="about" hidden><h2>About Us</h2><div id="about-body"></div></section>
+    <section id="vision" hidden><h2>Vision and Mission</h2><div id="vision-body"></div></section>
+    <section id="leadership" hidden><h2>Leadership</h2><div id="leadership-body"></div></section>
+    <section id="programmes" hidden><h2>Academic Programmes</h2><div id="programmes-body"></div></section>
+    <section id="faculty" hidden><h2>Faculty and Staff</h2><div id="faculty-body"></div></section>
+    <section id="facilities" hidden><h2>Facilities</h2><div id="facilities-body"></div></section>
+    <section id="news" hidden><h2>News and Announcements</h2><div id="news-body"></div></section>
+    <section id="contact" hidden>
+      <h2>Contact</h2>
+      <div id="contact-body"></div>
+      <iframe id="map" title="School location map" loading="lazy" referrerpolicy="no-referrer-when-downgrade" hidden></iframe>
+    </section>
+    <section id="admissions">
+      <h2>Admission Enquiry</h2>
+      <p>Send us your details and the school office will contact you.</p>
+      <p id="enquiry-status" role="status"></p>
+      <form id="enquiry-form">
+        <p><label>Student's name <input name="studentName" type="text" maxlength="80" required></label></p>
+        <p><label>Class applying for <input name="classApplying" type="text" maxlength="40" required></label></p>
+        <p><label>Parent or guardian name <input name="guardianName" type="text" maxlength="80" required></label></p>
+        <p><label>Phone number <input name="phone" type="tel" maxlength="20" required></label></p>
+        <p><label>Email (optional) <input name="email" type="email" maxlength="100"></label></p>
+        <p><label>Message (optional) <textarea name="message" rows="3" maxlength="500"></textarea></label></p>
+        <p class="hp" aria-hidden="true"><label>Leave this empty <input name="website" type="text" tabindex="-1" autocomplete="off"></label></p>
+        <button type="submit">Send enquiry</button>
+      </form>
+    </section>
+  </main>
+  <footer>
+    <p id="footer-line"></p>
+    <p><a href="./index.html">School staff and family sign-in</a></p>
+  </footer>
+  <script type="module" src="./school.mjs?v=batch-6"></script>
+</body>
+</html>

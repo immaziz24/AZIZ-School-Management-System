@@ -793,6 +793,7 @@ async function loadPortal(tools, request) {
     loadPortalSchoolwork(tools, request, studentId);
     loadPortalLife(tools, request, studentId);
     loadPortalCommunity(tools, request, studentId);
+    loadPortalEvents(tools, request, studentId);
     loadUpcomingEvents(tools.schoolRef, portalCalendarSection, portalCalendarStatus, portalCalendarList);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
@@ -3693,8 +3694,129 @@ lists.inbox = ownerList({
   },
 });
 
+// Admission enquiries: sent from the public page, moved along here. Only the status changes.
+lists.enquiries = ownerList({
+  id: 'enquiries', collection: 'enquiries', empty: 'No enquiries yet.',
+  sort: (a, b) => b.data().createdAt.localeCompare(a.data().createdAt) || b.id.localeCompare(a.id),
+  line: (item) => item.createdAt + ' - ' + item.studentName + ' for ' + item.classApplying + ' - guardian ' + item.guardianName
+    + ' (' + item.phone + (item.email ? ', ' + item.email : '') + ')' + (item.message ? ' - "' + item.message + '"' : '')
+    + ' - STATUS: ' + item.status.toUpperCase() + (item.note ? ' (' + item.note + ')' : ''),
+  extra: (record, act) => ['contacted', 'admitted', 'rejected'].filter((status) => status !== record.data().status).map((status) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Mark ' + status;
+    button.addEventListener('click', () => act(() => academic.save('enquiries', record.id, { ...record.data(), status }), 'Marked ' + status + '.'));
+    return button;
+  }),
+});
+
+lists.eventregs = ownerList({
+  id: 'eventregs', collection: 'eventRegistrations', empty: 'No registrations yet.',
+  sort: (a, b) => a.data().eventTitle.localeCompare(b.data().eventTitle) || nameOfStudent(a.data().studentId).localeCompare(nameOfStudent(b.data().studentId)),
+  line: (item) => item.eventTitle + ' - ' + nameOfStudent(item.studentId) + ' (registered ' + item.registeredOn + ')',
+});
+
+// Public website content: one document the public page reads.
+const websiteSection = document.querySelector('#website');
+const websiteStatus = document.querySelector('#website-status');
+const websiteForm = document.querySelector('#website-form');
+const WEBSITE_FIELDS = ['name', 'tagline', 'about', 'vision', 'mission', 'leadership', 'programmes', 'faculty', 'facilities', 'news',
+  'phone', 'email', 'address', 'mapUrl'];
+const MAP_PREFIX = /^https:\/\/www\.google\.com\/maps\/embed\?[^ ]*$/;
+
+async function loadWebsite(request) {
+  const { doc, getDocFromServer } = firestoreTools;
+  websiteSection.hidden = false;
+  try {
+    const saved = await getDocFromServer(doc(academic.schoolRef, 'site', 'main'));
+    if (request !== schoolRequest) return;
+    const data = saved.exists() ? saved.data() : {};
+    for (const key of WEBSITE_FIELDS) websiteForm.elements.namedItem(key).value = data[key] ?? '';
+    websiteStatus.textContent = saved.exists() ? '' : 'Nothing is published yet. Fill this in and save.';
+  } catch {
+    if (request === schoolRequest) websiteStatus.textContent = 'Could not load the website content. Try again.';
+  }
+}
+
+websiteForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const fields = new FormData(websiteForm);
+  const data = { name: text(fields, 'name') };
+  for (const key of WEBSITE_FIELDS.slice(1)) if (text(fields, key)) data[key] = text(fields, key);
+  if (!data.name) {
+    websiteStatus.textContent = 'Enter the school name.';
+    return;
+  }
+  if (data.mapUrl && !MAP_PREFIX.test(data.mapUrl)) {
+    websiteStatus.textContent = 'The map link must be a Google Maps embed link starting with https://www.google.com/maps/embed?';
+    return;
+  }
+  const request = schoolRequest;
+  tools.busy = true;
+  websiteStatus.textContent = 'Saving.';
+  try {
+    await tools.save('site', 'main', data);
+    if (request === schoolRequest) websiteStatus.textContent = 'Saved. The public page now shows this.';
+  } catch {
+    if (request === schoolRequest) websiteStatus.textContent = 'Could not save. Check the details and try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
+
+// Parent page: register the student for upcoming calendar events, or cancel.
+const portalEventsSection = document.querySelector('#portal-events');
+const portalEventsStatus = document.querySelector('#portal-events-status');
+const portalEventsList = document.querySelector('#portal-events-list');
+
+async function loadPortalEvents(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  const { doc, setDoc, deleteDoc } = firestoreTools;
+  portalEventsSection.hidden = false;
+  portalEventsStatus.textContent = 'Loading events.';
+  try {
+    const [events, registered] = await Promise.all([
+      getDocsFromServer(collection(schoolRef, 'calendar')),
+      getDocsFromServer(query(collection(schoolRef, 'eventRegistrations'), where('studentId', '==', studentId)))]);
+    if (request !== schoolRequest) return;
+    const already = new Set(registered.docs.map((record) => record.data().eventId));
+    const today = localToday();
+    const upcoming = events.docs.map((record) => ({ id: record.id, data: record.data() }))
+      .filter((entry) => entry.data.date >= today && ['event', 'exam', 'meeting'].includes(entry.data.kind)).sort(byDate);
+    portalEventsList.replaceChildren();
+    let busy = false;
+    for (const entry of upcoming) {
+      const joined = already.has(entry.id);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = joined ? 'Cancel registration' : 'Register';
+      button.addEventListener('click', async () => {
+        if (busy) return;
+        busy = true;
+        const target = doc(schoolRef, 'eventRegistrations', entry.id + '_' + studentId);
+        try {
+          if (joined) await deleteDoc(target);
+          else await setDoc(target, { eventId: entry.id, eventTitle: entry.data.title, studentId, registeredOn: localToday(), createdBy: tools.user.uid });
+        } catch {
+          portalEventsStatus.textContent = 'That did not work. Try again.';
+          busy = false;
+          return;
+        }
+        busy = false;
+        await loadPortalEvents(tools, request, studentId);
+      });
+      listItem(portalEventsList, eventText(entry.data) + (joined ? ' - REGISTERED' : ''), button);
+    }
+    portalEventsStatus.textContent = upcoming.length ? '' : 'No events are open for registration.';
+  } catch {
+    if (request === schoolRequest) portalEventsStatus.textContent = 'Could not load events. Try again.';
+  }
+}
+
 async function loadOwnerLists(request) {
-  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'health', 'lessons', 'ptm', 'payroll', 'inbox']) {
+  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }
@@ -4170,6 +4292,12 @@ onAuthStateChanged(auth, async (user) => {
   portalMessagesList.replaceChildren();
   messageForm.reset();
   portalMessaging = undefined;
+  portalEventsSection.hidden = true;
+  portalEventsStatus.textContent = '';
+  portalEventsList.replaceChildren();
+  websiteSection.hidden = true;
+  websiteStatus.textContent = '';
+  websiteForm.reset();
   gradingSection.hidden = true;
   gradingStatus.textContent = '';
   grading = { ...DEFAULT_GRADING };
@@ -4428,6 +4556,7 @@ onAuthStateChanged(auth, async (user) => {
     ).catch(() => {});
     academic = {
       busy: false,
+      schoolRef,
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: async (name, id, data) => {
         await setDoc(doc(schoolRef, name, id), data);
@@ -4503,6 +4632,7 @@ onAuthStateChanged(auth, async (user) => {
     if (request === schoolRequest) await loadBehaviour(request);
     if (request === schoolRequest) renderPromotionYears();
     if (request === schoolRequest) await loadOwnerLists(request);
+    if (request === schoolRequest) await loadWebsite(request);
     if (request === schoolRequest) await renderSummary(request);
   } catch (error) {
     if (request !== schoolRequest) return;

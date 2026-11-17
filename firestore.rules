@@ -509,6 +509,39 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Public website. site/main holds the text of the public school page (school.html). Anyone can read
+      // that one document, so it must hold only what the school is happy to publish; only the owner edits it.
+      match /site/{docId} {
+        allow get: if docId == 'main';
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && docId == 'main'
+          && validSite(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Admission enquiries. enquiries/{EQ-...}: sent from the public page by anyone, always starting as
+      // status new. Only the owner reads them, moves them through the pipeline (status and note change
+      // and nothing else) and removes them.
+      match /enquiries/{enquiryId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if enquiryId.matches('EQ-[A-Za-z0-9-]{1,30}') && validEnquiry(request.resource.data)
+          && request.resource.data.status == 'new' && !request.resource.data.keys().hasAny(['note']);
+        allow update: if request.auth != null && isSchoolOwner(schoolId) && validEnquiry(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'note']);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Event registration. eventRegistrations/{eventId}_{studentId}: a linked family registers its own
+      // student for a calendar event and may cancel it; the owner reads and removes any.
+      match /eventRegistrations/{regId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow create: if request.auth != null && validEventReg(request.resource.data)
+          && regId == request.resource.data.eventId + '_' + request.resource.data.studentId
+          && request.resource.data.createdBy == request.auth.uid
+          && familyOwns(request.resource.data.studentId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/calendar/$(request.resource.data.eventId));
+        allow delete: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+      }
+
       match /familyAccess/{uid} {
         function familyMember() {
           let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
@@ -1132,6 +1165,45 @@ service cloud.firestore {
         && item.createdBy is string
         && (!item.keys().hasAny(['reply']) || (item.reply is string && item.reply.size() <= 1000 && item.reply.matches('.*[^[:space:]].*')))
         && (!item.keys().hasAny(['repliedAt']) || (item.repliedAt is string && item.repliedAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+    }
+
+    function optionalText(item, key, max) {
+      return !item.keys().hasAny([key]) || (item[key] is string && item[key].size() <= max);
+    }
+
+    function validSite(item) {
+      return item.keys().hasOnly(['name', 'tagline', 'about', 'vision', 'mission', 'leadership', 'programmes', 'faculty',
+          'facilities', 'news', 'phone', 'email', 'address', 'mapUrl'])
+        && item.keys().hasAll(['name'])
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 80
+        && optionalText(item, 'tagline', 120) && optionalText(item, 'about', 2000) && optionalText(item, 'vision', 500)
+        && optionalText(item, 'mission', 500) && optionalText(item, 'leadership', 1000) && optionalText(item, 'programmes', 2000)
+        && optionalText(item, 'faculty', 2000) && optionalText(item, 'facilities', 1500) && optionalText(item, 'news', 1500)
+        && optionalText(item, 'phone', 30) && optionalText(item, 'email', 100) && optionalText(item, 'address', 200)
+        && (!item.keys().hasAny(['mapUrl']) || (item.mapUrl is string && item.mapUrl.size() <= 600
+          && item.mapUrl.matches('(https://www\\.google\\.com/maps/embed\\?[^ ]*)?')));
+    }
+
+    function validEnquiry(item) {
+      return item.keys().hasOnly(['studentName', 'classApplying', 'guardianName', 'phone', 'email', 'message', 'createdAt', 'status', 'note'])
+        && item.keys().hasAll(['studentName', 'classApplying', 'guardianName', 'phone', 'createdAt', 'status'])
+        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
+        && item.classApplying is string && item.classApplying.size() <= 40 && item.classApplying.matches('.*[^[:space:]].*')
+        && item.guardianName is string && item.guardianName.size() <= 80 && item.guardianName.matches('.*[^[:space:]].*')
+        && item.phone is string && item.phone.matches('[0-9+() -]{6,20}')
+        && optionalText(item, 'email', 100) && optionalText(item, 'message', 500) && optionalText(item, 'note', 300)
+        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && item.status in ['new', 'contacted', 'admitted', 'rejected'];
+    }
+
+    function validEventReg(item) {
+      return item.keys().hasOnly(['eventId', 'eventTitle', 'studentId', 'registeredOn', 'createdBy'])
+        && item.keys().hasAll(['eventId', 'eventTitle', 'studentId', 'registeredOn', 'createdBy'])
+        && item.eventId is string && item.eventId.matches('[A-Za-z0-9-]{1,30}')
+        && item.eventTitle is string && item.eventTitle.size() >= 1 && item.eventTitle.size() <= 100
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.registeredOn is string && item.registeredOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.createdBy is string;
     }
 
     function validFamilyAccess(item) {
