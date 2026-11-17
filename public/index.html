@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-22">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-23">
 </head>
 <body>
   <main>
@@ -308,6 +308,8 @@
         <h3 id="cards-title">ID Cards and Admit Cards</h3>
         <p id="cards-status" role="status"></p>
         <p><label>Student <select id="cards-student"></select></label></p>
+        <p><label>Minimum attendance for admit cards (%) <input id="cards-minpercent" type="number" min="0" max="100" step="1" value="75"></label>
+          <label><input id="cards-override" type="checkbox"> Print anyway if below the minimum</label></p>
         <button id="card-id-print" class="no-print" type="button">Print ID card</button>
         <button id="card-admit-print" class="no-print" type="button">Print admit card</button>
         <div id="card-sheet" class="print-target card-sheet" hidden>
@@ -737,6 +739,21 @@
         </form>
         <ul id="diary-list"></ul>
       </section>
+      <section id="roster" aria-labelledby="roster-title">
+        <h3 id="roster-title">Class Roster</h3>
+        <p id="roster-status" role="status"></p>
+        <p><label>Class <select id="roster-class"><option value="">Choose a class</option></select></label>
+          <button id="roster-show" type="button">Show roster</button>
+          <button id="roster-print" class="no-print" type="button">Print roster</button></p>
+        <div id="roster-sheet" class="print-target" hidden>
+          <p id="roster-head" class="print-only"></p>
+          <h4 id="roster-title-line"></h4>
+          <table>
+            <thead><tr><th>Roll</th><th>Section</th><th>Name</th><th>Admission no</th><th>Guardian</th><th>Phone</th></tr></thead>
+            <tbody id="roster-body"></tbody>
+          </table>
+        </div>
+      </section>
       <section id="attention" aria-labelledby="attention-title">
         <h3 id="attention-title">Needs Attention</h3>
         <p id="attention-status" role="status"></p>
@@ -1050,7 +1067,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-22');
+      await import('./sign-in.mjs?v=batch-23');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

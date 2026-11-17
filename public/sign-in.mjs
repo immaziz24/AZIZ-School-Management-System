@@ -3006,8 +3006,31 @@ function buildCard(kind) {
   return true;
 }
 
-function printStudentCard(kind) {
+async function printStudentCard(kind) {
   if (!buildCard(kind)) return;
+  if (kind === 'admit') {
+    // Eligibility: present and late days out of school days marked this year (approved leave is not counted).
+    const tools = academic;
+    const request = schoolRequest;
+    const minimum = Number(document.querySelector('#cards-minpercent').value);
+    const override = document.querySelector('#cards-override').checked;
+    const activeYear = examData.years.find((item) => item.data().status === 'active');
+    try {
+      const marks = (await tools.attendanceOfStudent(cardsStudent.value)).docs.map((item) => item.data())
+        .filter((mark) => mark.yearId === activeYear.id && mark.status !== 'leave');
+      if (request !== schoolRequest) return;
+      const percent = marks.length ? Math.round(marks.filter((mark) => mark.status !== 'absent').length / marks.length * 1000) / 10 : null;
+      if (percent !== null && Number.isFinite(minimum) && percent < minimum && !override) {
+        cardsStatus.textContent = 'Attendance is ' + percent + '%, below the minimum of ' + minimum
+          + '%. Tick "Print anyway" if the student is allowed to sit the exams.';
+        return;
+      }
+      cardsStatus.textContent = percent === null ? 'No attendance is marked for this student yet.' : 'Attendance this year: ' + percent + '%.';
+    } catch {
+      cardsStatus.textContent = 'Could not check attendance. Try again.';
+      return;
+    }
+  }
   printCard('#card-print-head', cardTitle.textContent + ' - ' + (cardsStudent.selectedOptions[0]?.textContent ?? ''));
 }
 
@@ -4102,6 +4125,45 @@ document.querySelector('#profile360-show').addEventListener('click', async () =>
   }
 });
 
+// Class roster: the students placed in a class this year, to read on screen or print.
+const rosterClass = document.querySelector('#roster-class');
+const rosterStatus = document.querySelector('#roster-status');
+const rosterSheet = document.querySelector('#roster-sheet');
+const rosterBody = document.querySelector('#roster-body');
+const fillRosterClasses = () => {
+  const chosen = rosterClass.value;
+  rosterClass.replaceChildren(new Option('Choose a class', ''),
+    ...[...examData.classes].sort(byClassOrder).map((record) => new Option(record.data().name, record.id)));
+  rosterClass.value = chosen;
+};
+rosterClass.addEventListener('focus', fillRosterClasses);
+rosterClass.addEventListener('mousedown', fillRosterClasses);
+function buildRoster() {
+  const activeYear = examData.years.find((item) => item.data().status === 'active');
+  if (!rosterClass.value || !activeYear) {
+    rosterStatus.textContent = rosterClass.value ? 'There is no active year yet.' : 'Choose a class first.';
+    return false;
+  }
+  const rows = placementData.enrollments.map((item) => item.data())
+    .filter((item) => item.yearId === activeYear.id && item.classId === rosterClass.value)
+    .sort((a, b) => String(a.sectionId).localeCompare(String(b.sectionId)) || a.rollNo - b.rollNo);
+  rosterBody.replaceChildren();
+  for (const placement of rows) {
+    const student = studentRecords.find((item) => item.id === placement.studentId)?.data();
+    if (!student) continue;
+    const section = placementData.sections.find((item) => item.id === placement.sectionId)?.data().name ?? placement.sectionId;
+    addRow(rosterBody, [String(placement.rollNo), section, student.name, student.admissionNo, student.guardianName, student.guardianPhone || '-']);
+  }
+  document.querySelector('#roster-title-line').textContent = nameOfClass(rosterClass.value) + ' - ' + activeYear.data().label + ' - ' + rows.length + ' student(s)';
+  rosterSheet.hidden = false;
+  rosterStatus.textContent = rows.length ? '' : 'No students are placed in this class for the active year.';
+  return rows.length > 0;
+}
+document.querySelector('#roster-show').addEventListener('click', buildRoster);
+document.querySelector('#roster-print').addEventListener('click', () => {
+  if (buildRoster()) printCard('#roster-head', 'Class roster ' + nameOfClass(rosterClass.value));
+});
+
 lists.alumni = ownerList({
   id: 'alumni', collection: 'alumni', empty: 'No alumni yet.', saved: 'Alumnus added.',
   sort: (a, b) => b.data().passoutYear - a.data().passoutYear || a.data().name.localeCompare(b.data().name),
@@ -4507,6 +4569,10 @@ const resetOwnerLists = () => {
   financeStatus.textContent = '';
   attentionList.replaceChildren();
   attentionStatus.textContent = '';
+  rosterSheet.hidden = true;
+  rosterBody.replaceChildren();
+  rosterStatus.textContent = '';
+  rosterClass.replaceChildren(new Option('Choose a class', ''));
   p360List.replaceChildren();
   p360Status.textContent = '';
   p360Student.replaceChildren(new Option('Choose a student', ''));
@@ -5579,6 +5645,7 @@ onAuthStateChanged(auth, async (user) => {
       saveStaffAttendance: (date, uid, status) => setDoc(doc(schoolRef, 'staffAttendance', date + '_' + uid),
         { staffUid: uid, date, status, markedBy: user.uid }),
       attendanceOn: (date) => getDocsFromServer(query(collection(schoolRef, 'attendance'), where('date', '==', date))),
+      attendanceOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'attendance'), where('studentId', '==', studentId))),
       marksFor: (examId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('examId', '==', examId))),
       // A year becomes active in one batch with the pointer the rules check.
       activate: (id, year) => {
