@@ -218,6 +218,33 @@
           <tbody id="leave-review-body"></tbody>
         </table>
       </section>
+      <section id="fees" aria-labelledby="fees-title" hidden>
+        <h3 id="fees-title">Fees</h3>
+        <p id="fees-status" role="status"></p>
+        <h4>Fee amounts for the active year</h4>
+        <ul id="fee-structure-list"></ul>
+        <form id="fee-structure-form">
+          <p><label>Class <select name="classId" required></select></label></p>
+          <p><label>Fee name <input name="feeName" required maxlength="60" placeholder="Tuition fee"></label></p>
+          <p><label>Amount (rupees) <input name="amount" type="number" required min="0" max="10000000" step="1"></label></p>
+          <button type="submit">Save fee amount</button>
+        </form>
+        <h4>Record a payment</h4>
+        <form id="payment-form">
+          <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Amount (rupees) <input name="amount" type="number" required min="1" max="10000000" step="1"></label></p>
+          <p><label>Method <select name="method"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank">Bank</option><option value="cheque">Cheque</option></select></label></p>
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <button type="submit">Save payment</button>
+        </form>
+        <h4>Student balance</h4>
+        <p><label>Student <select id="fee-balance-student"></select></label></p>
+        <p id="fee-balance-summary" role="status"></p>
+        <table>
+          <thead><tr><th>Receipt</th><th>Date</th><th>Method</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody id="fee-balance-body"></tbody>
+        </table>
+      </section>
     </section>
     <section id="teacher-dashboard" aria-labelledby="teacher-title" hidden>
       <h2 id="teacher-title">Teacher Dashboard</h2>
@@ -307,13 +334,22 @@
           <tbody id="portal-attendance-body"></tbody>
         </table>
       </section>
+      <section id="portal-fees" aria-labelledby="portal-fees-title" hidden>
+        <h3 id="portal-fees-title">Fees</h3>
+        <p id="portal-fees-status" role="status"></p>
+        <ul id="portal-fees-summary"></ul>
+        <table>
+          <thead><tr><th>Receipt</th><th>Date</th><th>Method</th><th>Amount</th><th>Status</th></tr></thead>
+          <tbody id="portal-fees-body"></tbody>
+        </table>
+      </section>
     </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=leave-1');
+      await import('./sign-in.mjs?v=fees-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

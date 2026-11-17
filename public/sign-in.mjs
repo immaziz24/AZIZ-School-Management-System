@@ -759,6 +759,7 @@ async function loadPortal(tools, request) {
     }
     const studentId = link.data().studentId;
     loadPortalAttendance(tools, request, studentId);
+    loadPortalFees(tools, request, studentId);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
       getDocsFromServer(query(collection(schoolRef, 'exams'), where('published', '==', true))),
@@ -1016,7 +1017,7 @@ examMarksForm.addEventListener('submit', async (event) => {
   }
 });
 
-// Attendance (feature 062). The owner picks one class teacher per class. The class teacher marks
+// Attendance. The owner picks one class teacher per class. The class teacher marks
 // each school day and the owner reviews it. One record per student per day: date_classId_studentId.
 const pad = (n) => String(n).padStart(2, '0');
 const localToday = () => {
@@ -1359,7 +1360,7 @@ attForm.addEventListener('submit', async (event) => {
   }
 });
 
-// Student and parent attendance (feature 062). All of the linked student's marks are read once, by
+// Student and parent attendance. All of the linked student's marks are read once, by
 // studentId (the rules allow only that), then filtered by month on the screen.
 const portalAttSection = document.querySelector('#portal-attendance');
 const portalAttStatus = document.querySelector('#portal-attendance-status');
@@ -1456,9 +1457,18 @@ async function renderStaffSheet() {
   }
   staffAttStatus.textContent = 'Loading staff attendance.';
   try {
-    const saved = await tools.staffAttendanceOn(date);
+    const [saved, leaves] = await Promise.all([tools.staffAttendanceOn(date), tools.list('leaveRequests')]);
     if (request !== schoolRequest || token !== staffAttToken) return;
     const marks = new Map(saved.docs.map((record) => [record.data().staffUid, record.data().status]));
+    // Approved leave covering this date is pre-selected for anyone not marked yet. Save keeps it.
+    let fromLeave = 0;
+    for (const record of leaves.docs) {
+      const item = record.data();
+      if (item.status === 'approved' && item.fromDate <= date && date <= item.toDate && !marks.has(item.staffUid)) {
+        marks.set(item.staffUid, 'leave');
+        fromLeave += 1;
+      }
+    }
     for (const uid of staffRoster) {
       const tr = document.createElement('tr');
       const name = document.createElement('td');
@@ -1481,7 +1491,9 @@ async function renderStaffSheet() {
       staffAttBody.append(tr);
     }
     updateStaffCounts();
-    staffAttStatus.textContent = '';
+    staffAttStatus.textContent = fromLeave
+      ? fromLeave + ' teacher(s) have approved leave and are set to Leave. Press Save to keep it.'
+      : '';
   } catch {
     if (request === schoolRequest && token === staffAttToken) staffAttStatus.textContent = 'Could not load staff attendance. Try again.';
   }
@@ -1772,6 +1784,242 @@ leaveRequestForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Fees. The owner sets fee amounts per class for the active year and records payments. Payments
+// are never edited or deleted; a mistake is voided once. Whole rupees only.
+const rupees = (amount) => 'Rs ' + Number(amount).toLocaleString('en-IN');
+const METHOD_LABEL = { cash: 'Cash', upi: 'UPI', bank: 'Bank', cheque: 'Cheque' };
+const feesSection = document.querySelector('#fees');
+const feesStatus = document.querySelector('#fees-status');
+const feeStructureList = document.querySelector('#fee-structure-list');
+const feeStructureForm = document.querySelector('#fee-structure-form');
+const paymentForm = document.querySelector('#payment-form');
+const feeBalanceStudent = document.querySelector('#fee-balance-student');
+const feeBalanceSummary = document.querySelector('#fee-balance-summary');
+const feeBalanceBody = document.querySelector('#fee-balance-body');
+let feeData = { structures: [], payments: [] };
+let schoolUid = '';
+
+const activeYearRecord = () => placementData.years.find((record) => record.data().status === 'active');
+const feeKey = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 20).replace(/-+$/g, '');
+
+function feeSummaryFor(studentId, yearId, classId) {
+  const due = feeData.structures.filter((item) => item.data().yearId === yearId && item.data().classId === classId)
+    .reduce((sum, item) => sum + item.data().amount, 0);
+  const paid = feeData.payments.filter((item) => item.data().studentId === studentId && item.data().yearId === yearId
+    && item.data().voided !== true).reduce((sum, item) => sum + item.data().amount, 0);
+  return { due, paid, balance: due - paid };
+}
+
+function renderFees() {
+  const year = activeYearRecord();
+  const classes = [...examData.classes].sort(byClassOrder);
+  const students = studentRecords.filter((record) => record.data().status === 'active')
+    .sort((a, b) => a.data().name.localeCompare(b.data().name));
+  fillSelect(feeStructureForm.elements.namedItem('classId'), classes, (item) => item.name);
+  fillSelect(paymentForm.elements.namedItem('studentId'), students, (item) => item.name + ' (' + item.admissionNo + ')');
+  fillSelect(feeBalanceStudent, students, (item) => item.name + ' (' + item.admissionNo + ')');
+  if (!paymentForm.elements.namedItem('date').value) paymentForm.elements.namedItem('date').value = localToday();
+  feeStructureList.replaceChildren();
+  if (!year) {
+    feesStatus.textContent = 'Activate an academic year to set fees.';
+  } else {
+    const className = (id) => classes.find((record) => record.id === id)?.data().name ?? id;
+    const mine = feeData.structures.filter((item) => item.data().yearId === year.id)
+      .sort((a, b) => className(a.data().classId).localeCompare(className(b.data().classId)) || a.id.localeCompare(b.id));
+    for (const item of mine) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Remove';
+      button.addEventListener('click', () => runFeeAction(async () => {
+        if (!confirm('Remove ' + item.data().name + ' for ' + className(item.data().classId) + '?')) return false;
+        await academic.remove('feeStructures', item.id);
+      }, 'Fee amount removed.'));
+      listItem(feeStructureList, className(item.data().classId) + ' - ' + item.data().name + ': ' + rupees(item.data().amount), button);
+    }
+    if (!mine.length) feesStatus.textContent = 'No fee amounts set for ' + year.data().label + ' yet.';
+  }
+  renderFeeBalance();
+}
+
+function renderFeeBalance() {
+  feeBalanceBody.replaceChildren();
+  feeBalanceSummary.textContent = '';
+  const year = activeYearRecord();
+  const studentId = feeBalanceStudent.value;
+  if (!year || !studentId) return;
+  const placement = placementData.enrollments.find((record) => record.id === year.id + '_' + studentId);
+  if (!placement) {
+    feeBalanceSummary.textContent = 'This student is not placed in a class this year.';
+    return;
+  }
+  const { due, paid, balance } = feeSummaryFor(studentId, year.id, placement.data().classId);
+  feeBalanceSummary.textContent = 'Due ' + rupees(due) + ', paid ' + rupees(paid) + ', balance ' + rupees(balance);
+  const mine = feeData.payments.filter((item) => item.data().studentId === studentId && item.data().yearId === year.id)
+    .sort((a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id));
+  for (const item of mine) {
+    const payment = item.data();
+    const tr = document.createElement('tr');
+    for (const text of [payment.receiptNo, payment.date, METHOD_LABEL[payment.method], rupees(payment.amount),
+      payment.voided === true ? 'Voided' : 'Paid']) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.append(td);
+    }
+    const action = document.createElement('td');
+    if (payment.voided !== true) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Void';
+      button.addEventListener('click', () => runFeeAction(async () => {
+        if (!confirm('Void receipt ' + payment.receiptNo + ' for ' + rupees(payment.amount) + '? This cannot be undone.')) return false;
+        await academic.save('payments', item.id, { ...payment, voided: true });
+      }, 'Payment voided.'));
+      action.append(button);
+    } else {
+      action.textContent = '-';
+    }
+    tr.append(action);
+    feeBalanceBody.append(tr);
+  }
+}
+
+async function loadFees(request) {
+  const tools = academic;
+  try {
+    const [structures, payments] = await Promise.all([tools.list('feeStructures'), tools.list('payments')]);
+    if (request !== schoolRequest) return;
+    feeData = { structures: structures.docs, payments: payments.docs };
+    feesSection.hidden = false;
+    feesStatus.textContent = '';
+    renderFees();
+  } catch {
+    if (request === schoolRequest) {
+      feesSection.hidden = false;
+      feesStatus.textContent = 'Could not load fees. Try again.';
+    }
+  }
+}
+
+async function runFeeAction(action, done) {
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const request = schoolRequest;
+  tools.busy = true;
+  feesStatus.textContent = 'Saving.';
+  try {
+    if (await action() === false) {
+      if (request === schoolRequest) feesStatus.textContent = '';
+      return;
+    }
+    tools.busy = false;
+    await loadFees(request);
+    if (request === schoolRequest) feesStatus.textContent = done;
+  } catch (error) {
+    if (request === schoolRequest) feesStatus.textContent = error.code === 'permission-denied'
+      ? 'This could not be saved. Check the details and that the academic year is set up.'
+      : 'Could not save. Try again.';
+  } finally {
+    tools.busy = false;
+  }
+}
+
+feeStructureForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const year = activeYearRecord();
+  const fields = new FormData(feeStructureForm);
+  const classId = String(fields.get('classId') ?? '');
+  const name = String(fields.get('feeName') ?? '').trim();
+  const amount = Number(fields.get('amount'));
+  if (!year) {
+    feesStatus.textContent = 'Activate an academic year first.';
+    return;
+  }
+  if (!classId || !name || !feeKey(name)) {
+    feesStatus.textContent = 'Choose a class and enter a fee name using letters or numbers.';
+    return;
+  }
+  if (!Number.isInteger(amount) || amount < 0 || amount > 10000000) {
+    feesStatus.textContent = 'Enter the amount in whole rupees.';
+    return;
+  }
+  const head = feeKey(name);
+  runFeeAction(async () => {
+    await academic.save('feeStructures', year.id + '_' + classId + '_' + head, { yearId: year.id, classId, head, name, amount });
+    feeStructureForm.elements.namedItem('feeName').value = '';
+    feeStructureForm.elements.namedItem('amount').value = '';
+  }, 'Fee amount saved.');
+});
+
+paymentForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const year = activeYearRecord();
+  const fields = new FormData(paymentForm);
+  const studentId = String(fields.get('studentId') ?? '');
+  const amount = Number(fields.get('amount'));
+  const method = String(fields.get('method') ?? '');
+  const date = String(fields.get('date') ?? '');
+  if (!year) {
+    feesStatus.textContent = 'Activate an academic year first.';
+    return;
+  }
+  if (!studentId || !Number.isInteger(amount) || amount < 1 || amount > 10000000) {
+    feesStatus.textContent = 'Choose a student and enter the amount in whole rupees.';
+    return;
+  }
+  if (!DATE_TEXT.test(date) || date > localToday()) {
+    feesStatus.textContent = 'Choose a payment date up to today.';
+    return;
+  }
+  const receiptNo = 'R-' + date.replaceAll('-', '') + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+  runFeeAction(async () => {
+    await academic.save('payments', receiptNo, { studentId, yearId: year.id, amount, date, method, receiptNo, receivedBy: schoolUid });
+    paymentForm.elements.namedItem('amount').value = '';
+    feeBalanceStudent.value = studentId;
+  }, 'Payment saved. Receipt ' + receiptNo + '.');
+});
+
+feeBalanceStudent.addEventListener('change', renderFeeBalance);
+
+// Student and parent: fees and payments of the linked student only.
+const portalFeesSection = document.querySelector('#portal-fees');
+const portalFeesStatus = document.querySelector('#portal-fees-status');
+const portalFeesSummary = document.querySelector('#portal-fees-summary');
+const portalFeesBody = document.querySelector('#portal-fees-body');
+
+async function loadPortalFees(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalFeesSection.hidden = false;
+  portalFeesStatus.textContent = 'Loading fees.';
+  try {
+    const [placements, structures, payments] = await Promise.all([
+      getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId))),
+      getDocsFromServer(collection(schoolRef, 'feeStructures')),
+      getDocsFromServer(query(collection(schoolRef, 'payments'), where('studentId', '==', studentId))),
+    ]);
+    if (request !== schoolRequest) return;
+    portalFeesSummary.replaceChildren();
+    portalFeesBody.replaceChildren();
+    const paidList = payments.docs.map((record) => record.data());
+    for (const placement of placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))) {
+      const heads = structures.docs.map((record) => record.data())
+        .filter((item) => item.yearId === placement.yearId && item.classId === placement.classId);
+      const due = heads.reduce((sum, item) => sum + item.amount, 0);
+      const paid = paidList.filter((item) => item.yearId === placement.yearId && item.voided !== true)
+        .reduce((sum, item) => sum + item.amount, 0);
+      listItem(portalFeesSummary, placement.yearId + ': due ' + rupees(due) + ', paid ' + rupees(paid)
+        + ', balance ' + rupees(due - paid)
+        + (heads.length ? ' (' + heads.map((item) => item.name + ' ' + rupees(item.amount)).join(', ') + ')' : ''));
+    }
+    for (const payment of paidList.sort((a, b) => b.date.localeCompare(a.date) || b.receiptNo.localeCompare(a.receiptNo))) {
+      addRow(portalFeesBody, [payment.receiptNo, payment.date, METHOD_LABEL[payment.method], rupees(payment.amount),
+        payment.voided === true ? 'Voided' : 'Paid']);
+    }
+    portalFeesStatus.textContent = placements.empty && payments.empty ? 'No fee records yet.' : '';
+  } catch {
+    if (request === schoolRequest) portalFeesStatus.textContent = 'Could not load fees. Try again.';
+  }
+}
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -1784,6 +2032,22 @@ onAuthStateChanged(auth, async (user) => {
   attClass.replaceChildren();
   attDate.value = '';
   attPrev = { classId: '', date: '' };
+  feesSection.hidden = true;
+  feesStatus.textContent = '';
+  feeStructureList.replaceChildren();
+  feeStructureForm.reset();
+  feeStructureForm.elements.namedItem('classId').replaceChildren();
+  paymentForm.reset();
+  paymentForm.elements.namedItem('studentId').replaceChildren();
+  feeBalanceStudent.replaceChildren();
+  feeBalanceSummary.textContent = '';
+  feeBalanceBody.replaceChildren();
+  feeData = { structures: [], payments: [] };
+  portalFeesSection.hidden = true;
+  portalFeesStatus.textContent = '';
+  portalFeesSummary.replaceChildren();
+  portalFeesBody.replaceChildren();
+  schoolUid = '';
   leaveReviewSection.hidden = true;
   leaveReviewStatus.textContent = '';
   leaveReviewBody.replaceChildren();
@@ -1916,7 +2180,7 @@ onAuthStateChanged(auth, async (user) => {
 
   schoolStatus.textContent = 'Checking school access.';
   try {
-    const { addDoc, collection, doc, getDocFromServer, getDocsFromServer, getFirestore, query, setDoc, updateDoc, where, writeBatch } = await import(
+    const { addDoc, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, query, setDoc, updateDoc, where, writeBatch } = await import(
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
@@ -1976,6 +2240,7 @@ onAuthStateChanged(auth, async (user) => {
     for (const field of profileFields) {
       profileForm.elements.namedItem(field).value = school.data()[field] ?? '';
     }
+    schoolUid = user.uid;
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);
     saveAssignment = (uid, assignment) => setDoc(doc(schoolRef, 'teacherAssignments', uid), assignment);
     ownerEmail.textContent = user.email;
@@ -1995,6 +2260,7 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: (name, id, data) => setDoc(doc(schoolRef, name, id), data),
       marksOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('studentId', '==', studentId))),
+      remove: (name, id) => deleteDoc(doc(schoolRef, name, id)),
       decideLeave: (id, data, status) => setDoc(doc(schoolRef, 'leaveRequests', id), { ...data, status, decidedBy: user.uid }),
       staffAttendanceOn: (date) => getDocsFromServer(query(collection(schoolRef, 'staffAttendance'), where('date', '==', date))),
       staffAttendanceBetween: (from, to) => getDocsFromServer(query(collection(schoolRef, 'staffAttendance'),
@@ -2036,6 +2302,7 @@ onAuthStateChanged(auth, async (user) => {
       leaveReviewSection.hidden = false;
       await renderLeaveReview();
     }
+    if (request === schoolRequest) await loadFees(request);
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'

@@ -1,4 +1,4 @@
-// Firestore rules tests for daily attendance and class teachers (feature 062).
+// Firestore rules tests for daily attendance and class teachers.
 // Synthetic records only. Runs against the Firestore Emulator with no npm dependencies:
 //   firebase emulators:exec --only firestore --project demo-aziz "node --test tests/attendance.rules.test.mjs"
 import { test, beforeEach } from 'node:test';

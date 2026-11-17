@@ -82,7 +82,7 @@ service cloud.firestore {
           && exists(enrollmentPath) && get(enrollmentPath).data.classId == exam.classId;
       }
 
-      // Class teacher (feature 062). classTeachers/{classId}: teacherUid. One class teacher per
+      // Class teacher. classTeachers/{classId}: teacherUid. One class teacher per
       // class, set by the owner. The class teacher marks daily attendance for that class and
       // can read the class's placements and sections. A class teacher need not teach a subject.
       function classTeacherOf(classId) {
@@ -120,7 +120,7 @@ service cloud.firestore {
           && activeTeacherMember(request.resource.data.teacherUid);
       }
 
-      // Daily attendance (feature 062). attendance/{date}_{classId}_{studentId}: yearId, classId,
+      // Daily attendance. attendance/{date}_{classId}_{studentId}: yearId, classId,
       // studentId, date (YYYY-MM-DD), status (present, absent or late), markedBy. Only the class
       // teacher writes, and may correct a mark at any time while the year is open. The owner
       // reads and reviews every mark. A linked student or parent reads only that student's marks
@@ -182,6 +182,39 @@ service cloud.firestore {
           && request.resource.data.decidedBy == request.auth.uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy'])
           && validLeaveRequest(request.resource.data);
+      }
+
+      // Fees. feeStructures/{yearId}_{classId}_{head}: yearId, classId, head (key), name, amount
+      // (whole rupees). The owner sets and removes them. A linked student or parent account can read
+      // them. payments/{receiptNo}: studentId, yearId, amount, date, method, receiptNo, receivedBy,
+      // voided (optional). The owner records payments. A payment is never edited or deleted; a
+      // mistake is voided once. Family accounts read only their own student's payments. Teachers
+      // read neither.
+      match /feeStructures/{feeId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyActive());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && validFeeStructure(request.resource.data)
+          && feeId == request.resource.data.yearId + '_' + request.resource.data.classId + '_' + request.resource.data.head
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/academicYears/$(request.resource.data.yearId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      match /payments/{paymentId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && validPayment(request.resource.data)
+          && !request.resource.data.keys().hasAny(['voided'])
+          && request.resource.data.receivedBy == request.auth.uid
+          && paymentId == request.resource.data.receiptNo
+          && request.resource.data.date <= latestAttendanceDate()
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/academicYears/$(request.resource.data.yearId));
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && !resource.data.keys().hasAny(['voided'])
+          && request.resource.data.voided == true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided'])
+          && validPayment(request.resource.data);
       }
 
       // Student and parent access (feature 048). familyAccess/{uid} links a student or parent
@@ -388,7 +421,7 @@ service cloud.firestore {
       // student per section per year. Closed years are frozen.
       match /enrollments/{enrollmentId} {
         allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId)
-          || classTeacherOf(resource.data.classId));
+          || classTeacherOf(resource.data.classId) || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validEnrollment(request.resource.data)
           && enrollmentId == request.resource.data.yearId + '_' + request.resource.data.studentId
@@ -551,6 +584,29 @@ service cloud.firestore {
         && item.reason is string && item.reason.size() <= 200 && item.reason.matches('.*[^[:space:]].*')
         && item.status in ['pending', 'approved', 'rejected']
         && (!item.keys().hasAny(['decidedBy']) || item.decidedBy is string);
+    }
+
+    function validFeeStructure(item) {
+      return item.keys().hasOnly(['yearId', 'classId', 'head', 'name', 'amount'])
+        && item.keys().hasAll(['yearId', 'classId', 'head', 'name', 'amount'])
+        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.head is string && item.head.matches('[a-z0-9-]{1,20}')
+        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
+        && item.amount is int && item.amount >= 0 && item.amount <= 10000000;
+    }
+
+    function validPayment(item) {
+      return item.keys().hasOnly(['studentId', 'yearId', 'amount', 'date', 'method', 'receiptNo', 'receivedBy', 'voided'])
+        && item.keys().hasAll(['studentId', 'yearId', 'amount', 'date', 'method', 'receiptNo', 'receivedBy'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
+        && item.amount is int && item.amount >= 1 && item.amount <= 10000000
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && item.method in ['cash', 'upi', 'bank', 'cheque']
+        && item.receiptNo is string && item.receiptNo.matches('[A-Za-z0-9-]{1,24}')
+        && item.receivedBy is string
+        && (!item.keys().hasAny(['voided']) || item.voided == true);
     }
 
     function validFamilyAccess(item) {

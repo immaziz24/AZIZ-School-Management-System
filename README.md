@@ -2,9 +2,13 @@
 
 AZIZ is a multi-school platform with a shared application and school-specific websites and dashboards. The roadmap covers 111 planned feature groups across 13 categories and 10 phases (0–9).
 
+## Built so far
+
+Academic setup, students, class placement, exams, teacher marks entry, marks review, report cards, student and parent login, daily student attendance (class teacher marks, owner reviews, family view), staff attendance, and leave requests.
+
 ## Phase 0 — Platform foundation design
 
-The working stack is PHP and MySQL. The first implementation milestone is to provision two fictional schools and verify that each school's users can access only their own records.
+The working stack is static HTML, CSS and JavaScript on Hostinger, with Firebase Authentication and Cloud Firestore (project aziz-school-management-system). Access is enforced by `firestore.rules` and tested with the Firestore Emulator (`tests\run-tests.cmd`). The first implementation milestone is to provision two fictional schools and verify that each school's users can access only their own records.
 
 | Record | Purpose |
 | --- | --- |
