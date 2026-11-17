@@ -3850,6 +3850,66 @@ lists.assets = ownerList({
   line: (item) => item.place + ' - ' + item.name + ' - ' + rupees(item.cost) + ' - ' + item.condition + (item.boughtOn ? ' - bought ' + item.boughtOn : ''),
 });
 
+lists.sales = ownerList({
+  id: 'sales', collection: 'sales', empty: 'No sales recorded yet.', saved: 'Sale recorded.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  prepare: (form) => fillSelect(form.elements.namedItem('studentId'), activeStudents(), studentOption),
+  build: (fields) => {
+    const student = pickedStudent(fields);
+    const quantity = wholeNumber(fields, 'quantity');
+    const amount = wholeNumber(fields, 'amount');
+    if (!student || !text(fields, 'item') || !(quantity >= 1 && quantity <= 1000) || !(amount >= 0 && amount <= 10000000)) {
+      return { error: 'Choose a student, then enter the item, the quantity and the amount in whole numbers.' };
+    }
+    return { id: newId('SL'), data: { studentId: student.id, studentName: student.data().name, item: text(fields, 'item'),
+      quantity, amount, date: localToday() } };
+  },
+  line: (item) => item.date + ' - ' + item.studentName + ' - ' + item.quantity + ' x ' + item.item + ' - ' + rupees(item.amount),
+});
+
+lists.syllabus = ownerList({
+  id: 'syllabus', collection: 'syllabus', empty: 'No chapters added yet.', saved: 'Chapter added.',
+  sort: (a, b) => a.data().className.localeCompare(b.data().className, undefined, { numeric: true })
+    || a.data().subjectName.localeCompare(b.data().subjectName) || a.id.localeCompare(b.id),
+  build: (fields) => {
+    if (!text(fields, 'className') || !text(fields, 'subjectName') || !text(fields, 'chapter')) return { error: 'Enter the class, the subject and the chapter.' };
+    return { id: newId('SY'), data: { className: text(fields, 'className'), subjectName: text(fields, 'subjectName'), chapter: text(fields, 'chapter'), status: 'Pending' } };
+  },
+  line: (item) => item.className + ' - ' + item.subjectName + ' - ' + item.chapter + ' - ' + item.status,
+  extra: (record, act) => {
+    const order = ['Pending', 'In progress', 'Done'];
+    const button = document.createElement('button');
+    button.type = 'button';
+    const next = order[(order.indexOf(record.data().status) + 1) % order.length];
+    button.textContent = 'Set ' + next;
+    button.addEventListener('click', () => act(() => academic.save('syllabus', record.id, { ...record.data(), status: next }), 'Updated.'));
+    return [button];
+  },
+});
+
+lists.trainings = ownerList({
+  id: 'trainings', collection: 'trainings', empty: 'No training recorded yet.', saved: 'Training recorded.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  build: (fields) => {
+    const hours = wholeNumber(fields, 'hours');
+    if (!text(fields, 'staffName') || !text(fields, 'course') || !DATE_TEXT.test(text(fields, 'date')) || !(hours >= 1 && hours <= 1000)) {
+      return { error: 'Enter the staff member, the course, the date and the hours.' };
+    }
+    return { id: newId('TR'), data: { staffName: text(fields, 'staffName'), course: text(fields, 'course'), date: text(fields, 'date'), hours } };
+  },
+  line: (item) => item.date + ' - ' + item.staffName + ' - ' + item.course + ' (' + item.hours + ' h)',
+});
+
+lists.diary = ownerList({
+  id: 'diary', collection: 'diary', empty: 'No diary entries yet.', saved: 'Entry saved.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  build: (fields) => {
+    if (!DATE_TEXT.test(text(fields, 'date')) || !text(fields, 'entry')) return { error: 'Enter the date and the entry.' };
+    return { id: newId('DY'), data: { date: text(fields, 'date'), entry: text(fields, 'entry') } };
+  },
+  line: (item) => item.date + ' - ' + item.entry,
+});
+
 lists.alumni = ownerList({
   id: 'alumni', collection: 'alumni', empty: 'No alumni yet.', saved: 'Alumnus added.',
   sort: (a, b) => b.data().passoutYear - a.data().passoutYear || a.data().name.localeCompare(b.data().name),
@@ -4183,7 +4243,7 @@ function renderWorkload() {
 const BACKUP_COLLECTIONS = ['members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
   'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
-  'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
+  'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
   'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog'];
 
 backupRun.addEventListener('click', async () => {
@@ -4242,7 +4302,7 @@ const resetInsights = () => {
 };
 
 async function loadOwnerLists(request) {
-  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
+  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }

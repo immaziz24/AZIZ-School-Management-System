@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-15">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-16">
 </head>
 <body>
   <main>
@@ -690,6 +690,51 @@
         </form>
         <ul id="assets-list"></ul>
       </section>
+      <section id="sales" aria-labelledby="sales-title" hidden>
+        <h3 id="sales-title">Sales Ledger</h3>
+        <p id="sales-status" role="status"></p>
+        <form id="sales-form">
+          <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Item, e.g. Uniform set <input name="item" type="text" maxlength="80" required></label></p>
+          <p><label>Quantity <input name="quantity" type="number" min="1" max="1000" step="1" value="1" required></label></p>
+          <p><label>Amount paid (Rs) <input name="amount" type="number" min="0" max="10000000" step="1" required></label></p>
+          <button type="submit">Record sale</button>
+        </form>
+        <ul id="sales-list"></ul>
+      </section>
+      <section id="syllabus" aria-labelledby="syllabus-title" hidden>
+        <h3 id="syllabus-title">Syllabus Tracker</h3>
+        <p id="syllabus-status" role="status"></p>
+        <form id="syllabus-form">
+          <p><label>Class <input name="className" type="text" maxlength="40" required></label></p>
+          <p><label>Subject <input name="subjectName" type="text" maxlength="60" required></label></p>
+          <p><label>Chapter <input name="chapter" type="text" maxlength="120" required></label></p>
+          <button type="submit">Add chapter</button>
+        </form>
+        <ul id="syllabus-list"></ul>
+      </section>
+      <section id="trainings" aria-labelledby="trainings-title" hidden>
+        <h3 id="trainings-title">Staff Training</h3>
+        <p id="trainings-status" role="status"></p>
+        <form id="trainings-form">
+          <p><label>Staff member <input name="staffName" type="text" maxlength="80" required></label></p>
+          <p><label>Course <input name="course" type="text" maxlength="120" required></label></p>
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Hours <input name="hours" type="number" min="1" max="1000" step="1" required></label></p>
+          <button type="submit">Record training</button>
+        </form>
+        <ul id="trainings-list"></ul>
+      </section>
+      <section id="diary" aria-labelledby="diary-title" hidden>
+        <h3 id="diary-title">Daily Diary</h3>
+        <p id="diary-status" role="status"></p>
+        <form id="diary-form">
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Entry <textarea name="entry" rows="4" maxlength="3000" required></textarea></label></p>
+          <button type="submit">Save entry</button>
+        </form>
+        <ul id="diary-list"></ul>
+      </section>
       <section id="alumni" aria-labelledby="alumni-title" hidden>
         <h3 id="alumni-title">Alumni</h3>
         <p id="alumni-status" role="status"></p>
@@ -984,7 +1029,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-15');
+      await import('./sign-in.mjs?v=batch-16');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

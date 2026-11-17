@@ -553,6 +553,39 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Sales ledger (uniforms, books). sales/{id}: studentId, studentName, item, quantity, amount, date. Owner only.
+      match /sales/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validSale(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Syllabus tracker. syllabus/{id}: className, subjectName, chapter, status. Owner only.
+      match /syllabus/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validSyllabus(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Staff training log. trainings/{id}: staffName, course, date, hours. Owner only.
+      match /trainings/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validTraining(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Daily diary. diary/{id}: date, entry. Owner only.
+      match /diary/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validDiary(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
       // Alumni. alumni/{id}: name, passoutYear, optional contact, occupation and note. Owner only.
       match /alumni/{alumniId} {
         allow get, list: if request.auth != null && isSchoolViewer(schoolId);
@@ -1372,6 +1405,42 @@ service cloud.firestore {
         && item.cost is int && item.cost >= 0 && item.cost <= 1000000000
         && item.condition in ['Good', 'Fair', 'Poor']
         && (!item.keys().hasAny(['boughtOn']) || (item.boughtOn is string && item.boughtOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+    }
+
+    function validSale(item) {
+      return item.keys().hasOnly(['studentId', 'studentName', 'item', 'quantity', 'amount', 'date'])
+        && item.keys().hasAll(['studentId', 'studentName', 'item', 'quantity', 'amount', 'date'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
+        && item.item is string && item.item.size() <= 80 && item.item.matches('.*[^[:space:]].*')
+        && item.quantity is int && item.quantity >= 1 && item.quantity <= 1000
+        && item.amount is int && item.amount >= 0 && item.amount <= 10000000
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+    }
+
+    function validSyllabus(item) {
+      return item.keys().hasOnly(['className', 'subjectName', 'chapter', 'status'])
+        && item.keys().hasAll(['className', 'subjectName', 'chapter', 'status'])
+        && item.className is string && item.className.size() <= 40 && item.className.matches('.*[^[:space:]].*')
+        && item.subjectName is string && item.subjectName.size() <= 60 && item.subjectName.matches('.*[^[:space:]].*')
+        && item.chapter is string && item.chapter.size() <= 120 && item.chapter.matches('.*[^[:space:]].*')
+        && item.status in ['Pending', 'In progress', 'Done'];
+    }
+
+    function validTraining(item) {
+      return item.keys().hasOnly(['staffName', 'course', 'date', 'hours'])
+        && item.keys().hasAll(['staffName', 'course', 'date', 'hours'])
+        && item.staffName is string && item.staffName.size() <= 80 && item.staffName.matches('.*[^[:space:]].*')
+        && item.course is string && item.course.size() <= 120 && item.course.matches('.*[^[:space:]].*')
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.hours is int && item.hours >= 1 && item.hours <= 1000;
+    }
+
+    function validDiary(item) {
+      return item.keys().hasOnly(['date', 'entry'])
+        && item.keys().hasAll(['date', 'entry'])
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.entry is string && item.entry.size() <= 3000 && item.entry.matches('.*[^[:space:]].*');
     }
 
     function validInventoryItem(item) {
