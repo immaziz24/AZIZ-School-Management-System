@@ -3986,6 +3986,30 @@ lists.diary = ownerList({
   line: (item) => item.date + ' - ' + item.entry,
 });
 
+// Needs attention: counts of open work, taken from the lists the owner screens have already loaded.
+const attentionList = document.querySelector('#attention-list');
+const attentionStatus = document.querySelector('#attention-status');
+function refreshAttention() {
+  const count = (list, test) => list.items.filter((record) => test(record.data())).length;
+  const checks = [
+    [count(lists.inventory, (item) => item.quantity <= item.minQuantity), 'inventory item(s) at or below the stock warning level'],
+    [count(lists.enquiries, (item) => item.status === 'new'), 'new admission enquiry(ies) not yet handled'],
+    [count(lists.inbox, (item) => !item.reply), 'parent message(s) waiting for a reply'],
+    [count(lists.tickets, (item) => item.status === 'open'), 'open maintenance ticket(s)'],
+    [count(lists.complaints, (item) => item.status === 'open'), 'open complaint(s)'],
+    [count(lists.lostfound, (item) => item.status === 'open'), 'lost and found item(s) still open'],
+    [count(lists.syllabus, (item) => item.status !== 'Done'), 'syllabus chapter(s) not finished'],
+  ].filter(([number]) => number > 0);
+  attentionList.replaceChildren();
+  for (const [number, label] of checks) {
+    const item = document.createElement('li');
+    item.textContent = number + ' ' + label;
+    attentionList.append(item);
+  }
+  attentionStatus.textContent = checks.length ? '' : 'Nothing needs attention right now.';
+}
+document.querySelector('#attention-refresh').addEventListener('click', refreshAttention);
+
 // Finance summary: fees collected (voided receipts left out) against expenses, month by month.
 const financeStatus = document.querySelector('#finance-status');
 const financeList = document.querySelector('#finance-list');
@@ -4472,12 +4496,15 @@ async function loadOwnerLists(request) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }
+  if (request === schoolRequest) refreshAttention();
 }
 const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.render(); };
 const resetOwnerLists = () => {
   for (const api of ownerLists) api.reset();
   financeList.replaceChildren();
   financeStatus.textContent = '';
+  attentionList.replaceChildren();
+  attentionStatus.textContent = '';
   p360List.replaceChildren();
   p360Status.textContent = '';
   p360Student.replaceChildren(new Option('Choose a student', ''));
