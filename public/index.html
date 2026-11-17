@@ -243,13 +243,23 @@
         <tbody id="portal-body"></tbody>
       </table>
       <p id="portal-total" role="status"></p>
+      <section id="portal-attendance" aria-labelledby="portal-attendance-title" hidden>
+        <h3 id="portal-attendance-title">Attendance</h3>
+        <p id="portal-attendance-status" role="status"></p>
+        <p><label>Month <input id="portal-attendance-month" type="month"></label></p>
+        <p id="portal-attendance-total" role="status"></p>
+        <table>
+          <thead><tr><th>Date</th><th>Status</th></tr></thead>
+          <tbody id="portal-attendance-body"></tbody>
+        </table>
+      </section>
     </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=attendance-1');
+      await import('./sign-in.mjs?v=attendance-2');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

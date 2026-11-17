@@ -122,9 +122,11 @@ service cloud.firestore {
       // Daily attendance (feature 062). attendance/{date}_{classId}_{studentId}: yearId, classId,
       // studentId, date (YYYY-MM-DD), status (present, absent or late), markedBy. Only the class
       // teacher writes, and may correct a mark at any time while the year is open. The owner
-      // reads and reviews every mark. Records are never deleted.
+      // reads and reviews every mark. A linked student or parent reads only that student's marks
+      // (query by studentId). Records are never deleted.
       match /attendance/{attendanceId} {
-        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || classTeacherOf(resource.data.classId));
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || classTeacherOf(resource.data.classId)
+          || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && validAttendance(request.resource.data)
           && request.resource.data.markedBy == request.auth.uid
           && attendanceId == request.resource.data.date + '_' + request.resource.data.classId

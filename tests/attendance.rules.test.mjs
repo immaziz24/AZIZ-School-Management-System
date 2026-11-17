@@ -90,6 +90,12 @@ beforeEach(async () => {
     [`${A}/classes/class-7`, { name: 'Class 7', order: 7 }],
     [`${A}/sections/class-8-a`, { classId: 'class-8', name: 'A' }],
     [`${A}/sections/class-7-a`, { classId: 'class-7', name: 'A' }],
+    [`${A}/members/parent-1`, { role: 'parent', active: true }],
+    [`${A}/members/parent-2`, { role: 'parent', active: true }],
+    [`${A}/members/pupil-off`, { role: 'student', active: true }],
+    [`${A}/familyAccess/parent-1`, { studentId: 's1', relation: 'parent', active: true }],
+    [`${A}/familyAccess/parent-2`, { studentId: 's2', relation: 'parent', active: true }],
+    [`${A}/familyAccess/pupil-off`, { studentId: 's1', relation: 'student', active: false }],
     [`${A}/settings/academic`, { activeYearId: Y }],
     ...['s1', 's2', 's3', 's4'].map((id) => [`${A}/students/${id}`,
       { admissionNo: id, name: 'Test Student ' + id, guardianName: 'Test Guardian', guardianPhone: '', status: 'active' }]),
@@ -325,4 +331,29 @@ test('a class teacher can read only their own class record', async () => {
   await denied(get('ct-a', `${A}/classes`), 'list classes');
   await denied(set('ct-a', `${A}/classes/class-8`, { name: 'Renamed', order: 8 }), 'edit class');
   await allowed(get('owner-a', `${A}/classes/class-8`), 'owner still reads');
+});
+
+test('a linked parent or student reads only their own student\'s attendance', async () => {
+  await set(ADMIN, path(rec()), rec());
+  await set(ADMIN, path(rec({ studentId: 's2' })), rec({ studentId: 's2' }));
+  await allowed(get('parent-1', path(rec())), 'parent reads own student');
+  await denied(get('parent-1', path(rec({ studentId: 's2' }))), 'parent reads another student');
+  await allowed(get('parent-2', path(rec({ studentId: 's2' }))), 'other parent reads their student');
+  await denied(get('parent-2', path(rec())), 'other parent reads s1');
+  await allowed(query('parent-1', A, 'attendance', [['studentId', 's1']]), 'parent lists own student');
+  await denied(query('parent-1', A, 'attendance', [['studentId', 's2']]), 'parent lists another student');
+  await denied(query('parent-1', A, 'attendance', [['date', TODAY]]), 'parent lists a whole day');
+  await denied(query('parent-1', A, 'attendance', [['classId', 'class-8']]), 'parent lists a whole class');
+});
+
+test('family attendance access can be switched off, and is read only', async () => {
+  await set(ADMIN, path(rec()), rec());
+  await denied(get('pupil-off', path(rec())), 'switched-off account');
+  await denied(query('pupil-off', A, 'attendance', [['studentId', 's1']]), 'switched-off account lists');
+  await denied(get('parent-a', path(rec())), 'parent account with no link');
+  await denied(get('stranger', path(rec())), 'stranger');
+  await denied(get(null, path(rec())), 'signed out');
+  await denied(set('parent-1', path(rec()), rec({ status: 'absent', markedBy: 'parent-1' })), 'parent update');
+  await denied(set('parent-1', path(rec({ studentId: 's2' })), rec({ studentId: 's2', markedBy: 'parent-1' })), 'parent create');
+  await denied(remove('parent-1', path(rec())), 'parent delete');
 });

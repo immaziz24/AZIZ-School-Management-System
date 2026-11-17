@@ -758,6 +758,7 @@ async function loadPortal(tools, request) {
       return;
     }
     const studentId = link.data().studentId;
+    loadPortalAttendance(tools, request, studentId);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
       getDocsFromServer(query(collection(schoolRef, 'exams'), where('published', '==', true))),
@@ -1358,6 +1359,51 @@ attForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Student and parent attendance (feature 062). All of the linked student's marks are read once, by
+// studentId (the rules allow only that), then filtered by month on the screen.
+const portalAttSection = document.querySelector('#portal-attendance');
+const portalAttStatus = document.querySelector('#portal-attendance-status');
+const portalAttMonth = document.querySelector('#portal-attendance-month');
+const portalAttTotal = document.querySelector('#portal-attendance-total');
+const portalAttBody = document.querySelector('#portal-attendance-body');
+let portalAttMarks = [];
+
+function renderPortalAttendance() {
+  portalAttBody.replaceChildren();
+  portalAttTotal.textContent = '';
+  const month = portalAttMonth.value;
+  const marks = portalAttMarks.filter((mark) => mark.date.startsWith(month + '-'))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  for (const mark of marks) addRow(portalAttBody, [mark.date, STATUS_LABEL[mark.status]]);
+  if (!marks.length) {
+    portalAttStatus.textContent = 'No attendance has been marked for this month.';
+    return;
+  }
+  portalAttStatus.textContent = '';
+  const count = { present: 0, absent: 0, late: 0 };
+  for (const mark of marks) count[mark.status] += 1;
+  const percent = Math.round((count.present + count.late) / marks.length * 1000) / 10;
+  portalAttTotal.textContent = 'Present ' + count.present + ', absent ' + count.absent + ', late ' + count.late
+    + ' - Attendance ' + percent + '% (present and late days out of ' + marks.length + ' marked)';
+}
+
+async function loadPortalAttendance(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalAttSection.hidden = false;
+  portalAttMonth.value = localToday().slice(0, 7);
+  portalAttStatus.textContent = 'Loading attendance.';
+  try {
+    const saved = await getDocsFromServer(query(collection(schoolRef, 'attendance'), where('studentId', '==', studentId)));
+    if (request !== schoolRequest) return;
+    portalAttMarks = saved.docs.map((record) => record.data());
+    renderPortalAttendance();
+  } catch {
+    if (request === schoolRequest) portalAttStatus.textContent = 'Could not load attendance. Try again.';
+  }
+}
+
+portalAttMonth.addEventListener('change', renderPortalAttendance);
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -1417,6 +1463,12 @@ onAuthStateChanged(auth, async (user) => {
   linkForm.reset();
   linkForm.elements.namedItem('studentId').replaceChildren();
   portalDashboard.hidden = true;
+  portalAttSection.hidden = true;
+  portalAttStatus.textContent = '';
+  portalAttTotal.textContent = '';
+  portalAttBody.replaceChildren();
+  portalAttMonth.value = '';
+  portalAttMarks = [];
   portalStatus.textContent = '';
   portalEmail.textContent = '';
   portalStudent.textContent = '';
