@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AZIZ School Management System</title>
-  <link rel="stylesheet" href="./sign-in.css?v=staff-1">
+  <link rel="stylesheet" href="./sign-in.css?v=print-1">
 </head>
 <body>
   <main>
@@ -137,7 +137,8 @@
         <p id="review-actions"></p>
         <button id="review-refresh" type="button">Refresh marks</button>
       </section>
-      <section id="report-card" aria-labelledby="report-title" hidden>
+      <section id="report-card" class="print-target" aria-labelledby="report-title" hidden>
+        <p id="report-print-head" class="print-only"></p>
         <h3 id="report-title">Report Card</h3>
         <p id="report-status" role="status"></p>
         <p><label>Student <select id="report-student"></select></label></p>
@@ -146,6 +147,7 @@
           <tbody id="report-body"></tbody>
         </table>
         <p id="report-total" role="status"></p>
+        <button id="report-print" class="no-print" type="button">Print or save as PDF</button>
       </section>
       <section id="family-access" aria-labelledby="family-title" hidden>
         <h3 id="family-title">Student and Parent Access</h3>
@@ -351,6 +353,8 @@
       </form>
     </section>
     <section id="portal-dashboard" aria-labelledby="portal-title" hidden>
+      <div id="portal-card" class="print-target">
+      <p id="portal-print-head" class="print-only"></p>
       <h2 id="portal-title">My Results</h2>
       <p>ABCD School</p>
       <p id="portal-email"></p>
@@ -361,6 +365,8 @@
         <tbody id="portal-body"></tbody>
       </table>
       <p id="portal-total" role="status"></p>
+      <button id="portal-print" class="no-print" type="button">Print or save as PDF</button>
+      </div>
       <section id="portal-attendance" aria-labelledby="portal-attendance-title" hidden>
         <h3 id="portal-attendance-title">Attendance</h3>
         <p id="portal-attendance-status" role="status"></p>
@@ -391,7 +397,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=grading-1');
+      await import('./sign-in.mjs?v=print-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

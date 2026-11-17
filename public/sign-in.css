@@ -91,3 +91,50 @@ th, td {
   text-align: left;
   vertical-align: top;
 }
+
+.print-only {
+  display: none;
+}
+
+/* Print or "Save as PDF": only the report card is printed, on plain white. */
+@media print {
+  body.printing * {
+    visibility: hidden;
+  }
+
+  body.printing .print-target,
+  body.printing .print-target * {
+    visibility: visible;
+  }
+
+  body.printing .print-target {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+
+  body.printing .print-only {
+    display: block;
+    font: 700 20px/1.3 Georgia, serif;
+  }
+
+  body.printing .no-print,
+  body.printing select {
+    display: none;
+  }
+
+  :root, body {
+    background: #fff;
+  }
+
+  table {
+    display: table;
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  th, td {
+    border-bottom: 1px solid #999;
+  }
+}

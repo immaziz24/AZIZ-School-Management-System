@@ -2281,6 +2281,36 @@ gradingForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Printing. The browser's print dialog can save a PDF. Only the report card is printed (see the
+// print rules in sign-in.css); a heading with the school, student and date is filled in first.
+function printCard(headingId, who) {
+  const heading = document.querySelector(headingId);
+  heading.textContent = (schoolName.textContent || 'School') + ' - Report Card - ' + who + ' - ' + localToday();
+  document.body.classList.add('printing');
+  const done = () => {
+    document.body.classList.remove('printing');
+    window.removeEventListener('afterprint', done);
+  };
+  window.addEventListener('afterprint', done);
+  window.print();
+}
+
+document.querySelector('#report-print').addEventListener('click', () => {
+  if (!reportBody.children.length) {
+    reportStatus.textContent = 'There are no published results to print for this student.';
+    return;
+  }
+  printCard('#report-print-head', reportStudent.selectedOptions[0]?.textContent ?? '');
+});
+
+document.querySelector('#portal-print').addEventListener('click', () => {
+  if (!portalBody.children.length) {
+    portalStatus.textContent = 'There are no published results to print yet.';
+    return;
+  }
+  printCard('#portal-print-head', portalStudent.textContent);
+});
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
