@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-13">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-14">
 </head>
 <body>
   <main>
@@ -595,6 +595,53 @@
         </form>
         <ul id="tickets-list"></ul>
       </section>
+      <section id="staffdir" aria-labelledby="staffdir-title" hidden>
+        <h3 id="staffdir-title">Staff Directory</h3>
+        <p id="staffdir-status" role="status"></p>
+        <form id="staffdir-form">
+          <p><label>Name <input name="name" type="text" maxlength="80" required></label></p>
+          <p><label>Role, e.g. Maths teacher <input name="role" type="text" maxlength="40" required></label></p>
+          <p><label>Phone (optional) <input name="phone" type="text" maxlength="20"></label></p>
+          <p><label>Email (optional) <input name="email" type="text" maxlength="80"></label></p>
+          <p><label>Joined on (optional) <input name="joinedOn" type="date"></label></p>
+          <button type="submit">Add staff</button>
+        </form>
+        <ul id="staffdir-list"></ul>
+      </section>
+      <section id="vendors" aria-labelledby="vendors-title" hidden>
+        <h3 id="vendors-title">Vendors</h3>
+        <p id="vendors-status" role="status"></p>
+        <form id="vendors-form">
+          <p><label>Name <input name="name" type="text" maxlength="80" required></label></p>
+          <p><label>Service, e.g. Plumber <input name="trade" type="text" maxlength="60" required></label></p>
+          <p><label>Phone (optional) <input name="phone" type="text" maxlength="20"></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <button type="submit">Add vendor</button>
+        </form>
+        <ul id="vendors-list"></ul>
+      </section>
+      <section id="minutes" aria-labelledby="minutes-title" hidden>
+        <h3 id="minutes-title">Meeting Minutes</h3>
+        <p id="minutes-status" role="status"></p>
+        <form id="minutes-form">
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Title <input name="title" type="text" maxlength="100" required></label></p>
+          <p><label>Notes <textarea name="notes" rows="5" maxlength="3000" required></textarea></label></p>
+          <button type="submit">Save minutes</button>
+        </form>
+        <ul id="minutes-list"></ul>
+      </section>
+      <section id="lostfound" aria-labelledby="lostfound-title" hidden>
+        <h3 id="lostfound-title">Lost and Found</h3>
+        <p id="lostfound-status" role="status"></p>
+        <form id="lostfound-form">
+          <p><label>Item <input name="item" type="text" maxlength="100" required></label></p>
+          <p><label>Type <select name="kind"><option value="found">Found</option><option value="lost">Lost</option></select></label></p>
+          <p><label>Place (optional) <input name="place" type="text" maxlength="60"></label></p>
+          <button type="submit">Add item</button>
+        </form>
+        <ul id="lostfound-list"></ul>
+      </section>
       <section id="alumni" aria-labelledby="alumni-title" hidden>
         <h3 id="alumni-title">Alumni</h3>
         <p id="alumni-status" role="status"></p>
@@ -889,7 +936,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-13');
+      await import('./sign-in.mjs?v=batch-14');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

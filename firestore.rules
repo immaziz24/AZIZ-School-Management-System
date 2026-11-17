@@ -487,6 +487,38 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Staff directory. staffDirectory/{id}: name, role, optional phone, email, joinedOn. Owner only.
+      match /staffDirectory/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validStaffCard(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Vendors. vendors/{id}: name, trade, optional phone, note. Owner only.
+      match /vendors/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validVendor(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Meeting minutes. minutes/{id}: date, title, notes. Owner only.
+      match /minutes/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validMinutes(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Lost and found. lostFound/{id}: item, kind lost/found, date, status open/returned, optional place. Owner only.
+      match /lostFound/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validLostFound(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
       // Alumni. alumni/{id}: name, passoutYear, optional contact, occupation and note. Owner only.
       match /alumni/{alumniId} {
         allow get, list: if request.auth != null && isSchoolViewer(schoolId);
@@ -1229,6 +1261,42 @@ service cloud.firestore {
         && (!item.keys().hasAny(['place']) || (item.place is string && item.place.size() <= 60))
         && item.priority in ['low', 'normal', 'high'] && item.status in ['open', 'done']
         && item.createdOn is string && item.createdOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+    }
+
+    function validStaffCard(item) {
+      return item.keys().hasOnly(['name', 'role', 'phone', 'email', 'joinedOn'])
+        && item.keys().hasAll(['name', 'role'])
+        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
+        && item.role is string && item.role.size() <= 40 && item.role.matches('.*[^[:space:]].*')
+        && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{1,20}')))
+        && (!item.keys().hasAny(['email']) || (item.email is string && item.email.size() <= 80))
+        && (!item.keys().hasAny(['joinedOn']) || (item.joinedOn is string && item.joinedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+    }
+
+    function validVendor(item) {
+      return item.keys().hasOnly(['name', 'trade', 'phone', 'note'])
+        && item.keys().hasAll(['name', 'trade'])
+        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
+        && item.trade is string && item.trade.size() <= 60 && item.trade.matches('.*[^[:space:]].*')
+        && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{1,20}')))
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+    }
+
+    function validMinutes(item) {
+      return item.keys().hasOnly(['date', 'title', 'notes'])
+        && item.keys().hasAll(['date', 'title', 'notes'])
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
+        && item.notes is string && item.notes.size() <= 3000 && item.notes.matches('.*[^[:space:]].*');
+    }
+
+    function validLostFound(item) {
+      return item.keys().hasOnly(['item', 'kind', 'date', 'status', 'place'])
+        && item.keys().hasAll(['item', 'kind', 'date', 'status'])
+        && item.item is string && item.item.size() <= 100 && item.item.matches('.*[^[:space:]].*')
+        && item.kind in ['lost', 'found'] && item.status in ['open', 'returned']
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && (!item.keys().hasAny(['place']) || (item.place is string && item.place.size() <= 60));
     }
 
     function validInventoryItem(item) {
