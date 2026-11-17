@@ -138,3 +138,15 @@ th, td {
     border-bottom: 1px solid #999;
   }
 }
+
+.card-sheet {
+  max-width: 420px;
+  padding: 16px;
+  border: 2px solid #14243d;
+  border-radius: 8px;
+}
+
+.card-sheet ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}

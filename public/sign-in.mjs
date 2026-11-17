@@ -221,6 +221,7 @@ async function loadAcademic(request) {
     renderReviewExams();
     renderMarksReview();
     renderReportStudents();
+    renderCardStudents();
     renderFamilyLinks();
     classTeacherData = classTeacherDocs.docs;
     renderClassTeachers();
@@ -787,6 +788,7 @@ async function loadPortal(tools, request) {
     loadPortalFees(tools, request, studentId);
     loadPortalNotices(tools, request, studentId);
     loadPortalSchoolwork(tools, request, studentId);
+    loadUpcomingEvents(tools.schoolRef, portalCalendarSection, portalCalendarStatus, portalCalendarList);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
       getDocsFromServer(query(collection(schoolRef, 'exams'), where('published', '==', true))),
@@ -2289,7 +2291,7 @@ gradingForm.addEventListener('submit', async (event) => {
 // print rules in sign-in.css); a heading with the school, student and date is filled in first.
 function printCard(headingId, who) {
   const heading = document.querySelector(headingId);
-  heading.textContent = (schoolName.textContent || 'School') + ' - Report Card - ' + who + ' - ' + localToday();
+  heading.textContent = (schoolName.textContent || 'School') + ' - ' + who + ' - ' + localToday();
   document.body.classList.add('printing');
   const done = () => {
     document.body.classList.remove('printing');
@@ -2304,7 +2306,7 @@ document.querySelector('#report-print').addEventListener('click', () => {
     reportStatus.textContent = 'There are no published results to print for this student.';
     return;
   }
-  printCard('#report-print-head', reportStudent.selectedOptions[0]?.textContent ?? '');
+  printCard('#report-print-head', 'Report Card - ' + (reportStudent.selectedOptions[0]?.textContent ?? ''));
 });
 
 document.querySelector('#portal-print').addEventListener('click', () => {
@@ -2312,7 +2314,7 @@ document.querySelector('#portal-print').addEventListener('click', () => {
     portalStatus.textContent = 'There are no published results to print yet.';
     return;
   }
-  printCard('#portal-print-head', portalStudent.textContent);
+  printCard('#portal-print-head', 'Report Card - ' + portalStudent.textContent);
 });
 
 // School summary, CSV exports and class performance. Everything here is read-only: it is worked out
@@ -2744,6 +2746,175 @@ async function loadPortalSchoolwork(tools, request, studentId) {
   }
 }
 
+// School calendar. The owner adds holidays, exams, events and meetings; teachers and linked families
+// see what is coming up.
+const KIND_LABEL = { holiday: 'Holiday', exam: 'Exam', event: 'Event', meeting: 'Meeting' };
+const calendarSection = document.querySelector('#calendar');
+const calendarStatus = document.querySelector('#calendar-status');
+const calendarForm = document.querySelector('#calendar-form');
+const calendarList = document.querySelector('#calendar-list');
+const teacherCalendarSection = document.querySelector('#teacher-calendar');
+const teacherCalendarStatus = document.querySelector('#teacher-calendar-status');
+const teacherCalendarList = document.querySelector('#teacher-calendar-list');
+const portalCalendarSection = document.querySelector('#portal-calendar');
+const portalCalendarStatus = document.querySelector('#portal-calendar-status');
+const portalCalendarList = document.querySelector('#portal-calendar-list');
+
+const eventText = (item) => item.date + ' - ' + (KIND_LABEL[item.kind] ?? item.kind) + ': ' + item.title
+  + (item.note ? ' (' + item.note + ')' : '');
+const byDate = (a, b) => a.data.date.localeCompare(b.data.date) || a.id.localeCompare(b.id);
+
+async function loadCalendar(request) {
+  try {
+    const saved = await academic.list('calendar');
+    if (request !== schoolRequest) return;
+    calendarSection.hidden = false;
+    calendarList.replaceChildren();
+    const today = localToday();
+    const items = saved.docs.map((record) => ({ id: record.id, data: record.data() })).sort(byDate);
+    for (const item of [...items.filter((entry) => entry.data.date >= today), ...items.filter((entry) => entry.data.date < today).reverse()]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Remove';
+      button.addEventListener('click', async () => {
+        if (!academic || academic.busy || !confirm('Remove this event from the calendar?')) return;
+        academic.busy = true;
+        try {
+          await academic.remove('calendar', item.id);
+          academic.busy = false;
+          await loadCalendar(request);
+        } catch {
+          if (request === schoolRequest) calendarStatus.textContent = 'Could not remove the event. Try again.';
+        } finally {
+          academic.busy = false;
+        }
+      });
+      listItem(calendarList, (item.data.date < today ? '(past) ' : '') + eventText(item.data), button);
+    }
+    calendarStatus.textContent = items.length ? '' : 'No events yet.';
+  } catch {
+    if (request === schoolRequest) {
+      calendarSection.hidden = false;
+      calendarStatus.textContent = 'Could not load the calendar. Try again.';
+    }
+  }
+}
+
+calendarForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const fields = new FormData(calendarForm);
+  const title = String(fields.get('title') ?? '').trim();
+  const date = String(fields.get('date') ?? '');
+  const kind = String(fields.get('kind') ?? '');
+  const note = String(fields.get('note') ?? '').trim();
+  if (!title || !DATE_TEXT.test(date)) {
+    calendarStatus.textContent = 'Enter a title and a date.';
+    return;
+  }
+  const id = 'C-' + date.replaceAll('-', '') + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();
+  const request = schoolRequest;
+  tools.busy = true;
+  calendarStatus.textContent = 'Saving.';
+  try {
+    await tools.save('calendar', id, { title, date, kind, ...(note ? { note } : {}) });
+    tools.busy = false;
+    calendarForm.reset();
+    await loadCalendar(request);
+    if (request === schoolRequest) calendarStatus.textContent = 'Event added.';
+  } catch {
+    if (request === schoolRequest) calendarStatus.textContent = 'Could not save the event. Check the details and try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
+
+async function loadUpcomingEvents(schoolRef, section, status, list) {
+  const { collection, getDocsFromServer } = firestoreTools;
+  const request = schoolRequest;
+  section.hidden = false;
+  status.textContent = 'Loading calendar.';
+  try {
+    const saved = await getDocsFromServer(collection(schoolRef, 'calendar'));
+    if (request !== schoolRequest) return;
+    const today = localToday();
+    const items = saved.docs.map((record) => ({ id: record.id, data: record.data() }))
+      .filter((entry) => entry.data.date >= today).sort(byDate);
+    list.replaceChildren();
+    for (const item of items) listItem(list, eventText(item.data));
+    status.textContent = items.length ? '' : 'Nothing coming up on the calendar.';
+  } catch {
+    if (request === schoolRequest) status.textContent = 'Could not load the calendar. Try again.';
+  }
+}
+
+// ID cards and admit cards. The card is built on screen and printed with the browser's print dialog
+// (which can also save a PDF). An admit card lists the exams of the student's class in the placement year.
+const cardsSection = document.querySelector('#cards');
+const cardsStatus = document.querySelector('#cards-status');
+const cardsStudent = document.querySelector('#cards-student');
+const cardSheet = document.querySelector('#card-sheet');
+const cardTitle = document.querySelector('#card-title');
+const cardLines = document.querySelector('#card-lines');
+const cardTable = document.querySelector('#card-table');
+const cardBody = document.querySelector('#card-body');
+
+function renderCardStudents() {
+  fillSelect(cardsStudent, [...studentRecords].sort((a, b) => a.data().name.localeCompare(b.data().name)),
+    (student) => student.name + ' (' + student.admissionNo + ')');
+  cardsSection.hidden = false;
+}
+
+function buildCard(kind) {
+  const record = studentRecords.find((item) => item.id === cardsStudent.value);
+  if (!record) {
+    cardsStatus.textContent = 'Choose a student first.';
+    return false;
+  }
+  const student = record.data();
+  const activeYear = examData.years.find((item) => item.data().status === 'active');
+  const placement = placementData.enrollments.map((item) => item.data())
+    .find((item) => item.studentId === record.id && activeYear && item.yearId === activeYear.id);
+  if (!placement) {
+    cardsStatus.textContent = 'This student is not placed in a class for the active year yet.';
+    return false;
+  }
+  const sectionName = placementData.sections.find((item) => item.id === placement.sectionId)?.data().name ?? placement.sectionId;
+  cardTitle.textContent = (kind === 'admit' ? 'Admit Card' : 'Student ID Card') + ' - ' + activeYear.data().label;
+  cardLines.replaceChildren();
+  const lines = ['Name: ' + student.name, 'Admission no: ' + student.admissionNo,
+    'Class: ' + nameOfClass(placement.classId) + ' - ' + sectionName + ', roll ' + placement.rollNo];
+  if (kind === 'id') lines.push('Guardian: ' + student.guardianName, 'Phone: ' + (student.guardianPhone || '-'));
+  for (const line of lines) listItem(cardLines, line);
+  cardBody.replaceChildren();
+  cardTable.hidden = kind !== 'admit';
+  if (kind === 'admit') {
+    const exams = examData.exams.filter((item) => item.data().classId === placement.classId && item.data().yearId === activeYear.id)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    for (const exam of exams) {
+      const data = exam.data();
+      addRow(cardBody, [data.name, examData.subjects.find((item) => item.id === data.subjectId)?.data().name ?? data.subjectId,
+        String(data.maxMarks)]);
+    }
+    if (!exams.length) {
+      cardsStatus.textContent = 'There are no exams set up for this class yet.';
+      return false;
+    }
+  }
+  cardSheet.hidden = false;
+  cardsStatus.textContent = '';
+  return true;
+}
+
+function printStudentCard(kind) {
+  if (!buildCard(kind)) return;
+  printCard('#card-print-head', cardTitle.textContent + ' - ' + (cardsStudent.selectedOptions[0]?.textContent ?? ''));
+}
+
+document.querySelector('#card-id-print').addEventListener('click', () => printStudentCard('id'));
+document.querySelector('#card-admit-print').addEventListener('click', () => printStudentCard('admit'));
+
 // Teachers' saves are logged as one summary entry each (who, which exam or class day, how many).
 // The log never blocks the save itself: if the entry cannot be written, the save still stands.
 function writeAudit(schoolRef, uid, action, target, docId, detail) {
@@ -2792,6 +2963,18 @@ onAuthStateChanged(auth, async (user) => {
   portalTimetableSection.hidden = true;
   portalTimetableStatus.textContent = '';
   portalTimetableList.replaceChildren();
+  calendarSection.hidden = true;
+  calendarStatus.textContent = '';
+  calendarList.replaceChildren();
+  cardsSection.hidden = true;
+  cardsStatus.textContent = '';
+  cardSheet.hidden = true;
+  teacherCalendarSection.hidden = true;
+  teacherCalendarStatus.textContent = '';
+  teacherCalendarList.replaceChildren();
+  portalCalendarSection.hidden = true;
+  portalCalendarStatus.textContent = '';
+  portalCalendarList.replaceChildren();
   gradingSection.hidden = true;
   gradingStatus.textContent = '';
   grading = { ...DEFAULT_GRADING };
@@ -3006,6 +3189,7 @@ onAuthStateChanged(auth, async (user) => {
       if (request === schoolRequest) await loadTeacherNotices(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadTeacherHomework(request);
       if (request === schoolRequest) await loadTeacherTimetable(request, schoolRef, user.uid);
+      if (request === schoolRequest) await loadUpcomingEvents(schoolRef, teacherCalendarSection, teacherCalendarStatus, teacherCalendarList);
       return;
     }
     if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
@@ -3110,6 +3294,8 @@ onAuthStateChanged(auth, async (user) => {
     if (request === schoolRequest) await loadAuditLog(request);
     if (request === schoolRequest) await loadTimetable(request);
     if (request === schoolRequest) await loadOwnerHomework(request);
+    if (request === schoolRequest) await loadCalendar(request);
+    if (request === schoolRequest) renderCardStudents();
     if (request === schoolRequest) await renderSummary(request);
   } catch (error) {
     if (request !== schoolRequest) return;
@@ -3174,3 +3360,7 @@ signOutButton.addEventListener('click', async () => {
   }
 });
 
+// Installable app: the service worker keeps the page shell for offline opening.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}

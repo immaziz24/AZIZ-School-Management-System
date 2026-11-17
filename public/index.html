@@ -4,7 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AZIZ School Management System</title>
-  <link rel="stylesheet" href="./sign-in.css?v=batch-1">
+  <meta name="theme-color" content="#14243d">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-2">
 </head>
 <body>
   <main>
@@ -283,6 +287,34 @@
         <p id="homework-owner-status" role="status"></p>
         <ul id="homework-owner-list"></ul>
       </section>
+      <section id="calendar" aria-labelledby="calendar-title" hidden>
+        <h3 id="calendar-title">School Calendar</h3>
+        <p id="calendar-status" role="status"></p>
+        <form id="calendar-form">
+          <p><label>Title <input name="title" required maxlength="100"></label></p>
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Kind <select name="kind"><option value="holiday">Holiday</option><option value="exam">Exam</option><option value="event">Event</option><option value="meeting">Meeting</option></select></label></p>
+          <p><label>Note (optional) <input name="note" maxlength="300"></label></p>
+          <button type="submit">Add to calendar</button>
+        </form>
+        <ul id="calendar-list"></ul>
+      </section>
+      <section id="cards" aria-labelledby="cards-title" hidden>
+        <h3 id="cards-title">ID Cards and Admit Cards</h3>
+        <p id="cards-status" role="status"></p>
+        <p><label>Student <select id="cards-student"></select></label></p>
+        <button id="card-id-print" class="no-print" type="button">Print ID card</button>
+        <button id="card-admit-print" class="no-print" type="button">Print admit card</button>
+        <div id="card-sheet" class="print-target card-sheet" hidden>
+          <p id="card-print-head" class="print-only"></p>
+          <h4 id="card-title"></h4>
+          <ul id="card-lines"></ul>
+          <table id="card-table" hidden>
+            <thead><tr><th>Exam</th><th>Subject</th><th>Max marks</th></tr></thead>
+            <tbody id="card-body"></tbody>
+          </table>
+        </div>
+      </section>
       <section id="grading" aria-labelledby="grading-title" hidden>
         <h3 id="grading-title">Pass Marks and Grades</h3>
         <p id="grading-status" role="status"></p>
@@ -389,6 +421,11 @@
         <p id="teacher-timetable-status" role="status"></p>
         <ul id="teacher-timetable-list"></ul>
       </section>
+      <section id="teacher-calendar" aria-labelledby="teacher-calendar-title" hidden>
+        <h3 id="teacher-calendar-title">School Calendar</h3>
+        <p id="teacher-calendar-status" role="status"></p>
+        <ul id="teacher-calendar-list"></ul>
+      </section>
       <section id="teacher-notices" aria-labelledby="teacher-notices-title" hidden>
         <h3 id="teacher-notices-title">Notices</h3>
         <p id="teacher-notices-status" role="status"></p>
@@ -448,6 +485,11 @@
         <p id="portal-timetable-status" role="status"></p>
         <ul id="portal-timetable-list"></ul>
       </section>
+      <section id="portal-calendar" aria-labelledby="portal-calendar-title" hidden>
+        <h3 id="portal-calendar-title">School Calendar</h3>
+        <p id="portal-calendar-status" role="status"></p>
+        <ul id="portal-calendar-list"></ul>
+      </section>
       <section id="portal-notices" aria-labelledby="portal-notices-title" hidden>
         <h3 id="portal-notices-title">Notices</h3>
         <p id="portal-notices-status" role="status"></p>
@@ -459,7 +501,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-1');
+      await import('./sign-in.mjs?v=batch-2');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
