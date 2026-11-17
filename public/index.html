@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-6">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-7">
 </head>
 <body>
   <main>
@@ -475,6 +475,30 @@
         <p id="eventregs-status" role="status"></p>
         <ul id="eventregs-list"></ul>
       </section>
+      <section id="checklist" aria-labelledby="checklist-title" hidden>
+        <h3 id="checklist-title">Setup Checklist</h3>
+        <p id="checklist-status" role="status"></p>
+        <ul id="checklist-list"></ul>
+      </section>
+      <section id="defaulters" aria-labelledby="defaulters-title" hidden>
+        <h3 id="defaulters-title">Fee Dues Report</h3>
+        <p id="defaulters-status" role="status"></p>
+        <p><label>Class <select id="defaulters-class"></select></label>
+          <button type="button" id="defaulters-run">Show students with dues</button>
+          <button type="button" id="defaulters-csv">Download CSV</button></p>
+        <ul id="defaulters-list"></ul>
+      </section>
+      <section id="workload" aria-labelledby="workload-title" hidden>
+        <h3 id="workload-title">Teacher Workload</h3>
+        <p id="workload-status" role="status"></p>
+        <ul id="workload-list"></ul>
+      </section>
+      <section id="backup" aria-labelledby="backup-title" hidden>
+        <h3 id="backup-title">Data Backup</h3>
+        <p>Downloads a copy of the school's records as one file. It contains private student, family and staff details: keep it somewhere safe and do not share it.</p>
+        <p id="backup-status" role="status"></p>
+        <button type="button" id="backup-run">Download backup</button>
+      </section>
       <section id="routes" aria-labelledby="routes-title" hidden>
         <h3 id="routes-title">Transport Routes</h3>
         <p id="routes-status" role="status"></p>
@@ -792,7 +816,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-6');
+      await import('./sign-in.mjs?v=batch-7');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

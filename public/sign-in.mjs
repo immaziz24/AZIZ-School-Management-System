@@ -3815,6 +3815,190 @@ async function loadPortalEvents(tools, request, studentId) {
   }
 }
 
+// Reports and tools computed in the browser from data already loaded: setup checklist, fee dues,
+// teacher workload and a full data backup. None of these write anything.
+const checklistSection = document.querySelector('#checklist');
+const checklistStatus = document.querySelector('#checklist-status');
+const checklistList = document.querySelector('#checklist-list');
+const defaultersSection = document.querySelector('#defaulters');
+const defaultersStatus = document.querySelector('#defaulters-status');
+const defaultersClass = document.querySelector('#defaulters-class');
+const defaultersList = document.querySelector('#defaulters-list');
+const workloadSection = document.querySelector('#workload');
+const workloadStatus = document.querySelector('#workload-status');
+const workloadList = document.querySelector('#workload-list');
+const backupSection = document.querySelector('#backup');
+const backupStatus = document.querySelector('#backup-status');
+const backupRun = document.querySelector('#backup-run');
+let defaultersRows = [];
+
+function renderChecklist() {
+  const year = activeYearRecord();
+  const active = studentRecords.filter((record) => record.data().status === 'active');
+  const placed = year ? placementData.enrollments.filter((record) => record.data().yearId === year.id).length : 0;
+  const steps = [
+    ['An academic year is active', Boolean(year)],
+    ['Classes are created', examData.classes.length > 0],
+    ['Sections are created', placementData.sections.length > 0],
+    ['Subjects are created', examData.subjects.length > 0],
+    ['Students are added', active.length > 0],
+    ['Students are placed in classes this year', Boolean(year) && placed > 0 && placed >= active.length],
+    ['Teachers are added', staffRoster.length > 0],
+    ['Fees are set for this year', Boolean(year) && feeData.structures.some((item) => item.data().yearId === year.id)],
+    ['Timetable is filled', timetableData.length > 0],
+    ['Exams are set up', examData.exams.length > 0],
+  ];
+  checklistList.replaceChildren();
+  let done = 0;
+  for (const [label, ok] of steps) {
+    if (ok) done += 1;
+    listItem(checklistList, (ok ? 'DONE - ' : 'TO DO - ') + label);
+  }
+  checklistSection.hidden = false;
+  checklistStatus.textContent = done + ' of ' + steps.length + ' steps done.';
+}
+
+function feeDuesRows(classId) {
+  const year = activeYearRecord();
+  if (!year) return null;
+  const rows = [];
+  for (const record of placementData.enrollments.filter((item) => item.data().yearId === year.id
+    && (!classId || item.data().classId === classId))) {
+    const student = studentRecords.find((item) => item.id === record.data().studentId)?.data();
+    if (!student || student.status !== 'active') continue;
+    const summary = feeSummaryFor(record.data().studentId, year.id, record.data().classId);
+    if (summary.balance > 0) rows.push({ student, classId: record.data().classId, ...summary });
+  }
+  return rows.sort((a, b) => b.balance - a.balance || a.student.name.localeCompare(b.student.name));
+}
+
+function renderDefaulterClasses() {
+  const classes = [...examData.classes].sort(byClassOrder);
+  const previous = defaultersClass.value;
+  defaultersClass.replaceChildren();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = 'All classes';
+  defaultersClass.append(all);
+  for (const record of classes) {
+    const option = document.createElement('option');
+    option.value = record.id;
+    option.textContent = record.data().name;
+    defaultersClass.append(option);
+  }
+  defaultersClass.value = previous;
+  defaultersSection.hidden = false;
+}
+
+document.querySelector('#defaulters-run').addEventListener('click', () => {
+  const rows = feeDuesRows(defaultersClass.value);
+  defaultersList.replaceChildren();
+  if (!rows) {
+    defaultersStatus.textContent = 'Activate an academic year first.';
+    defaultersRows = [];
+    return;
+  }
+  defaultersRows = rows;
+  for (const row of rows) {
+    listItem(defaultersList, row.student.name + ' (' + row.student.admissionNo + ') - ' + nameOfClass(row.classId)
+      + ' - due ' + rupees(row.due) + ', paid ' + rupees(row.paid) + ', balance ' + rupees(row.balance)
+      + (row.student.guardianPhone ? ' - ' + row.student.guardianName + ' ' + row.student.guardianPhone : ''));
+  }
+  defaultersStatus.textContent = rows.length
+    ? rows.length + ' students owe ' + rupees(rows.reduce((sum, row) => sum + row.balance, 0)) + ' in total.'
+    : 'Nobody has dues here.';
+});
+
+document.querySelector('#defaulters-csv').addEventListener('click', () => {
+  if (!defaultersRows.length) {
+    defaultersStatus.textContent = 'Show the students with dues first.';
+    return;
+  }
+  downloadCsv('fee-dues', [['Admission no', 'Name', 'Class', 'Guardian', 'Guardian phone', 'Due (Rs)', 'Paid (Rs)', 'Balance (Rs)'],
+    ...defaultersRows.map((row) => [row.student.admissionNo, row.student.name, nameOfClass(row.classId), row.student.guardianName,
+      row.student.guardianPhone, row.due, row.paid, row.balance])]);
+});
+
+function renderWorkload() {
+  const byTeacher = new Map();
+  for (const { data } of timetableData) {
+    const name = (data.teacher ?? '').trim() || '(no teacher named)';
+    const entry = byTeacher.get(name) ?? { periods: 0, days: new Map(), classes: new Set() };
+    entry.periods += 1;
+    entry.days.set(data.day, (entry.days.get(data.day) ?? 0) + 1);
+    entry.classes.add(data.className);
+    byTeacher.set(name, entry);
+  }
+  workloadList.replaceChildren();
+  for (const [name, entry] of [...byTeacher].sort((a, b) => b[1].periods - a[1].periods || a[0].localeCompare(b[0]))) {
+    listItem(workloadList, name + ' - ' + entry.periods + ' periods a week, busiest day ' + Math.max(...entry.days.values())
+      + ' periods, ' + entry.classes.size + ' classes');
+  }
+  workloadSection.hidden = false;
+  workloadStatus.textContent = byTeacher.size ? 'Counted from the timetable.' : 'The timetable is empty, so there is nothing to count yet.';
+}
+
+const BACKUP_COLLECTIONS = ['members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
+  'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
+  'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
+  'activities', 'activityMembers', 'inventory', 'alumni', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
+  'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog'];
+
+backupRun.addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  if (!confirm('Download a backup that contains private records? Keep the file safe.')) return;
+  const request = schoolRequest;
+  tools.busy = true;
+  backupRun.disabled = true;
+  const backup = { school: 'abcd-school', takenAt: new Date().toISOString(), collections: {}, notRead: [] };
+  try {
+    let done = 0;
+    for (let start = 0; start < BACKUP_COLLECTIONS.length; start += 5) {
+      const group = BACKUP_COLLECTIONS.slice(start, start + 5);
+      const results = await Promise.allSettled(group.map((name) => tools.list(name)));
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') backup.collections[group[index]] = Object.fromEntries(result.value.docs.map((record) => [record.id, record.data()]));
+        else backup.notRead.push(group[index]);
+      });
+      done += group.length;
+      if (request === schoolRequest) backupStatus.textContent = 'Reading ' + done + ' of ' + BACKUP_COLLECTIONS.length + '.';
+    }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'school-backup-' + localToday() + '.json';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await tools.log('bulk', 'backup', 'download', Object.keys(backup.collections).length + ' collections');
+    if (request === schoolRequest) {
+      backupStatus.textContent = 'Backup downloaded (' + Object.keys(backup.collections).length + ' lists).'
+        + (backup.notRead.length ? ' Could not read: ' + backup.notRead.join(', ') + '.' : '');
+    }
+  } catch {
+    if (request === schoolRequest) backupStatus.textContent = 'The backup did not finish. Try again.';
+  } finally {
+    tools.busy = false;
+    backupRun.disabled = false;
+  }
+});
+
+function renderInsights() {
+  renderChecklist();
+  renderDefaulterClasses();
+  renderWorkload();
+  backupSection.hidden = false;
+}
+const resetInsights = () => {
+  for (const section of [checklistSection, defaultersSection, workloadSection, backupSection]) section.hidden = true;
+  for (const list of [checklistList, defaultersList, workloadList]) list.replaceChildren();
+  for (const status of [checklistStatus, defaultersStatus, workloadStatus, backupStatus]) status.textContent = '';
+  defaultersRows = [];
+};
+
 async function loadOwnerLists(request) {
   for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
     if (request !== schoolRequest) return;
@@ -4298,6 +4482,7 @@ onAuthStateChanged(auth, async (user) => {
   websiteSection.hidden = true;
   websiteStatus.textContent = '';
   websiteForm.reset();
+  resetInsights();
   gradingSection.hidden = true;
   gradingStatus.textContent = '';
   grading = { ...DEFAULT_GRADING };
@@ -4633,6 +4818,7 @@ onAuthStateChanged(auth, async (user) => {
     if (request === schoolRequest) renderPromotionYears();
     if (request === schoolRequest) await loadOwnerLists(request);
     if (request === schoolRequest) await loadWebsite(request);
+    if (request === schoolRequest) renderInsights();
     if (request === schoolRequest) await renderSummary(request);
   } catch (error) {
     if (request !== schoolRequest) return;
