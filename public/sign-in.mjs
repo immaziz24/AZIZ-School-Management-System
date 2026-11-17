@@ -794,6 +794,7 @@ async function loadPortal(tools, request) {
     loadPortalLife(tools, request, studentId);
     loadPortalCommunity(tools, request, studentId);
     loadPortalEvents(tools, request, studentId);
+    loadPortalCoursework(tools, request, studentId);
     loadUpcomingEvents(tools.schoolRef, portalCalendarSection, portalCalendarStatus, portalCalendarList);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
@@ -4370,6 +4371,292 @@ messageForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Teacher side: homework submissions with feedback, and class tests (continuous assessment).
+const teacherSubmissionsSection = document.querySelector('#teacher-submissions');
+const teacherSubmissionsStatus = document.querySelector('#teacher-submissions-status');
+const teacherSubmissionsList = document.querySelector('#teacher-submissions-list');
+const teacherAssessmentsSection = document.querySelector('#teacher-assessments');
+const teacherAssessmentsStatus = document.querySelector('#teacher-assessments-status');
+const assessmentForm = document.querySelector('#assessment-form');
+const assessmentSelect = document.querySelector('#assessment-select');
+const assessmentRemove = document.querySelector('#assessment-remove');
+const assessmentScoresForm = document.querySelector('#assessment-scores');
+const assessmentBody = document.querySelector('#assessment-body');
+let teacherAssessments = []; // records of this teacher's class and subject
+let assessmentRoster = []; // { studentId, sectionName, rollNo, yearId }
+
+async function loadTeacherSubmissions(request) {
+  const context = teacherHomework;
+  if (!context) return;
+  const { collection, query, where, getDocsFromServer, doc, setDoc } = firestoreTools;
+  teacherSubmissionsSection.hidden = false;
+  teacherSubmissionsStatus.textContent = 'Loading submissions.';
+  try {
+    const saved = await getDocsFromServer(query(collection(context.schoolRef, 'submissions'), where('classId', '==', context.classId)));
+    if (request !== schoolRequest || context !== teacherHomework) return;
+    teacherSubmissionsList.replaceChildren();
+    for (const record of saved.docs.sort((a, b) => b.data().submittedOn.localeCompare(a.data().submittedOn) || a.id.localeCompare(b.id))) {
+      const item = record.data();
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = item.feedback ? 'Change feedback' : 'Give feedback';
+      button.addEventListener('click', async () => {
+        const feedback = (prompt('Feedback for ' + item.studentName + ':', item.feedback ?? '') ?? '').trim();
+        if (!feedback || feedback.length > 500 || context.busy) return;
+        context.busy = true;
+        try {
+          await setDoc(doc(context.schoolRef, 'submissions', record.id), { ...item, feedback, feedbackAt: localToday() });
+        } catch {
+          teacherSubmissionsStatus.textContent = 'Could not save the feedback. Try again.';
+        } finally {
+          context.busy = false;
+        }
+        await loadTeacherSubmissions(request);
+      });
+      listItem(teacherSubmissionsList, item.submittedOn + ' - ' + item.studentName + ' - ' + item.homeworkTitle + ': ' + item.answer
+        + (item.feedback ? ' | Your feedback: ' + item.feedback : ' | No feedback yet'), button);
+    }
+    teacherSubmissionsStatus.textContent = saved.docs.length ? '' : 'No homework has been submitted yet.';
+  } catch {
+    if (request === schoolRequest) teacherSubmissionsStatus.textContent = 'Could not load submissions. Try again.';
+  }
+}
+
+async function loadTeacherAssessments(request) {
+  const context = teacherHomework;
+  if (!context) return;
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  teacherAssessmentsSection.hidden = false;
+  teacherAssessmentsStatus.textContent = 'Loading.';
+  try {
+    const [saved, placements, sections] = await Promise.all([
+      getDocsFromServer(query(collection(context.schoolRef, 'assessments'),
+        where('classId', '==', context.classId), where('subjectId', '==', context.subjectId))),
+      getDocsFromServer(query(collection(context.schoolRef, 'enrollments'), where('classId', '==', context.classId))),
+      getDocsFromServer(query(collection(context.schoolRef, 'sections'), where('classId', '==', context.classId)))]);
+    if (request !== schoolRequest || context !== teacherHomework) return;
+    teacherAssessments = saved.docs.sort((a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id));
+    const rows = placements.docs.map((record) => record.data());
+    const latest = rows.map((item) => item.yearId).sort().at(-1);
+    const sectionName = (id) => sections.docs.find((record) => record.id === id)?.data().name ?? id;
+    assessmentRoster = rows.filter((item) => item.yearId === latest)
+      .map((item) => ({ studentId: item.studentId, sectionName: sectionName(item.sectionId), rollNo: item.rollNo, yearId: item.yearId }))
+      .sort((a, b) => a.sectionName.localeCompare(b.sectionName) || a.rollNo - b.rollNo);
+    fillSelect(assessmentSelect, teacherAssessments, (item) => item.title + ' (' + item.date + ', out of ' + item.maxMarks + ')');
+    teacherAssessmentsStatus.textContent = teacherAssessments.length ? '' : 'No class tests yet. Add one above.';
+    await renderAssessmentScores(request);
+  } catch {
+    if (request === schoolRequest) teacherAssessmentsStatus.textContent = 'Could not load class tests. Try again.';
+  }
+}
+
+async function renderAssessmentScores(request) {
+  const context = teacherHomework;
+  const record = teacherAssessments.find((item) => item.id === assessmentSelect.value);
+  assessmentBody.replaceChildren();
+  assessmentScoresForm.querySelector('button').disabled = !record;
+  assessmentRemove.disabled = !record;
+  if (!record || !context) return;
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  try {
+    const saved = await getDocsFromServer(query(collection(context.schoolRef, 'assessmentScores'),
+      where('assessmentId', '==', record.id), where('classId', '==', context.classId)));
+    if (request !== schoolRequest || context !== teacherHomework || record.id !== assessmentSelect.value) return;
+    const scores = new Map(saved.docs.map((item) => [item.data().studentId, item.data().score]));
+    for (const row of assessmentRoster) {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = String(record.data().maxMarks);
+      input.step = '1';
+      input.dataset.student = row.studentId;
+      input.dataset.original = scores.has(row.studentId) ? String(scores.get(row.studentId)) : '';
+      input.value = input.dataset.original;
+      input.setAttribute('aria-label', 'Marks for ' + row.sectionName + ' roll ' + row.rollNo);
+      const tr = document.createElement('tr');
+      for (const content of [row.sectionName, String(row.rollNo), input]) {
+        const td = document.createElement('td');
+        td.append(content);
+        tr.append(td);
+      }
+      assessmentBody.append(tr);
+    }
+    if (!assessmentRoster.length) teacherAssessmentsStatus.textContent = 'No students have been placed in your class yet.';
+  } catch {
+    if (request === schoolRequest) teacherAssessmentsStatus.textContent = 'Could not load the scores. Try again.';
+  }
+}
+
+assessmentSelect.addEventListener('change', () => renderAssessmentScores(schoolRequest));
+
+assessmentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = teacherHomework;
+  if (!context || context.busy) return;
+  const fields = new FormData(assessmentForm);
+  const title = text(fields, 'title');
+  const date = text(fields, 'date');
+  const maxMarks = wholeNumber(fields, 'maxMarks');
+  if (!title || !DATE_TEXT.test(date) || !(maxMarks >= 1 && maxMarks <= 1000)) {
+    teacherAssessmentsStatus.textContent = 'Enter the title, the date and the maximum marks (1 to 1000).';
+    return;
+  }
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  try {
+    await setDoc(doc(context.schoolRef, 'assessments', newId('AS')), {
+      classId: context.classId, subjectId: context.subjectId, subject: context.subject, title, date, maxMarks, createdBy: context.uid,
+    });
+    context.busy = false;
+    assessmentForm.reset();
+    await loadTeacherAssessments(request);
+    if (request === schoolRequest) teacherAssessmentsStatus.textContent = 'Class test added. Enter the scores below.';
+  } catch {
+    if (request === schoolRequest) teacherAssessmentsStatus.textContent = 'Could not add the class test. Check the details and try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+
+assessmentRemove.addEventListener('click', async () => {
+  const context = teacherHomework;
+  const record = teacherAssessments.find((item) => item.id === assessmentSelect.value);
+  if (!context || !record || context.busy || !confirm('Remove "' + record.data().title + '" and all its scores?')) return;
+  const { collection, query, where, getDocsFromServer, doc, deleteDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  try {
+    const scores = await getDocsFromServer(query(collection(context.schoolRef, 'assessmentScores'),
+      where('assessmentId', '==', record.id), where('classId', '==', context.classId)));
+    await Promise.all(scores.docs.map((item) => deleteDoc(doc(context.schoolRef, 'assessmentScores', item.id))));
+    await deleteDoc(doc(context.schoolRef, 'assessments', record.id));
+    context.busy = false;
+    await loadTeacherAssessments(request);
+    if (request === schoolRequest) teacherAssessmentsStatus.textContent = 'Class test removed.';
+  } catch {
+    if (request === schoolRequest) teacherAssessmentsStatus.textContent = 'Could not remove it. Try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+
+assessmentScoresForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = teacherHomework;
+  const record = teacherAssessments.find((item) => item.id === assessmentSelect.value);
+  if (!context || !record || context.busy) return;
+  const assessment = record.data();
+  const writes = [];
+  for (const input of assessmentBody.querySelectorAll('input')) {
+    if (input.value === input.dataset.original || input.value === '') continue;
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < 0 || value > assessment.maxMarks) {
+      teacherAssessmentsStatus.textContent = 'Marks must be whole numbers from 0 to ' + assessment.maxMarks + '.';
+      return;
+    }
+    const row = assessmentRoster.find((item) => item.studentId === input.dataset.student);
+    writes.push({ studentId: row.studentId, yearId: row.yearId, score: value });
+  }
+  if (!writes.length) {
+    teacherAssessmentsStatus.textContent = 'Nothing has changed.';
+    return;
+  }
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  let saved = 0;
+  try {
+    for (let start = 0; start < writes.length; start += 10) {
+      const results = await Promise.allSettled(writes.slice(start, start + 10).map((item) => setDoc(
+        doc(context.schoolRef, 'assessmentScores', record.id + '_' + item.studentId), {
+          assessmentId: record.id, assessmentTitle: assessment.title, subject: assessment.subject, subjectId: assessment.subjectId,
+          date: assessment.date, studentId: item.studentId, classId: context.classId, yearId: item.yearId, score: item.score,
+          maxMarks: assessment.maxMarks, createdBy: context.uid })));
+      saved += results.filter((result) => result.status === 'fulfilled').length;
+    }
+    context.busy = false;
+    await renderAssessmentScores(request);
+    if (request === schoolRequest) {
+      teacherAssessmentsStatus.textContent = saved === writes.length ? 'Saved ' + saved + ' scores.'
+        : 'Saved ' + saved + ' of ' + writes.length + ' scores. Try saving again.';
+    }
+  } finally {
+    context.busy = false;
+  }
+});
+
+// Student and parent page: submit homework, and see class test scores.
+const portalSubmitSection = document.querySelector('#portal-submit');
+const portalSubmitStatus = document.querySelector('#portal-submit-status');
+const portalSubmitList = document.querySelector('#portal-submit-list');
+const portalAssessmentsSection = document.querySelector('#portal-assessments');
+const portalAssessmentsStatus = document.querySelector('#portal-assessments-status');
+const portalAssessmentsList = document.querySelector('#portal-assessments-list');
+
+async function loadPortalCoursework(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, getDocFromServer, doc, query, where } = tools;
+  const { setDoc } = firestoreTools;
+  portalSubmitSection.hidden = false;
+  portalAssessmentsSection.hidden = false;
+  portalSubmitStatus.textContent = 'Loading homework.';
+  portalAssessmentsStatus.textContent = 'Loading scores.';
+  try {
+    const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId)));
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    const [work, submitted, scores, student] = await Promise.all([
+      latest ? getDocsFromServer(query(collection(schoolRef, 'homework'), where('classId', '==', latest.classId))) : { docs: [] },
+      getDocsFromServer(query(collection(schoolRef, 'submissions'), where('studentId', '==', studentId))),
+      getDocsFromServer(query(collection(schoolRef, 'assessmentScores'), where('studentId', '==', studentId))),
+      getDocFromServer(doc(schoolRef, 'students', studentId))]);
+    if (request !== schoolRequest) return;
+    const mine = new Map(submitted.docs.map((record) => [record.data().homeworkId, record.data()]));
+    const studentName = student.exists() ? student.data().name : studentId;
+    portalSubmitList.replaceChildren();
+    let busy = false;
+    for (const record of work.docs.sort((a, b) => dueFirst(a.data(), b.data()))) {
+      const item = record.data();
+      const done = mine.get(record.id);
+      let button;
+      if (!done) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Submit answer';
+        button.addEventListener('click', async () => {
+          const answer = (prompt('Your answer for "' + item.title + '" (you can submit only once):') ?? '').trim();
+          if (!answer || answer.length > 2000 || busy) return;
+          busy = true;
+          try {
+            await setDoc(doc(schoolRef, 'submissions', record.id + '_' + studentId), {
+              homeworkId: record.id, homeworkTitle: item.title, studentId, studentName, classId: item.classId,
+              answer, submittedOn: localToday(), createdBy: tools.user.uid });
+          } catch {
+            portalSubmitStatus.textContent = 'Could not submit. Try again.';
+            busy = false;
+            return;
+          }
+          busy = false;
+          await loadPortalCoursework(tools, request, studentId);
+        });
+      }
+      listItem(portalSubmitList, homeworkText(item) + (done ? ' | SUBMITTED ' + done.submittedOn
+        + (done.feedback ? ' | Teacher feedback: ' + done.feedback : ' | Waiting for feedback') : ''), button);
+    }
+    portalSubmitStatus.textContent = work.docs.length ? '' : 'No homework yet.';
+    portalAssessmentsList.replaceChildren();
+    for (const record of scores.docs.sort((a, b) => b.data().date.localeCompare(a.data().date) || a.id.localeCompare(b.id))) {
+      const item = record.data();
+      listItem(portalAssessmentsList, item.date + ' - ' + item.subject + ': ' + item.assessmentTitle + ' - ' + item.score + ' out of ' + item.maxMarks);
+    }
+    portalAssessmentsStatus.textContent = scores.docs.length ? '' : 'No class test scores yet.';
+  } catch {
+    if (request === schoolRequest) {
+      portalSubmitStatus.textContent = 'Could not load homework. Try again.';
+      portalAssessmentsStatus.textContent = 'Could not load scores. Try again.';
+    }
+  }
+}
+
 // Teachers' saves are logged as one summary entry each (who, which exam or class day, how many).
 // The log never blocks the save itself: if the entry cannot be written, the save still stands.
 function writeAudit(schoolRef, uid, action, target, docId, detail) {
@@ -4479,6 +4766,21 @@ onAuthStateChanged(auth, async (user) => {
   portalEventsSection.hidden = true;
   portalEventsStatus.textContent = '';
   portalEventsList.replaceChildren();
+  portalSubmitSection.hidden = true;
+  portalSubmitStatus.textContent = '';
+  portalSubmitList.replaceChildren();
+  portalAssessmentsSection.hidden = true;
+  portalAssessmentsStatus.textContent = '';
+  portalAssessmentsList.replaceChildren();
+  teacherSubmissionsSection.hidden = true;
+  teacherSubmissionsStatus.textContent = '';
+  teacherSubmissionsList.replaceChildren();
+  teacherAssessmentsSection.hidden = true;
+  teacherAssessmentsStatus.textContent = '';
+  assessmentBody.replaceChildren();
+  assessmentForm.reset();
+  teacherAssessments = [];
+  assessmentRoster = [];
   websiteSection.hidden = true;
   websiteStatus.textContent = '';
   websiteForm.reset();
@@ -4699,6 +5001,8 @@ onAuthStateChanged(auth, async (user) => {
       if (request === schoolRequest) await loadTeacherTimetable(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadTeacherCover(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadTeacherLessons(request);
+      if (request === schoolRequest) await loadTeacherSubmissions(request);
+      if (request === schoolRequest) await loadTeacherAssessments(request);
       if (request === schoolRequest) await loadUpcomingEvents(schoolRef, teacherCalendarSection, teacherCalendarStatus, teacherCalendarList);
       return;
     }

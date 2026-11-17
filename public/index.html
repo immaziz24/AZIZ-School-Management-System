@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-7">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-8">
 </head>
 <body>
   <main>
@@ -721,6 +721,30 @@
         <p id="teacher-notices-status" role="status"></p>
         <ul id="teacher-notices-list"></ul>
       </section>
+      <section id="teacher-submissions" aria-labelledby="teacher-submissions-title" hidden>
+        <h3 id="teacher-submissions-title">Homework Submissions</h3>
+        <p id="teacher-submissions-status" role="status"></p>
+        <ul id="teacher-submissions-list"></ul>
+      </section>
+      <section id="teacher-assessments" aria-labelledby="teacher-assessments-title" hidden>
+        <h3 id="teacher-assessments-title">Class Tests and Continuous Assessment</h3>
+        <p id="teacher-assessments-status" role="status"></p>
+        <form id="assessment-form">
+          <p><label>Title <input name="title" type="text" maxlength="100" required></label></p>
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Maximum marks <input name="maxMarks" type="number" min="1" max="1000" step="1" required></label></p>
+          <button type="submit">Add assessment</button>
+        </form>
+        <p><label>Assessment <select id="assessment-select"></select></label>
+          <button type="button" id="assessment-remove">Remove this assessment</button></p>
+        <form id="assessment-scores">
+          <table>
+            <thead><tr><th>Section</th><th>Roll</th><th>Marks</th></tr></thead>
+            <tbody id="assessment-body"></tbody>
+          </table>
+          <button type="submit">Save scores</button>
+        </form>
+      </section>
       <form id="marks-entry" hidden>
         <h3>Marks Entry (old form)</h3>
         <p><label>Exam code <input name="exam" required maxlength="40" pattern="[a-z0-9\-]+" placeholder="midterm"></label></p>
@@ -805,6 +829,16 @@
         <p id="portal-events-status" role="status"></p>
         <ul id="portal-events-list"></ul>
       </section>
+      <section id="portal-submit" aria-labelledby="portal-submit-title" hidden>
+        <h3 id="portal-submit-title">Submit Homework</h3>
+        <p id="portal-submit-status" role="status"></p>
+        <ul id="portal-submit-list"></ul>
+      </section>
+      <section id="portal-assessments" aria-labelledby="portal-assessments-title" hidden>
+        <h3 id="portal-assessments-title">Class Test Scores</h3>
+        <p id="portal-assessments-status" role="status"></p>
+        <ul id="portal-assessments-list"></ul>
+      </section>
       <section id="portal-notices" aria-labelledby="portal-notices-title" hidden>
         <h3 id="portal-notices-title">Notices</h3>
         <p id="portal-notices-status" role="status"></p>
@@ -816,7 +850,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-7');
+      await import('./sign-in.mjs?v=batch-8');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

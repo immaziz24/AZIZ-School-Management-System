@@ -217,6 +217,21 @@ service cloud.firestore {
           && validPayment(request.resource.data);
       }
 
+      function studentInClass(studentId, classId) {
+        let settings = /databases/$(database)/documents/schools/$(schoolId)/settings/academic;
+        return exists(settings)
+          && get(/databases/$(database)/documents/schools/$(schoolId)/enrollments/$(get(settings).data.activeYearId + '_' + studentId)).data.classId == classId;
+      }
+      function scoreAllowed(score) {
+        let assessment = get(/databases/$(database)/documents/schools/$(schoolId)/assessments/$(score.assessmentId)).data;
+        let enrollmentPath = /databases/$(database)/documents/schools/$(schoolId)/enrollments/$(score.yearId + '_' + score.studentId);
+        return assessment.classId == score.classId && assessment.subjectId == score.subjectId
+          && assessment.maxMarks == score.maxMarks && assessment.title == score.assessmentTitle
+          && assessment.date == score.date && score.score <= assessment.maxMarks
+          && teachesClass(assessment.classId) && teacherSubjectId() == assessment.subjectId
+          && exists(enrollmentPath) && get(enrollmentPath).data.classId == assessment.classId;
+      }
+
       // Student and parent access (feature 048). familyAccess/{uid} links a student or parent
       // account to one student and can be switched off by the owner. Family accounts read only
       // published results for that student. Each helper uses at most two access calls because a
@@ -540,6 +555,55 @@ service cloud.firestore {
           && familyOwns(request.resource.data.studentId)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/calendar/$(request.resource.data.eventId));
         allow delete: if request.auth != null && (isSchoolOwner(schoolId) || familyOwns(resource.data.studentId));
+      }
+
+      // Homework submissions. submissions/{homeworkId}_{studentId}: a linked student or parent submits a
+      // written answer once for a homework of the student's own class. The class teacher or subject teacher
+      // reads the class's submissions and adds feedback (feedback and feedbackAt are the only changes);
+      // the family reads its own; the owner reads all and removes.
+      match /submissions/{submissionId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || teachesClass(resource.data.classId) || classTeacherOf(resource.data.classId)
+          || familyOwns(resource.data.studentId));
+        allow create: if request.auth != null && validSubmission(request.resource.data)
+          && submissionId == request.resource.data.homeworkId + '_' + request.resource.data.studentId
+          && request.resource.data.createdBy == request.auth.uid
+          && !request.resource.data.keys().hasAny(['feedback', 'feedbackAt'])
+          && familyOwns(request.resource.data.studentId)
+          && get(/databases/$(database)/documents/schools/$(schoolId)/homework/$(request.resource.data.homeworkId)).data.classId == request.resource.data.classId
+          && studentInClass(request.resource.data.studentId, request.resource.data.classId);
+        allow update: if request.auth != null && validSubmission(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['feedback', 'feedbackAt'])
+          && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId) || classTeacherOf(resource.data.classId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Continuous assessment. assessments/{id}: classId, subjectId, subject, title, date, maxMarks,
+      // createdBy. The subject teacher of the class (or the owner) creates one and removes their own.
+      // assessmentScores/{assessmentId}_{studentId}: one score per student, copied details checked
+      // against the assessment, written by the subject teacher, read by the teacher, the owner and
+      // the student's own family.
+      match /assessments/{assessmentId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId));
+        allow create: if request.auth != null && assessmentId.matches('[A-Za-z0-9-]{1,30}')
+          && validAssessment(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && (isSchoolOwner(schoolId)
+            || (teachesClass(request.resource.data.classId) && teacherSubjectId() == request.resource.data.subjectId));
+        allow delete: if request.auth != null && (isSchoolOwner(schoolId)
+          || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
+      }
+
+      match /assessmentScores/{scoreId} {
+        allow get, list: if request.auth != null && (isSchoolOwner(schoolId)
+          || teachesClass(resource.data.classId) || familyOwns(resource.data.studentId));
+        allow create, update: if request.auth != null && validScore(request.resource.data)
+          && scoreId == request.resource.data.assessmentId + '_' + request.resource.data.studentId
+          && request.resource.data.createdBy == request.auth.uid
+          && scoreAllowed(request.resource.data);
+        allow delete: if request.auth != null && (isSchoolOwner(schoolId)
+          || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
       }
 
       match /familyAccess/{uid} {
@@ -1203,6 +1267,49 @@ service cloud.firestore {
         && item.eventTitle is string && item.eventTitle.size() >= 1 && item.eventTitle.size() <= 100
         && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
         && item.registeredOn is string && item.registeredOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.createdBy is string;
+    }
+
+    function validSubmission(item) {
+      return item.keys().hasOnly(['homeworkId', 'homeworkTitle', 'studentId', 'studentName', 'classId', 'answer', 'submittedOn', 'createdBy', 'feedback', 'feedbackAt'])
+        && item.keys().hasAll(['homeworkId', 'homeworkTitle', 'studentId', 'studentName', 'classId', 'answer', 'submittedOn', 'createdBy'])
+        && item.homeworkId is string && item.homeworkId.matches('[A-Za-z0-9-]{1,30}')
+        && item.homeworkTitle is string && item.homeworkTitle.size() >= 1 && item.homeworkTitle.size() <= 100
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.answer is string && item.answer.size() <= 2000 && item.answer.matches('.*[^[:space:]].*')
+        && item.submittedOn is string && item.submittedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.createdBy is string
+        && optionalText(item, 'feedback', 500)
+        && (!item.keys().hasAny(['feedbackAt']) || (item.feedbackAt is string && item.feedbackAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+    }
+
+    function validAssessment(item) {
+      return item.keys().hasOnly(['classId', 'subjectId', 'subject', 'title', 'date', 'maxMarks', 'createdBy'])
+        && item.keys().hasAll(['classId', 'subjectId', 'subject', 'title', 'date', 'maxMarks', 'createdBy'])
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
+        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
+        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && item.maxMarks is int && item.maxMarks >= 1 && item.maxMarks <= 1000
+        && item.createdBy is string;
+    }
+
+    function validScore(item) {
+      return item.keys().hasOnly(['assessmentId', 'assessmentTitle', 'subject', 'subjectId', 'date', 'studentId', 'classId', 'yearId', 'score', 'maxMarks', 'createdBy'])
+        && item.keys().hasAll(['assessmentId', 'assessmentTitle', 'subject', 'subjectId', 'date', 'studentId', 'classId', 'yearId', 'score', 'maxMarks', 'createdBy'])
+        && item.assessmentId is string && item.assessmentId.matches('[A-Za-z0-9-]{1,30}')
+        && item.assessmentTitle is string && item.assessmentTitle.size() >= 1 && item.assessmentTitle.size() <= 100
+        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
+        && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
+        && item.score is int && item.score >= 0 && item.score <= 1000
+        && item.maxMarks is int && item.maxMarks >= 1 && item.maxMarks <= 1000
         && item.createdBy is string;
     }
 
