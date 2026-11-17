@@ -786,6 +786,7 @@ async function loadPortal(tools, request) {
     loadPortalAttendance(tools, request, studentId);
     loadPortalFees(tools, request, studentId);
     loadPortalNotices(tools, request, studentId);
+    loadPortalSchoolwork(tools, request, studentId);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
       getDocsFromServer(query(collection(schoolRef, 'exams'), where('published', '==', true))),
@@ -2314,6 +2315,435 @@ document.querySelector('#portal-print').addEventListener('click', () => {
   printCard('#portal-print-head', portalStudent.textContent);
 });
 
+// School summary, CSV exports and class performance. Everything here is read-only: it is worked out
+// from records the owner can already read.
+const summarySection = document.querySelector('#summary');
+const summaryStatus = document.querySelector('#summary-status');
+const summaryList = document.querySelector('#summary-list');
+const performanceStatus = document.querySelector('#performance-status');
+const performanceBody = document.querySelector('#performance-body');
+
+const countBy = (docs, key) => {
+  const counts = {};
+  for (const record of docs) counts[record.data()[key]] = (counts[record.data()[key]] ?? 0) + 1;
+  return counts;
+};
+
+async function renderSummary(request) {
+  const tools = academic;
+  summarySection.hidden = false;
+  summaryStatus.textContent = 'Loading summary.';
+  try {
+    const today = localToday();
+    const [attendance, staffToday, members, leave] = await Promise.all([
+      tools.attendanceOn(today), tools.staffAttendanceOn(today), tools.list('members'), tools.list('leaveRequests')]);
+    if (request !== schoolRequest) return;
+    const activeYear = examData.years.find((record) => record.data().status === 'active');
+    const students = studentRecords.map((record) => record.data());
+    const placed = activeYear ? placementData.enrollments.filter((record) => record.data().yearId === activeYear.id).length : 0;
+    const teachers = members.docs.filter((record) => record.data().role === 'teacher' && record.data().active === true).length;
+    const att = countBy(attendance.docs, 'status');
+    const staff = countBy(staffToday.docs, 'status');
+    const pending = leave.docs.filter((record) => record.data().status === 'pending').length;
+    const paid = feeData.payments.map((record) => record.data()).filter((payment) => payment.voided !== true);
+    const sum = (items) => items.reduce((total, payment) => total + payment.amount, 0);
+    summaryList.replaceChildren();
+    for (const line of [
+      'Students: ' + students.filter((item) => item.status === 'active').length + ' active of ' + students.length,
+      'Placed in ' + (activeYear ? activeYear.data().label : 'no active year') + ': ' + placed,
+      'Active teachers: ' + teachers,
+      'Student attendance today (' + today + '): present ' + (att.present ?? 0) + ', absent ' + (att.absent ?? 0)
+        + ', late ' + (att.late ?? 0),
+      'Staff attendance today: present ' + (staff.present ?? 0) + ', absent ' + (staff.absent ?? 0)
+        + ', late ' + (staff.late ?? 0) + ', on leave ' + (staff.leave ?? 0),
+      'Leave requests waiting: ' + pending,
+      'Fees collected this month: ' + rupees(sum(paid.filter((payment) => payment.date.startsWith(today.slice(0, 7))))),
+      'Fees collected in total: ' + rupees(sum(paid)),
+    ]) listItem(summaryList, line);
+    summaryStatus.textContent = '';
+  } catch {
+    if (request === schoolRequest) summaryStatus.textContent = 'Could not load the summary. Try again.';
+  }
+}
+
+document.querySelector('#summary-refresh').addEventListener('click', () => {
+  if (academic) renderSummary(schoolRequest);
+});
+
+// CSV files open in Excel. A cell that starts with = or @ could run as a formula there, so it gets a
+// leading apostrophe; phone numbers starting with + or - and a digit are left alone.
+const csvCell = (value) => {
+  let text = String(value ?? '');
+  if (/^(=|@|\t|\r|[+-](?![0-9( ]))/.test(text)) text = "'" + text;
+  return /[",\n\r]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text;
+};
+
+function downloadCsv(name, rows) {
+  const blob = new Blob(['﻿' + rows.map((row) => row.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name + '-' + localToday() + '.csv';
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const nameOfClass = (id) => examData.classes.find((record) => record.id === id)?.data().name ?? id;
+const nameOfStudent = (id) => studentRecords.find((record) => record.id === id)?.data().name ?? id;
+
+document.querySelector('#export-students').addEventListener('click', () => {
+  const activeYear = examData.years.find((record) => record.data().status === 'active');
+  const placement = new Map(placementData.enrollments.filter((record) => activeYear && record.data().yearId === activeYear.id)
+    .map((record) => [record.data().studentId, record.data()]));
+  const sectionName = (id) => placementData.sections.find((record) => record.id === id)?.data().name ?? id;
+  downloadCsv('students', [['Admission no', 'Name', 'Guardian', 'Guardian phone', 'Status', 'Class', 'Section', 'Roll no'],
+    ...studentRecords.map((record) => {
+      const s = record.data();
+      const p = placement.get(record.id);
+      return [s.admissionNo, s.name, s.guardianName, s.guardianPhone, s.status,
+        p ? nameOfClass(p.classId) : '', p ? sectionName(p.sectionId) : '', p ? p.rollNo : ''];
+    })]);
+});
+
+document.querySelector('#export-payments').addEventListener('click', () => {
+  downloadCsv('payments', [['Receipt', 'Date', 'Student', 'Year', 'Method', 'Amount (Rs)', 'Status'],
+    ...feeData.payments.map((record) => record.data()).sort((a, b) => a.date.localeCompare(b.date))
+      .map((p) => [p.receiptNo, p.date, nameOfStudent(p.studentId), p.yearId, METHOD_LABEL[p.method] ?? p.method,
+        p.amount, p.voided === true ? 'Voided' : 'Paid'])]);
+});
+
+document.querySelector('#export-log').addEventListener('click', async () => {
+  if (!academic) return;
+  const request = schoolRequest;
+  try {
+    const saved = await academic.list('auditLog');
+    if (request !== schoolRequest) return;
+    downloadCsv('activity-log', [['Time', 'Who (user id)', 'Action', 'Record type', 'Record', 'Detail'],
+      ...saved.docs.map((record) => record.data()).sort((a, b) => a.at.localeCompare(b.at))
+        .map((item) => [item.at, item.actor, item.action, item.target, item.docId, item.detail ?? ''])]);
+  } catch {
+    if (request === schoolRequest) summaryStatus.textContent = 'Could not download the activity log. Try again.';
+  }
+});
+
+document.querySelector('#performance-load').addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools) return;
+  const request = schoolRequest;
+  performanceStatus.textContent = 'Working out the results.';
+  try {
+    const exams = [...examData.exams].sort((a, b) => a.id.localeCompare(b.id));
+    const results = await Promise.all(exams.map((exam) => tools.marksFor(exam.id)));
+    if (request !== schoolRequest) return;
+    performanceBody.replaceChildren();
+    exams.forEach((record, index) => {
+      const exam = record.data();
+      const percents = results[index].docs.map((mark) => mark.data().score / exam.maxMarks * 100);
+      if (!percents.length) return;
+      const subject = examData.subjects.find((item) => item.id === exam.subjectId)?.data().name ?? exam.subjectId;
+      const average = percents.reduce((total, value) => total + value, 0) / percents.length;
+      const passed = percents.filter((value) => isPass(value)).length;
+      const round = (value) => Math.round(value * 10) / 10 + '%';
+      addRow(performanceBody, [exam.name + ' (' + exam.yearId + ')', nameOfClass(exam.classId), subject,
+        String(percents.length), round(average), round(Math.max(...percents)), round(Math.min(...percents)),
+        passed + ' of ' + percents.length + ' (' + Math.round(passed / percents.length * 100) + '%)']);
+    });
+    performanceStatus.textContent = performanceBody.children.length ? '' : 'No marks have been entered yet.';
+  } catch {
+    if (request === schoolRequest) performanceStatus.textContent = 'Could not load the results. Try again.';
+  }
+});
+
+// Timetable. One record per class, day and period: classId_day_period. The owner manages it; teachers
+// and linked families read it.
+const DAY_NAMES = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const timetableSection = document.querySelector('#timetable');
+const timetableStatus = document.querySelector('#timetable-status');
+const timetableForm = document.querySelector('#timetable-form');
+const timetableList = document.querySelector('#timetable-list');
+let timetableData = [];
+
+const slotText = (slot) => DAY_NAMES[slot.day] + ' period ' + slot.period + ' ' + slot.start + '-' + slot.end + ' ' + slot.subject
+  + (slot.teacher ? ' (' + slot.teacher + ')' : '');
+const slotOrder = (a, b) => a.day - b.day || a.period - b.period;
+
+function renderTimetable() {
+  fillSelect(timetableForm.elements.namedItem('classId'), [...examData.classes].sort(byClassOrder), (item) => item.name);
+  fillSelect(timetableForm.elements.namedItem('subject'), examData.subjects, (item) => item.name);
+  timetableList.replaceChildren();
+  const classId = timetableForm.elements.namedItem('classId').value;
+  for (const item of timetableData.filter((entry) => entry.data.classId === classId).sort((a, b) => slotOrder(a.data, b.data))) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Remove';
+    button.addEventListener('click', async () => {
+      if (!academic || academic.busy || !confirm('Remove this lesson from the timetable?')) return;
+      const request = schoolRequest;
+      academic.busy = true;
+      try {
+        await academic.remove('timetable', item.id);
+        academic.busy = false;
+        await loadTimetable(request);
+        if (request === schoolRequest) timetableStatus.textContent = 'Lesson removed.';
+      } catch {
+        if (request === schoolRequest) timetableStatus.textContent = 'Could not remove the lesson. Try again.';
+      } finally {
+        academic.busy = false;
+      }
+    });
+    listItem(timetableList, slotText(item.data), button);
+  }
+  if (!timetableList.children.length) timetableStatus.textContent = 'No lessons for this class yet.';
+}
+
+async function loadTimetable(request) {
+  try {
+    const saved = await academic.list('timetable');
+    if (request !== schoolRequest) return;
+    timetableData = saved.docs.map((record) => ({ id: record.id, data: record.data() }));
+    timetableSection.hidden = false;
+    timetableStatus.textContent = '';
+    renderTimetable();
+  } catch {
+    if (request === schoolRequest) {
+      timetableSection.hidden = false;
+      timetableStatus.textContent = 'Could not load the timetable. Try again.';
+    }
+  }
+}
+
+timetableForm.elements.namedItem('classId').addEventListener('change', () => {
+  timetableStatus.textContent = '';
+  renderTimetable();
+});
+
+timetableForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const fields = new FormData(timetableForm);
+  const classId = String(fields.get('classId') ?? '');
+  const day = Number(fields.get('day'));
+  const period = Number(fields.get('period'));
+  const subject = examData.subjects.find((item) => item.id === fields.get('subject'))?.data().name ?? '';
+  const start = String(fields.get('start') ?? '');
+  const end = String(fields.get('end') ?? '');
+  const teacher = String(fields.get('teacher') ?? '').trim();
+  if (!classId || !subject) {
+    timetableStatus.textContent = 'Choose a class and a subject first.';
+    return;
+  }
+  if (!Number.isInteger(period) || period < 1 || period > 12) {
+    timetableStatus.textContent = 'Period number must be from 1 to 12.';
+    return;
+  }
+  if (!start || !end || end <= start) {
+    timetableStatus.textContent = 'The lesson must end after it starts.';
+    return;
+  }
+  const data = { classId, className: nameOfClass(classId), day, period, subject, start, end, ...(teacher ? { teacher } : {}) };
+  const request = schoolRequest;
+  tools.busy = true;
+  timetableStatus.textContent = 'Saving.';
+  try {
+    await tools.save('timetable', classId + '_' + day + '_' + period, data);
+    tools.busy = false;
+    await loadTimetable(request);
+    if (request === schoolRequest) timetableStatus.textContent = 'Lesson saved. Saving the same day and period again replaces it.';
+  } catch {
+    if (request === schoolRequest) timetableStatus.textContent = 'Could not save the lesson. Check the details and try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
+
+// Homework. The subject teacher of a class posts it; the class's teachers and linked families read
+// it. Homework is never edited: the author or the owner removes it.
+const ownerHomeworkSection = document.querySelector('#homework-owner');
+const ownerHomeworkStatus = document.querySelector('#homework-owner-status');
+const ownerHomeworkList = document.querySelector('#homework-owner-list');
+const teacherHomeworkSection = document.querySelector('#teacher-homework');
+const teacherHomeworkStatus = document.querySelector('#teacher-homework-status');
+const teacherHomeworkList = document.querySelector('#teacher-homework-list');
+const homeworkForm = document.querySelector('#homework-form');
+const teacherTimetableSection = document.querySelector('#teacher-timetable');
+const teacherTimetableStatus = document.querySelector('#teacher-timetable-status');
+const teacherTimetableList = document.querySelector('#teacher-timetable-list');
+const portalHomeworkSection = document.querySelector('#portal-homework');
+const portalHomeworkStatus = document.querySelector('#portal-homework-status');
+const portalHomeworkList = document.querySelector('#portal-homework-list');
+const portalTimetableSection = document.querySelector('#portal-timetable');
+const portalTimetableStatus = document.querySelector('#portal-timetable-status');
+const portalTimetableList = document.querySelector('#portal-timetable-list');
+let teacherHomework; // { schoolRef, uid, classId, subjectId, subject, busy }
+
+const homeworkText = (item) => 'Due ' + item.dueDate + ' - ' + item.subject + ': ' + item.title + ' - ' + item.details;
+const dueFirst = (a, b) => a.dueDate.localeCompare(b.dueDate) || a.createdAt.localeCompare(b.createdAt);
+
+async function loadOwnerHomework(request) {
+  try {
+    const saved = await academic.list('homework');
+    if (request !== schoolRequest) return;
+    ownerHomeworkSection.hidden = false;
+    ownerHomeworkList.replaceChildren();
+    for (const record of saved.docs.sort((a, b) => dueFirst(a.data(), b.data()))) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Remove';
+      button.addEventListener('click', async () => {
+        if (!academic || academic.busy || !confirm('Remove this homework?')) return;
+        academic.busy = true;
+        try {
+          await academic.remove('homework', record.id);
+          academic.busy = false;
+          await loadOwnerHomework(request);
+        } catch {
+          if (request === schoolRequest) ownerHomeworkStatus.textContent = 'Could not remove the homework. Try again.';
+        } finally {
+          academic.busy = false;
+        }
+      });
+      listItem(ownerHomeworkList, nameOfClass(record.data().classId) + ' - ' + homeworkText(record.data()), button);
+    }
+    ownerHomeworkStatus.textContent = saved.docs.length ? '' : 'No homework has been posted yet.';
+  } catch {
+    if (request === schoolRequest) {
+      ownerHomeworkSection.hidden = false;
+      ownerHomeworkStatus.textContent = 'Could not load homework. Try again.';
+    }
+  }
+}
+
+async function loadTeacherHomework(request) {
+  const context = teacherHomework;
+  if (!context) return;
+  const { collection, query, where, getDocsFromServer, doc } = firestoreTools;
+  teacherHomeworkSection.hidden = false;
+  teacherHomeworkStatus.textContent = 'Loading homework.';
+  try {
+    const saved = await getDocsFromServer(query(collection(context.schoolRef, 'homework'), where('classId', '==', context.classId)));
+    if (request !== schoolRequest || context !== teacherHomework) return;
+    teacherHomeworkList.replaceChildren();
+    for (const record of saved.docs.sort((a, b) => dueFirst(a.data(), b.data()))) {
+      let button;
+      if (record.data().createdBy === context.uid) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Remove';
+        button.addEventListener('click', async () => {
+          if (context.busy || !confirm('Remove this homework? Students will no longer see it.')) return;
+          context.busy = true;
+          try {
+            await firestoreTools.deleteDoc(doc(context.schoolRef, 'homework', record.id));
+          } catch {
+            teacherHomeworkStatus.textContent = 'Could not remove the homework. Try again.';
+          } finally {
+            context.busy = false;
+          }
+          await loadTeacherHomework(request);
+        });
+      }
+      listItem(teacherHomeworkList, homeworkText(record.data()), button);
+    }
+    if (!saved.docs.length) teacherHomeworkStatus.textContent = 'No homework posted yet.';
+    else teacherHomeworkStatus.textContent = '';
+  } catch {
+    if (request === schoolRequest) teacherHomeworkStatus.textContent = 'Could not load homework. Try again.';
+  }
+}
+
+homeworkForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = teacherHomework;
+  if (!context || context.busy) return;
+  const fields = new FormData(homeworkForm);
+  const title = String(fields.get('title') ?? '').trim();
+  const details = String(fields.get('details') ?? '').trim();
+  const dueDate = String(fields.get('dueDate') ?? '');
+  const createdAt = localToday();
+  if (!title || !details || !DATE_TEXT.test(dueDate)) {
+    teacherHomeworkStatus.textContent = 'Enter a title, the details and a due date.';
+    return;
+  }
+  if (dueDate < createdAt) {
+    teacherHomeworkStatus.textContent = 'The due date cannot be in the past.';
+    return;
+  }
+  const id = 'W-' + createdAt.replaceAll('-', '') + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  teacherHomeworkStatus.textContent = 'Posting.';
+  try {
+    await setDoc(doc(context.schoolRef, 'homework', id), {
+      classId: context.classId, subjectId: context.subjectId, subject: context.subject,
+      title, details, dueDate, createdAt, createdBy: context.uid,
+    });
+    context.busy = false;
+    homeworkForm.reset();
+    await loadTeacherHomework(request);
+    if (request === schoolRequest) teacherHomeworkStatus.textContent = 'Homework posted.';
+  } catch {
+    if (request === schoolRequest) teacherHomeworkStatus.textContent = 'Could not post the homework. Check the details and try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+
+async function readBySlot(schoolRef, name, classIds) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  const results = await Promise.all(classIds.map((classId) =>
+    getDocsFromServer(query(collection(schoolRef, name), where('classId', '==', classId)))));
+  return results.flatMap((result) => result.docs.map((record) => record.data()));
+}
+
+async function loadTeacherTimetable(request, schoolRef, uid) {
+  const { collection, query, where, getDocsFromServer } = firestoreTools;
+  teacherTimetableSection.hidden = false;
+  teacherTimetableStatus.textContent = 'Loading timetable.';
+  try {
+    const mine = await getDocsFromServer(query(collection(schoolRef, 'classTeachers'), where('teacherUid', '==', uid)));
+    const classIds = new Set(mine.docs.map((record) => record.id));
+    if (noticeAssignedClass) classIds.add(noticeAssignedClass);
+    const slots = (await readBySlot(schoolRef, 'timetable', [...classIds]))
+      .sort((a, b) => a.className.localeCompare(b.className) || slotOrder(a, b));
+    if (request !== schoolRequest) return;
+    teacherTimetableList.replaceChildren();
+    for (const slot of slots) listItem(teacherTimetableList, slot.className + ' - ' + slotText(slot));
+    teacherTimetableStatus.textContent = slots.length ? '' : 'No timetable has been set for your classes yet.';
+  } catch {
+    if (request === schoolRequest) teacherTimetableStatus.textContent = 'Could not load the timetable. Try again.';
+  }
+}
+
+async function loadPortalSchoolwork(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalHomeworkSection.hidden = false;
+  portalTimetableSection.hidden = false;
+  portalHomeworkStatus.textContent = 'Loading homework.';
+  portalTimetableStatus.textContent = 'Loading timetable.';
+  try {
+    const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId)));
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    const classIds = latest ? [latest.classId] : [];
+    const [work, slots] = await Promise.all([readBySlot(schoolRef, 'homework', classIds), readBySlot(schoolRef, 'timetable', classIds)]);
+    if (request !== schoolRequest) return;
+    portalHomeworkList.replaceChildren();
+    for (const item of work.sort(dueFirst)) listItem(portalHomeworkList, homeworkText(item));
+    portalHomeworkStatus.textContent = work.length ? '' : 'No homework yet.';
+    portalTimetableList.replaceChildren();
+    for (const slot of slots.sort(slotOrder)) listItem(portalTimetableList, slotText(slot));
+    portalTimetableStatus.textContent = slots.length ? '' : 'No timetable has been set yet.';
+  } catch {
+    if (request === schoolRequest) {
+      portalHomeworkStatus.textContent = 'Could not load homework. Try again.';
+      portalTimetableStatus.textContent = 'Could not load the timetable. Try again.';
+    }
+  }
+}
+
 // Teachers' saves are logged as one summary entry each (who, which exam or class day, how many).
 // The log never blocks the save itself: if the entry cannot be written, the save still stands.
 function writeAudit(schoolRef, uid, action, target, docId, detail) {
@@ -2336,6 +2766,32 @@ onAuthStateChanged(auth, async (user) => {
   attClass.replaceChildren();
   attDate.value = '';
   attPrev = { classId: '', date: '' };
+  summarySection.hidden = true;
+  summaryStatus.textContent = '';
+  summaryList.replaceChildren();
+  performanceStatus.textContent = '';
+  performanceBody.replaceChildren();
+  timetableSection.hidden = true;
+  timetableStatus.textContent = '';
+  timetableList.replaceChildren();
+  timetableData = [];
+  ownerHomeworkSection.hidden = true;
+  ownerHomeworkStatus.textContent = '';
+  ownerHomeworkList.replaceChildren();
+  teacherHomework = undefined;
+  teacherHomeworkSection.hidden = true;
+  teacherHomeworkStatus.textContent = '';
+  teacherHomeworkList.replaceChildren();
+  homeworkForm.reset();
+  teacherTimetableSection.hidden = true;
+  teacherTimetableStatus.textContent = '';
+  teacherTimetableList.replaceChildren();
+  portalHomeworkSection.hidden = true;
+  portalHomeworkStatus.textContent = '';
+  portalHomeworkList.replaceChildren();
+  portalTimetableSection.hidden = true;
+  portalTimetableStatus.textContent = '';
+  portalTimetableList.replaceChildren();
   gradingSection.hidden = true;
   gradingStatus.textContent = '';
   grading = { ...DEFAULT_GRADING };
@@ -2507,7 +2963,7 @@ onAuthStateChanged(auth, async (user) => {
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
-    firestoreTools = { collection, doc, getDocFromServer, getDocsFromServer, query, setDoc, where };
+    firestoreTools = { collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, query, setDoc, where };
     const schoolRef = doc(getFirestore(app), 'schools', 'abcd-school');
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     if (request !== schoolRequest) return;
@@ -2526,6 +2982,7 @@ onAuthStateChanged(auth, async (user) => {
         if (assignment.exists()) {
           const { className, subject, classId, subjectId } = assignment.data();
           noticeAssignedClass = classId ?? '';
+          teacherHomework = classId && subjectId ? { schoolRef, uid: user.uid, classId, subjectId, subject, busy: false } : undefined;
           if (classId && subjectId) {
             teacherMarks = { schoolRef, uid: user.uid, classId, subjectId, exams: [], busy: false };
             examMarksSection.hidden = false;
@@ -2547,6 +3004,8 @@ onAuthStateChanged(auth, async (user) => {
       if (request === schoolRequest) await loadMyAttendance(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadMyLeave(request, schoolRef, user.uid);
       if (request === schoolRequest) await loadTeacherNotices(request, schoolRef, user.uid);
+      if (request === schoolRequest) await loadTeacherHomework(request);
+      if (request === schoolRequest) await loadTeacherTimetable(request, schoolRef, user.uid);
       return;
     }
     if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
@@ -2649,6 +3108,9 @@ onAuthStateChanged(auth, async (user) => {
     if (request === schoolRequest) await loadFees(request);
     if (request === schoolRequest) await loadNotices(request);
     if (request === schoolRequest) await loadAuditLog(request);
+    if (request === schoolRequest) await loadTimetable(request);
+    if (request === schoolRequest) await loadOwnerHomework(request);
+    if (request === schoolRequest) await renderSummary(request);
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'

@@ -10,7 +10,7 @@ echo == git diff --check >> "%OUT%"
 git diff --check >> "%OUT%" 2>&1
 echo exit code %errorlevel% >> "%OUT%"
 echo == firestore emulator rules tests >> "%OUT%"
-call firebase emulators:exec --only firestore --project demo-aziz "node --test --test-concurrency=1 tests/marks.rules.test.mjs tests/academic.rules.test.mjs tests/students.rules.test.mjs tests/placement.rules.test.mjs tests/exams.rules.test.mjs tests/results.rules.test.mjs tests/family.rules.test.mjs tests/attendance.rules.test.mjs tests/staffattendance.rules.test.mjs tests/leave.rules.test.mjs tests/fees.rules.test.mjs tests/notices.rules.test.mjs tests/audit.rules.test.mjs tests/grading.rules.test.mjs" >> "%OUT%" 2>&1
+call firebase emulators:exec --only firestore --project demo-aziz "node --test --test-concurrency=1 tests/marks.rules.test.mjs tests/academic.rules.test.mjs tests/students.rules.test.mjs tests/placement.rules.test.mjs tests/exams.rules.test.mjs tests/results.rules.test.mjs tests/family.rules.test.mjs tests/attendance.rules.test.mjs tests/staffattendance.rules.test.mjs tests/leave.rules.test.mjs tests/fees.rules.test.mjs tests/notices.rules.test.mjs tests/audit.rules.test.mjs tests/grading.rules.test.mjs tests/timetable.rules.test.mjs tests/homework.rules.test.mjs" >> "%OUT%" 2>&1
 echo exit code %errorlevel% >> "%OUT%"
 type "%OUT%"
 pause

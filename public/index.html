@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AZIZ School Management System</title>
-  <link rel="stylesheet" href="./sign-in.css?v=audit-2">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-1">
 </head>
 <body>
   <main>
@@ -247,6 +247,42 @@
           <tbody id="fee-balance-body"></tbody>
         </table>
       </section>
+      <section id="summary" aria-labelledby="summary-title" hidden>
+        <h3 id="summary-title">School Summary</h3>
+        <p id="summary-status" role="status"></p>
+        <ul id="summary-list"></ul>
+        <button id="summary-refresh" type="button">Refresh summary</button>
+        <button id="export-students" type="button">Download students (CSV)</button>
+        <button id="export-payments" type="button">Download payments (CSV)</button>
+        <button id="export-log" type="button">Download activity log (CSV)</button>
+        <h4>Class Performance</h4>
+        <p id="performance-status" role="status"></p>
+        <button id="performance-load" type="button">Show performance by exam</button>
+        <table>
+          <thead><tr><th>Exam</th><th>Class</th><th>Subject</th><th>Marked</th><th>Average</th><th>Highest</th><th>Lowest</th><th>Passed</th></tr></thead>
+          <tbody id="performance-body"></tbody>
+        </table>
+      </section>
+      <section id="timetable" aria-labelledby="timetable-title" hidden>
+        <h3 id="timetable-title">Timetable</h3>
+        <p id="timetable-status" role="status"></p>
+        <form id="timetable-form">
+          <p><label>Class <select name="classId"></select></label></p>
+          <p><label>Day <select name="day"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="7">Sunday</option></select></label></p>
+          <p><label>Period number <input name="period" type="number" min="1" max="12" step="1" required></label></p>
+          <p><label>Subject <select name="subject"></select></label></p>
+          <p><label>Starts <input name="start" type="time" required></label></p>
+          <p><label>Ends <input name="end" type="time" required></label></p>
+          <p><label>Teacher (optional) <input name="teacher" maxlength="60"></label></p>
+          <button type="submit">Save lesson</button>
+        </form>
+        <ul id="timetable-list"></ul>
+      </section>
+      <section id="homework-owner" aria-labelledby="homework-owner-title" hidden>
+        <h3 id="homework-owner-title">Homework (all classes)</h3>
+        <p id="homework-owner-status" role="status"></p>
+        <ul id="homework-owner-list"></ul>
+      </section>
       <section id="grading" aria-labelledby="grading-title" hidden>
         <h3 id="grading-title">Pass Marks and Grades</h3>
         <p id="grading-status" role="status"></p>
@@ -337,6 +373,22 @@
           <tbody id="leave-request-body"></tbody>
         </table>
       </section>
+      <section id="teacher-homework" aria-labelledby="teacher-homework-title" hidden>
+        <h3 id="teacher-homework-title">Homework</h3>
+        <p id="teacher-homework-status" role="status"></p>
+        <form id="homework-form">
+          <p><label>Title <input name="title" required maxlength="100"></label></p>
+          <p><label>Details <textarea name="details" required maxlength="2000" rows="4"></textarea></label></p>
+          <p><label>Due date <input name="dueDate" type="date" required></label></p>
+          <button type="submit">Post homework</button>
+        </form>
+        <ul id="teacher-homework-list"></ul>
+      </section>
+      <section id="teacher-timetable" aria-labelledby="teacher-timetable-title" hidden>
+        <h3 id="teacher-timetable-title">Timetable</h3>
+        <p id="teacher-timetable-status" role="status"></p>
+        <ul id="teacher-timetable-list"></ul>
+      </section>
       <section id="teacher-notices" aria-labelledby="teacher-notices-title" hidden>
         <h3 id="teacher-notices-title">Notices</h3>
         <p id="teacher-notices-status" role="status"></p>
@@ -386,6 +438,16 @@
           <tbody id="portal-fees-body"></tbody>
         </table>
       </section>
+      <section id="portal-homework" aria-labelledby="portal-homework-title" hidden>
+        <h3 id="portal-homework-title">Homework</h3>
+        <p id="portal-homework-status" role="status"></p>
+        <ul id="portal-homework-list"></ul>
+      </section>
+      <section id="portal-timetable" aria-labelledby="portal-timetable-title" hidden>
+        <h3 id="portal-timetable-title">Timetable</h3>
+        <p id="portal-timetable-status" role="status"></p>
+        <ul id="portal-timetable-list"></ul>
+      </section>
       <section id="portal-notices" aria-labelledby="portal-notices-title" hidden>
         <h3 id="portal-notices-title">Notices</h3>
         <p id="portal-notices-status" role="status"></p>
@@ -397,7 +459,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=audit-2');
+      await import('./sign-in.mjs?v=batch-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
