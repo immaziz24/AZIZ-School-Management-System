@@ -2175,6 +2175,45 @@ async function loadPortalNotices(tools, request, studentId) {
   }
 }
 
+// Activity log. Read-only list of the owner's recent changes, newest first.
+const auditSection = document.querySelector('#audit-log');
+const auditStatus = document.querySelector('#audit-log-status');
+const auditList = document.querySelector('#audit-list');
+const auditRefresh = document.querySelector('#audit-refresh');
+const AUDIT_ACTION_LABEL = {
+  save: 'saved', remove: 'removed', void: 'voided a payment', 'decide-leave': 'decided leave',
+  'activate-year': 'activated year', 'close-year': 'closed year', bulk: 'changed',
+};
+const AUDIT_SHOWN = 100;
+
+async function loadAuditLog(request) {
+  try {
+    const saved = await academic.list('auditLog');
+    if (request !== schoolRequest) return;
+    const items = saved.docs.map((record) => record.data()).sort((a, b) => b.at.localeCompare(a.at));
+    auditSection.hidden = false;
+    auditList.replaceChildren();
+    for (const item of items.slice(0, AUDIT_SHOWN)) {
+      const when = new Date(item.at).toLocaleString();
+      const what = (AUDIT_ACTION_LABEL[item.action] ?? item.action) + ' ' + item.target + ' ' + item.docId
+        + (item.detail ? ' (' + item.detail + ')' : '');
+      listItem(auditList, when + ' - ' + what);
+    }
+    auditStatus.textContent = items.length
+      ? 'Showing the latest ' + Math.min(items.length, AUDIT_SHOWN) + ' of ' + items.length + ' entries.'
+      : 'No activity yet.';
+  } catch {
+    if (request === schoolRequest) {
+      auditSection.hidden = false;
+      auditStatus.textContent = 'Could not load the activity log. Try again.';
+    }
+  }
+}
+
+auditRefresh.addEventListener('click', () => {
+  if (academic) loadAuditLog(schoolRequest);
+});
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -2187,6 +2226,9 @@ onAuthStateChanged(auth, async (user) => {
   attClass.replaceChildren();
   attDate.value = '';
   attPrev = { classId: '', date: '' };
+  auditSection.hidden = true;
+  auditStatus.textContent = '';
+  auditList.replaceChildren();
   noticesSection.hidden = true;
   noticesStatus.textContent = '';
   noticeForm.reset();
@@ -2425,13 +2467,29 @@ onAuthStateChanged(auth, async (user) => {
     staffStatus.textContent = 'Loading staff profiles.';
     await loadStaff(staffDirectory, request);
     const firestore = getFirestore(app);
+    // Every owner change is written to the activity log after it succeeds. The log never blocks the
+    // change itself: if the entry cannot be written, the change still stands.
+    const log = (action, target, docId, detail) => setDoc(
+      doc(schoolRef, 'auditLog', 'L-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase()),
+      { actor: user.uid, action, target, docId: String(docId), at: new Date().toISOString(), ...(detail ? { detail: String(detail) } : {}) },
+    ).catch(() => {});
     academic = {
       busy: false,
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
-      save: (name, id, data) => setDoc(doc(schoolRef, name, id), data),
+      save: async (name, id, data) => {
+        await setDoc(doc(schoolRef, name, id), data);
+        const voided = name === 'payments' && data.voided === true;
+        await log(voided ? 'void' : 'save', name, id, name === 'payments' ? 'Rs ' + data.amount : '');
+      },
       marksOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('studentId', '==', studentId))),
-      remove: (name, id) => deleteDoc(doc(schoolRef, name, id)),
-      decideLeave: (id, data, status) => setDoc(doc(schoolRef, 'leaveRequests', id), { ...data, status, decidedBy: user.uid }),
+      remove: async (name, id) => {
+        await deleteDoc(doc(schoolRef, name, id));
+        await log('remove', name, id, '');
+      },
+      decideLeave: async (id, data, status) => {
+        await setDoc(doc(schoolRef, 'leaveRequests', id), { ...data, status, decidedBy: user.uid });
+        await log('decide-leave', 'leaveRequests', id, status);
+      },
       staffAttendanceOn: (date) => getDocsFromServer(query(collection(schoolRef, 'staffAttendance'), where('date', '==', date))),
       staffAttendanceBetween: (from, to) => getDocsFromServer(query(collection(schoolRef, 'staffAttendance'),
         where('date', '>=', from), where('date', '<=', to))),
@@ -2444,16 +2502,17 @@ onAuthStateChanged(auth, async (user) => {
         const batch = writeBatch(firestore);
         batch.set(doc(schoolRef, 'academicYears', id), { ...year, status: 'active' });
         batch.set(doc(schoolRef, 'settings', 'academic'), { activeYearId: id });
-        return batch.commit();
+        return batch.commit().then(() => log('activate-year', 'academicYears', id, ''));
       },
-      close: (id) => updateDoc(doc(schoolRef, 'academicYears', id), { status: 'closed' }),
+      close: (id) => updateDoc(doc(schoolRef, 'academicYears', id), { status: 'closed' })
+        .then(() => log('close-year', 'academicYears', id, '')),
       commit: (ops) => {
         const batch = writeBatch(firestore);
         for (const op of ops) {
           const ref = doc(schoolRef, ...op.path);
           if (op.delete) batch.delete(ref); else batch.set(ref, op.data);
         }
-        return batch.commit();
+        return batch.commit().then(() => log('bulk', ops[0]?.path[0] ?? 'records', ops.length + ' records', ''));
       },
     };
     academicSection.hidden = false;
@@ -2474,6 +2533,7 @@ onAuthStateChanged(auth, async (user) => {
     }
     if (request === schoolRequest) await loadFees(request);
     if (request === schoolRequest) await loadNotices(request);
+    if (request === schoolRequest) await loadAuditLog(request);
   } catch (error) {
     if (request !== schoolRequest) return;
     schoolStatus.textContent = error.code === 'permission-denied'

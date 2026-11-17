@@ -245,6 +245,12 @@
           <tbody id="fee-balance-body"></tbody>
         </table>
       </section>
+      <section id="audit-log" aria-labelledby="audit-log-title" hidden>
+        <h3 id="audit-log-title">Activity Log</h3>
+        <p id="audit-log-status" role="status"></p>
+        <button id="audit-refresh" type="button">Refresh log</button>
+        <ul id="audit-list"></ul>
+      </section>
       <section id="notices" aria-labelledby="notices-title" hidden>
         <h3 id="notices-title">Notice Board</h3>
         <p id="notices-status" role="status"></p>
@@ -371,7 +377,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=notices-1');
+      await import('./sign-in.mjs?v=audit-1');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

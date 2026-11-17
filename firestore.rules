@@ -257,6 +257,19 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Audit trail. auditLog/{logId}: who (actor) did what (action) to which record (target, docId)
+      // and when (at, an ISO time). The owner's changes are logged by the app; entries are written once
+      // and never edited or deleted, and only the owner reads them.
+      match /auditLog/{logId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && logId.matches('[A-Za-z0-9-]{1,40}')
+          && validAuditEntry(request.resource.data)
+          && request.resource.data.actor == request.auth.uid
+          && request.resource.data.at[0:10] <= latestAttendanceDate();
+        allow update, delete: if false;
+      }
+
       match /familyAccess/{uid} {
         function familyMember() {
           let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
@@ -648,6 +661,17 @@ service cloud.firestore {
           : !item.keys().hasAny(['classId']))
         && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
         && item.createdBy is string;
+    }
+
+    function validAuditEntry(item) {
+      return item.keys().hasOnly(['actor', 'action', 'target', 'docId', 'at', 'detail'])
+        && item.keys().hasAll(['actor', 'action', 'target', 'docId', 'at'])
+        && item.actor is string
+        && item.action in ['save', 'remove', 'void', 'decide-leave', 'activate-year', 'close-year', 'bulk']
+        && item.target is string && item.target.size() >= 1 && item.target.size() <= 40
+        && item.docId is string && item.docId.size() <= 100
+        && item.at is string && item.at.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,14}Z') && item.at >= '2020-01-01'
+        && (!item.keys().hasAny(['detail']) || (item.detail is string && item.detail.size() <= 200));
     }
 
     function validFamilyAccess(item) {
