@@ -3986,6 +3986,96 @@ lists.diary = ownerList({
   line: (item) => item.date + ' - ' + item.entry,
 });
 
+// Finance summary: fees collected (voided receipts left out) against expenses, month by month.
+const financeStatus = document.querySelector('#finance-status');
+const financeList = document.querySelector('#finance-list');
+document.querySelector('#finance-show').addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools) return;
+  const request = schoolRequest;
+  financeStatus.textContent = 'Loading...';
+  try {
+    const payments = await tools.list('payments');
+    if (request !== schoolRequest) return;
+    const months = new Map();
+    const slot = (month) => months.get(month) ?? months.set(month, { fees: 0, spent: 0 }).get(month);
+    for (const record of payments.docs) {
+      const payment = record.data();
+      if (!payment.voided) slot(payment.date.slice(0, 7)).fees += payment.amount;
+    }
+    for (const record of lists.expenses.items) slot(record.data().date.slice(0, 7)).spent += record.data().amount;
+    financeList.replaceChildren();
+    for (const [month, figures] of [...months].sort((a, b) => b[0].localeCompare(a[0]))) {
+      const item = document.createElement('li');
+      item.textContent = month + ' - fees collected ' + rupees(figures.fees) + ' - expenses ' + rupees(figures.spent)
+        + ' - ' + (figures.fees >= figures.spent ? 'surplus ' : 'shortfall ') + rupees(Math.abs(figures.fees - figures.spent));
+      financeList.append(item);
+    }
+    financeStatus.textContent = months.size ? 'Expenses come from the Expenses screen. Voided receipts are not counted.' : 'No payments or expenses yet.';
+  } catch {
+    if (request === schoolRequest) financeStatus.textContent = 'Could not load. Try again.';
+  }
+});
+
+// Student profile: one page that gathers what the school holds about a student.
+const p360Student = document.querySelector('#profile360-student');
+const p360Status = document.querySelector('#profile360-status');
+const p360List = document.querySelector('#profile360-list');
+const fillP360Students = () => {
+  const chosen = p360Student.value;
+  p360Student.replaceChildren(new Option('Choose a student', ''),
+    ...activeStudents().map((record) => new Option(studentOption(record.data()), record.id)));
+  p360Student.value = chosen;
+};
+p360Student.addEventListener('focus', fillP360Students);
+p360Student.addEventListener('mousedown', fillP360Students);
+document.querySelector('#profile360-show').addEventListener('click', async () => {
+  const tools = academic;
+  const studentId = p360Student.value;
+  const student = studentRecords.find((record) => record.id === studentId);
+  if (!tools || !student) {
+    p360Status.textContent = 'Choose a student first.';
+    return;
+  }
+  const request = schoolRequest;
+  p360Status.textContent = 'Loading...';
+  try {
+    const [payments, enrollments] = await Promise.all([tools.list('payments'), tools.list('enrollments')]);
+    if (request !== schoolRequest) return;
+    const data = student.data();
+    const rows = [['Student', data.name + ' (' + data.admissionNo + ') - ' + data.status],
+      ['Guardian', data.guardianName + (data.guardianPhone ? ' - ' + data.guardianPhone : '')]];
+    for (const record of enrollments.docs.filter((item) => item.data().studentId === studentId)) {
+      const placement = record.data();
+      rows.push(['Class ' + placement.yearId, nameOfClass(placement.classId) + ', roll ' + placement.rollNo]);
+    }
+    const paid = payments.docs.filter((item) => item.data().studentId === studentId && !item.data().voided);
+    rows.push(['Fees paid', rupees(paid.reduce((sum, item) => sum + item.data().amount, 0)) + ' in ' + paid.length + ' receipt(s)']);
+    const mine = (list) => list.items.filter((record) => record.data().studentId === studentId).map((record) => record.data());
+    const concessions = mine(lists.concessions);
+    if (concessions.length) rows.push(['Concessions', concessions.map((item) => item.kind + ' ' + rupees(item.amount)).join(', ')]);
+    const achievements = mine(lists.achievements);
+    if (achievements.length) rows.push(['Achievements', achievements.map((item) => item.title + ' (' + item.level + ')').join(', ')]);
+    const certificates = mine(lists.certificates);
+    if (certificates.length) rows.push(['Certificates', certificates.map((item) => item.type + ' ' + item.issuedOn).join(', ')]);
+    const sales = mine(lists.sales);
+    if (sales.length) rows.push(['Purchases', sales.map((item) => item.quantity + ' x ' + item.item).join(', ')]);
+    const rider = lists.riders.items.find((record) => record.id === studentId);
+    if (rider) rows.push(['Transport', routeName(rider.data().routeId)]);
+    const activities = lists.members.items.filter((record) => record.data().studentId === studentId).map((record) => activityName(record.data().activityId));
+    if (activities.length) rows.push(['Activities', activities.join(', ')]);
+    p360List.replaceChildren();
+    for (const [label, value] of rows) {
+      const item = document.createElement('li');
+      item.textContent = label + ': ' + value;
+      p360List.append(item);
+    }
+    p360Status.textContent = '';
+  } catch {
+    if (request === schoolRequest) p360Status.textContent = 'Could not load. Try again.';
+  }
+});
+
 lists.alumni = ownerList({
   id: 'alumni', collection: 'alumni', empty: 'No alumni yet.', saved: 'Alumnus added.',
   sort: (a, b) => b.data().passoutYear - a.data().passoutYear || a.data().name.localeCompare(b.data().name),
@@ -4384,7 +4474,14 @@ async function loadOwnerLists(request) {
   }
 }
 const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.render(); };
-const resetOwnerLists = () => { for (const api of ownerLists) api.reset(); };
+const resetOwnerLists = () => {
+  for (const api of ownerLists) api.reset();
+  financeList.replaceChildren();
+  financeStatus.textContent = '';
+  p360List.replaceChildren();
+  p360Status.textContent = '';
+  p360Student.replaceChildren(new Option('Choose a student', ''));
+};
 
 // Class promotion. Each student of the "from" year gets a placement in the "to" year through the same
 // enrollment and roll-number records the placement screen writes, so every existing rule still applies.

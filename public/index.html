@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-18">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-19">
 </head>
 <body>
   <main>
@@ -737,6 +737,19 @@
         </form>
         <ul id="diary-list"></ul>
       </section>
+      <section id="finance" aria-labelledby="finance-title">
+        <h3 id="finance-title">Finance Summary</h3>
+        <p id="finance-status" role="status"></p>
+        <button id="finance-show" type="button">Show monthly summary</button>
+        <ul id="finance-list"></ul>
+      </section>
+      <section id="profile360" aria-labelledby="profile360-title">
+        <h3 id="profile360-title">Student Profile</h3>
+        <p id="profile360-status" role="status"></p>
+        <p><label>Student <select id="profile360-student"><option value="">Choose a student</option></select></label>
+          <button id="profile360-show" type="button">Show profile</button></p>
+        <ul id="profile360-list"></ul>
+      </section>
       <section id="alumni" aria-labelledby="alumni-title" hidden>
         <h3 id="alumni-title">Alumni</h3>
         <p id="alumni-status" role="status"></p>
@@ -1031,7 +1044,7 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./sign-in.mjs?v=batch-18');
+      await import('./sign-in.mjs?v=batch-19');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
