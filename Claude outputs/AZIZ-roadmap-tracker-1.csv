@@ -45,7 +45,7 @@
 044,"Automatic total, percentage and grade calculation using approved rules",F,Built,"Total, percent and grade"
 045,"Principal/admin review, correction and approval workflow",F,Built,"Owner review, reopen and approve"
 046,Result publication control; families see published results only,F,Built,Published results only to families
-047,"Class, student and subject performance reports",F,Partial,"Class rank list, toppers, performance by exam; no trend over time per subject"
+047,"Class, student and subject performance reports",F,Built,"Class ranks, toppers, performance by exam and a per-student progress view by subject"
 048,Branded marksheets and report cards,G,Built,"Report card with school logo and name, grades and Pass/Fail; bulk printing"
 049,Admit-card template and eligibility checks,G,Built,Admit card with minimum-attendance eligibility check
 050,Individual and bulk PDF generation and downloads,G,Built,Single and whole-class report cards via print / Save as PDF
@@ -81,7 +81,7 @@
 080,Teacher workload dashboard,K,Built,
 081,Digital homework submission,K,Built,Families submit homework once; teachers give feedback
 082,School transport GPS tracking integration,K,Not started,
-083,School-specific configurable reports,K,Partial,"Report builder over students, payments, expenses, salaries; fixed lists only"
+083,School-specific configurable reports,K,Built,"Report builder: choose list, columns and date range; fixed lists only"
 084,Per-school storage quotas,L,Partial,Storage records counted against the plan; new records stop at the limit; files themselves are not stored here
 085,Per-school usage monitoring,L,Built,Usage counts recounted automatically and shown to owner and platform
 086,Automated backups and tested restoration,L,Partial,Manual backup and data pack with reminder; no scheduled backups or tested restore
@@ -117,7 +117,7 @@
 116,Lesson Planning & Learning Management,N,Built,
 117,Continuous Assessment System,N,Built,Assessments with scores per class and subject
 118,Complete Admission Workflow,N,Partial,
-119,Staff HR & Payroll Management,N,Partial,"Payroll register, payslip print/PDF, staff attendance, leave; no tax calculation"
+119,Staff HR & Payroll Management,N,Partial,"Payroll register, payslip print/PDF, PF and professional tax helper, staff attendance, leave; no income tax"
 120,Inventory & Procurement Management,N,Built,
 121,Visitor & Campus Security Management,N,Built,
 122,Parent-Teacher Meeting Management,N,Built,

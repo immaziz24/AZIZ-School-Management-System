@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-41">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-42">
 </head>
 <body>
   <main>
@@ -458,6 +458,9 @@
           <p><label>Basic pay (Rs) <input name="basic" type="number" min="0" step="1" required></label></p>
           <p><label>Allowances (Rs) <input name="allowances" type="number" min="0" step="1" value="0" required></label></p>
           <p><label>Deductions (Rs) <input name="deductions" type="number" min="0" step="1" value="0" required></label></p>
+          <p><label>Provident fund % of basic (helper) <input name="pfPercent" type="number" min="0" max="30" step="0.5" value="12"></label>
+            <label>Professional tax (Rs, helper) <input name="ptax" type="number" min="0" step="1" value="0"></label>
+            <button type="button" id="payroll-calc">Work out deductions</button></p>
           <p><label>Paid on (optional) <input name="paidOn" type="date"></label></p>
           <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
           <button type="submit">Save salary record</button>
@@ -598,9 +601,18 @@
           <thead><tr><th>Rank</th><th>Student</th><th>Total</th><th>Percent</th><th>Grade</th><th>Result</th></tr></thead>
           <tbody id="rank-body"></tbody>
         </table>
+        <h4>Student progress</h4>
+        <p>All published results for one student, grouped by subject, with the change from the previous exam.</p>
+        <p><label>Student <select id="prog-student"></select></label></p>
+        <button type="button" id="prog-run">Show progress</button>
+        <table>
+          <thead><tr><th>Subject</th><th>Year</th><th>Exam</th><th>Percent</th><th>Change</th></tr></thead>
+          <tbody id="prog-body"></tbody>
+        </table>
         <h4>Report builder</h4>
         <p>Choose a list and the columns you want, then download it as a spreadsheet (CSV).</p>
         <p><label>List <select id="rb-source"></select></label></p>
+        <p><label>Only from date (optional) <input id="rb-from" type="date"></label> <label>to date (optional) <input id="rb-to" type="date"></label></p>
         <fieldset id="rb-columns"><legend>Columns</legend></fieldset>
         <button type="button" id="rb-csv">Download CSV</button>
         <h4>Report cards for a whole class</h4>
@@ -1331,14 +1343,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-41');
-      await import('./i18n.mjs?v=batch-41');
+      await import('./ui.mjs?v=batch-42');
+      await import('./i18n.mjs?v=batch-42');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-41');
-      await import('./platform.mjs?v=batch-41');
+      await import('./sign-in.mjs?v=batch-42');
+      await import('./platform.mjs?v=batch-42');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

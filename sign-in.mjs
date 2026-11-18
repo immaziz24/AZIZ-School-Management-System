@@ -4553,6 +4553,17 @@ lists.payroll = ownerList({
   },
 });
 
+// Payroll helper: provident fund as a percentage of basic pay plus professional tax fill the deductions box.
+document.querySelector('#payroll-calc').addEventListener('click', () => {
+  const form = document.querySelector('#payroll-form');
+  const basic = Number(form.elements.namedItem('basic').value);
+  const percent = Number(form.elements.namedItem('pfPercent').value);
+  const ptax = Number(form.elements.namedItem('ptax').value);
+  if (!(basic >= 0) || !(percent >= 0) || !(ptax >= 0)) { document.querySelector('#payroll-status').textContent = 'Enter the basic pay first.'; return; }
+  form.elements.namedItem('deductions').value = String(Math.round(basic * percent / 100) + Math.round(ptax));
+  document.querySelector('#payroll-status').textContent = 'Deductions filled in as provident fund plus professional tax. Check them before saving. Income tax is not worked out here.';
+});
+
 lists.inbox = ownerList({
   id: 'inbox', collection: 'messages', empty: 'No messages yet.',
   sort: (a, b) => b.data().createdAt.localeCompare(a.data().createdAt) || b.id.localeCompare(a.id),
@@ -5054,6 +5065,8 @@ let rankRows = [];
 function showReportSections() {
   fillSelect(document.querySelector('#rank-class'), [...examData.classes].sort(byClassOrder), (item) => item.name);
   fillSelect(document.querySelector('#bulk-class'), [...examData.classes].sort(byClassOrder), (item) => item.name);
+  fillSelect(document.querySelector('#prog-student'), [...studentRecords].sort((a, b) => a.data().name.localeCompare(b.data().name)),
+    (student) => student.name + ' (' + student.admissionNo + ')');
   const source = document.querySelector('#rb-source');
   if (!source.children.length) {
     for (const key of Object.keys(REPORT_SOURCES)) source.append(new Option(REPORT_SOURCES[key].label, key));
@@ -5071,6 +5084,7 @@ function hideReportSections() {
   finRows = [];
   rankRows = [];
   document.querySelector('#bulk-body').replaceChildren();
+  document.querySelector('#prog-body').replaceChildren();
 }
 
 // Financial report
@@ -5165,17 +5179,50 @@ document.querySelector('#rank-csv').addEventListener('click', () => {
   downloadCsv('class-ranks', [['Rank', 'Student', 'Total', 'Percent', 'Grade', 'Result'], ...rankRows]);
 });
 
+// Student progress: published results of one student by subject, with the change from the previous exam.
+document.querySelector('#prog-run').addEventListener('click', async () => {
+  const tools = academic;
+  const studentId = document.querySelector('#prog-student').value;
+  if (!tools || !studentId) { reportsStatus.textContent = 'Choose a student.'; return; }
+  const request = schoolRequest;
+  reportsStatus.textContent = 'Loading results.';
+  try {
+    const saved = await tools.marksOfStudent(studentId);
+    if (request !== schoolRequest) return;
+    const published = new Map(examData.exams.filter((record) => record.data().published === true).map((record) => [record.id, record.data()]));
+    const subjectName = (id) => examData.subjects.find((record) => record.id === id)?.data().name ?? id;
+    const rows = saved.docs.map((record) => record.data()).filter((mark) => published.has(mark.examId) && mark.draft !== true)
+      .map((mark) => ({ exam: published.get(mark.examId), percent: Math.round(mark.score / published.get(mark.examId).maxMarks * 1000) / 10 }))
+      .sort((a, b) => subjectName(a.exam.subjectId).localeCompare(subjectName(b.exam.subjectId))
+        || a.exam.yearId.localeCompare(b.exam.yearId) || a.exam.examKey.localeCompare(b.exam.examKey));
+    const body = document.querySelector('#prog-body');
+    body.replaceChildren();
+    let previous;
+    for (const row of rows) {
+      const same = previous && previous.exam.subjectId === row.exam.subjectId;
+      const change = same ? row.percent - previous.percent : null;
+      addRow(body, [subjectName(row.exam.subjectId), row.exam.yearId, row.exam.name, row.percent + '%',
+        change === null ? '-' : (change > 0 ? 'Up ' : change < 0 ? 'Down ' : 'Same ') + (change === 0 ? '' : Math.abs(Math.round(change * 10) / 10) + ' points')]);
+      previous = row;
+    }
+    reportsStatus.textContent = rows.length ? '' : 'No published results for this student yet.';
+  } catch {
+    if (request === schoolRequest) reportsStatus.textContent = 'Could not load the results. Try again.';
+  }
+});
+
 // Report builder: pick a list and its columns, download as CSV.
 const REPORT_SOURCES = {
   students: { label: 'Students', rows: () => studentRecords.map((r) => r.data()),
+    dateOf: () => '',
     cols: { 'Admission no': (s) => s.admissionNo, Name: (s) => s.name, Guardian: (s) => s.guardianName, 'Guardian phone': (s) => s.guardianPhone,
       Status: (s) => s.status, 'Date of birth': (s) => s.dob ?? '', Address: (s) => s.address ?? '' } },
-  payments: { label: 'Fee payments', rows: () => feeData.payments.map((r) => r.data()),
+  payments: { label: 'Fee payments', rows: () => feeData.payments.map((r) => r.data()), dateOf: (p) => p.date,
     cols: { Receipt: (p) => p.receiptNo, Date: (p) => p.date, Student: (p) => nameOfStudent(p.studentId), Year: (p) => p.yearId,
       Method: (p) => METHOD_LABEL[p.method] ?? p.method, 'Amount (Rs)': (p) => p.amount, Status: (p) => (p.voided ? 'Voided' : 'Valid') } },
-  expenses: { label: 'Expenses', rows: () => lists.expenses.items.map((r) => r.data()),
+  expenses: { label: 'Expenses', rows: () => lists.expenses.items.map((r) => r.data()), dateOf: (e) => e.date,
     cols: { Date: (e) => e.date, Amount: (e) => e.amount, Category: (e) => e.category ?? '', Note: (e) => e.note ?? '' } },
-  payroll: { label: 'Salary records', rows: () => lists.payroll.items.map((r) => r.data()),
+  payroll: { label: 'Salary records', rows: () => lists.payroll.items.map((r) => r.data()), dateOf: (p) => p.month + '-01',
     cols: { Month: (p) => p.month, Staff: (p) => staffLabel(p.staffUid), Basic: (p) => p.basic, Allowances: (p) => p.allowances,
       Deductions: (p) => p.deductions, Net: (p) => p.basic + p.allowances - p.deductions, 'Paid on': (p) => p.paidOn ?? '' } },
 };
@@ -5200,7 +5247,13 @@ document.querySelector('#rb-csv').addEventListener('click', () => {
   const source = REPORT_SOURCES[key];
   const picked = [...document.querySelectorAll('#rb-columns input:checked')].map((input) => input.value);
   if (!picked.length) { reportsStatus.textContent = 'Tick at least one column.'; return; }
-  downloadCsv('report-' + key, [picked, ...source.rows().map((row) => picked.map((name) => source.cols[name](row)))]);
+  const from = document.querySelector('#rb-from').value;
+  const to = document.querySelector('#rb-to').value;
+  const rows = source.rows().filter((row) => {
+    const when = source.dateOf(row);
+    return !when || ((!from || when >= from) && (!to || when <= to));
+  });
+  downloadCsv('report-' + key, [picked, ...rows.map((row) => picked.map((name) => source.cols[name](row)))]);
 });
 
 // Report cards for a whole class: one page per student, published exams only.
