@@ -4270,20 +4270,43 @@ lists.inbox = ownerList({
   },
 });
 
-// Admission enquiries: sent from the public page, moved along here. Only the status changes.
+// Admission enquiries: sent from the public page, moved along the admission pipeline here. Only the status changes.
+// Answers to the school's own extra questions (set in Website Look and Admission Form) are shown with their labels.
+let extraLabels = [];
+const answersOf = (item) => extraLabels.map((label, index) => (item['a' + (index + 1)] ? label + ': ' + item['a' + (index + 1)] : '')).filter(Boolean).join('; ');
 lists.enquiries = ownerList({
   id: 'enquiries', collection: 'enquiries', empty: 'No enquiries yet.',
   sort: (a, b) => b.data().createdAt.localeCompare(a.data().createdAt) || b.id.localeCompare(a.id),
   line: (item) => item.createdAt + ' - ' + item.studentName + ' for ' + item.classApplying + ' - guardian ' + item.guardianName
     + ' (' + item.phone + (item.email ? ', ' + item.email : '') + ')' + (item.message ? ' - "' + item.message + '"' : '')
+    + (answersOf(item) ? ' - ' + answersOf(item) : '')
     + ' - STATUS: ' + item.status.toUpperCase() + (item.note ? ' (' + item.note + ')' : ''),
-  extra: (record, act) => ['contacted', 'admitted', 'rejected'].filter((status) => status !== record.data().status).map((status) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = 'Mark ' + status;
-    button.addEventListener('click', () => act(() => academic.save('enquiries', record.id, { ...record.data(), status }), 'Marked ' + status + '.'));
-    return button;
-  }),
+  extra: (record, act) => {
+    const buttons = ['contacted', 'interview', 'offered', 'admitted', 'rejected'].filter((status) => status !== record.data().status).map((status) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Mark ' + status;
+      button.addEventListener('click', () => act(() => academic.save('enquiries', record.id, { ...record.data(), status }), 'Marked ' + status + '.'));
+      return button;
+    });
+    // Admitted enquiries can start the student record: the form is filled in and opened for the owner to finish.
+    if (record.data().status === 'admitted' || record.data().status === 'offered') {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Create student record';
+      button.addEventListener('click', () => {
+        const item = record.data();
+        document.querySelector('#owner-dashboard').dispatchEvent(new CustomEvent('ui-open', { detail: 'student-roster' }));
+        studentForm.reset();
+        studentForm.elements.namedItem('name').value = item.studentName;
+        studentForm.elements.namedItem('guardianName').value = item.guardianName;
+        studentForm.elements.namedItem('guardianPhone').value = item.phone;
+        studentForm.elements.namedItem('admissionNo').focus();
+      });
+      buttons.push(button);
+    }
+    return buttons;
+  },
 });
 
 lists.eventregs = ownerList({
@@ -4341,6 +4364,174 @@ websiteForm.addEventListener('submit', async (event) => {
     tools.busy = false;
   }
 });
+
+// Website look, admission form questions, school settings and the launch checklist.
+const siteExtrasSection = document.querySelector('#siteextras');
+const siteExtrasStatus = document.querySelector('#siteextras-status');
+const siteExtrasForm = document.querySelector('#siteextras-form');
+const siteExtrasSlots = document.querySelector('#siteextras-slots');
+const prefsSection = document.querySelector('#prefs');
+const prefsStatus = document.querySelector('#prefs-status');
+const prefsForm = document.querySelector('#prefs-form');
+const launchStatus = document.querySelector('#launch-status');
+const launchList = document.querySelector('#launch-manual');
+const FIELD_TYPES = [['text', 'Short text'], ['textarea', 'Long text'], ['number', 'Number'], ['date', 'Date'], ['select', 'Choose one']];
+const LAUNCH_ITEMS = ['Parents and staff have been told about the new system', 'A full data backup has been downloaded',
+  'Fees and concessions have been reviewed', 'Teachers have logged in and tried marking attendance', 'The public website has been read and approved',
+  'The privacy policy has been shared with parents', 'Parent logins have been created and tested', 'A date for going live has been decided'];
+let launchTicks = {};
+let schoolPrefs = null;
+
+for (let slot = 1; slot <= 6; slot += 1) {
+  const row = document.createElement('p');
+  const label = document.createElement('input');
+  label.name = 'label' + slot; label.maxLength = 60; label.placeholder = 'Question ' + slot + ' (leave empty to skip)';
+  const type = document.createElement('select');
+  type.name = 'type' + slot;
+  for (const [value, name] of FIELD_TYPES) type.append(new Option(name, value));
+  const required = document.createElement('input');
+  required.type = 'checkbox'; required.name = 'required' + slot;
+  const options = document.createElement('input');
+  options.name = 'options' + slot; options.maxLength = 150; options.placeholder = 'Choices for "Choose one", separated by ;';
+  const wrap = (text, control) => { const l = document.createElement('label'); l.append(text, control); return l; };
+  row.append(wrap('Question ' + slot, label), wrap('Answer type', type), wrap('Required ', required), wrap('Choices', options));
+  siteExtrasSlots.append(row);
+}
+
+function parseSlot(value) {
+  const [label, type, required, options] = String(value).split('|');
+  return { label, type, required: required === '1', options: options ?? '' };
+}
+
+async function loadSettings(request) {
+  const { doc, getDocFromServer } = firestoreTools;
+  siteExtrasSection.hidden = false;
+  prefsSection.hidden = false;
+  try {
+    const [extras, prefs, launch] = await Promise.all(['site/extras', 'settings/preferences', 'settings/launch'].map((path) => {
+      const [collectionName, id] = path.split('/');
+      return getDocFromServer(doc(academic.schoolRef, collectionName, id));
+    }));
+    if (request !== schoolRequest) return;
+    const extra = extras.exists() ? extras.data() : {};
+    siteExtrasForm.elements.namedItem('theme').value = extra.theme ?? 'classic';
+    extraLabels = [];
+    for (let slot = 1; slot <= 6; slot += 1) {
+      const parsed = extra['f' + slot] ? parseSlot(extra['f' + slot]) : { label: '', type: 'text', required: false, options: '' };
+      siteExtrasForm.elements.namedItem('label' + slot).value = parsed.label;
+      siteExtrasForm.elements.namedItem('type' + slot).value = parsed.type;
+      siteExtrasForm.elements.namedItem('required' + slot).checked = parsed.required;
+      siteExtrasForm.elements.namedItem('options' + slot).value = parsed.options;
+      extraLabels.push(parsed.label || 'Answer ' + slot);
+    }
+    schoolPrefs = prefs.exists() ? prefs.data() : null;
+    if (schoolPrefs) {
+      for (let day = 1; day <= 7; day += 1) prefsForm.elements.namedItem('day' + day).checked = schoolPrefs.workingDays.includes(String(day));
+      for (const key of ['startTime', 'endTime', 'lowAttendance']) prefsForm.elements.namedItem(key).value = schoolPrefs[key];
+      prefsForm.elements.namedItem('terms').value = schoolPrefs.terms ?? '';
+      document.querySelector('#cards-minpercent').value = schoolPrefs.lowAttendance;
+    } else {
+      for (let day = 1; day <= 6; day += 1) prefsForm.elements.namedItem('day' + day).checked = true;
+    }
+    launchTicks = launch.exists() ? launch.data() : {};
+    renderLaunch();
+    if (lists.enquiries.items.length) lists.enquiries.render();
+  } catch {
+    if (request === schoolRequest) siteExtrasStatus.textContent = 'Could not load these settings. Try again.';
+  }
+}
+
+function renderLaunch() {
+  launchList.replaceChildren();
+  let done = 0;
+  LAUNCH_ITEMS.forEach((label, index) => {
+    const key = 'm' + (index + 1);
+    const ticked = launchTicks[key] === true;
+    if (ticked) done += 1;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = ticked ? 'Untick' : 'Tick as done';
+    button.addEventListener('click', async () => {
+      const tools = academic;
+      if (!tools || tools.busy) return;
+      const request = schoolRequest;
+      tools.busy = true;
+      try {
+        const next = { ...launchTicks, [key]: !ticked };
+        await tools.save('settings', 'launch', next);
+        if (request === schoolRequest) { launchTicks = next; renderLaunch(); }
+      } catch {
+        if (request === schoolRequest) launchStatus.textContent = 'Could not save. Try again.';
+      } finally {
+        tools.busy = false;
+      }
+    });
+    listItem(launchList, (ticked ? 'DONE - ' : 'TO DO - ') + label, button);
+  });
+  launchStatus.textContent = done + ' of ' + LAUNCH_ITEMS.length + ' go-live steps ticked.';
+}
+
+siteExtrasForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const data = { theme: siteExtrasForm.elements.namedItem('theme').value };
+  for (let slot = 1; slot <= 6; slot += 1) {
+    const label = siteExtrasForm.elements.namedItem('label' + slot).value.trim().replaceAll('|', '/');
+    if (!label) continue;
+    const type = siteExtrasForm.elements.namedItem('type' + slot).value;
+    const required = siteExtrasForm.elements.namedItem('required' + slot).checked ? '1' : '0';
+    const options = siteExtrasForm.elements.namedItem('options' + slot).value.trim().replaceAll('|', '/');
+    if (type === 'select' && !options) { siteExtrasStatus.textContent = 'Question ' + slot + ' needs its choices, separated by ;'; return; }
+    data['f' + slot] = label + '|' + type + '|' + required + (type === 'select' ? '|' + options : '');
+  }
+  const request = schoolRequest;
+  tools.busy = true;
+  siteExtrasStatus.textContent = 'Saving.';
+  try {
+    await tools.save('site', 'extras', data);
+    if (request === schoolRequest) siteExtrasStatus.textContent = 'Saved. The public page now uses this theme and these questions.';
+  } catch {
+    if (request === schoolRequest) siteExtrasStatus.textContent = 'Could not save. Check the details and try again.';
+  } finally {
+    tools.busy = false;
+  }
+  await loadSettings(request);
+});
+
+prefsForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const days = [1, 2, 3, 4, 5, 6, 7].filter((day) => prefsForm.elements.namedItem('day' + day).checked).join('');
+  const data = {
+    workingDays: days, startTime: prefsForm.elements.namedItem('startTime').value, endTime: prefsForm.elements.namedItem('endTime').value,
+    lowAttendance: Number(prefsForm.elements.namedItem('lowAttendance').value),
+  };
+  const terms = prefsForm.elements.namedItem('terms').value.trim();
+  if (terms) data.terms = terms;
+  if (!days) { prefsStatus.textContent = 'Choose at least one working day.'; return; }
+  if (data.startTime >= data.endTime) { prefsStatus.textContent = 'School must end after it starts.'; return; }
+  if (!Number.isInteger(data.lowAttendance) || data.lowAttendance < 1 || data.lowAttendance > 100) { prefsStatus.textContent = 'Attendance must be a whole number from 1 to 100.'; return; }
+  const request = schoolRequest;
+  tools.busy = true;
+  prefsStatus.textContent = 'Saving.';
+  try {
+    await tools.save('settings', 'preferences', data);
+    if (request === schoolRequest) { schoolPrefs = data; document.querySelector('#cards-minpercent').value = data.lowAttendance; prefsStatus.textContent = 'Saved. Admit cards now use this minimum attendance by default.'; }
+  } catch {
+    if (request === schoolRequest) prefsStatus.textContent = 'Could not save. Check the details and try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
+
+function resetSettings() {
+  for (const section of [siteExtrasSection, prefsSection]) section.hidden = true;
+  siteExtrasStatus.textContent = ''; prefsStatus.textContent = ''; launchStatus.textContent = '';
+  siteExtrasForm.reset(); prefsForm.reset(); launchList.replaceChildren();
+  launchTicks = {}; schoolPrefs = null; extraLabels = [];
+}
 
 // Parent page: register the student for upcoming calendar events, or cancel.
 const portalEventsSection = document.querySelector('#portal-events');
@@ -5379,6 +5570,7 @@ onAuthStateChanged(auth, async (user) => {
   websiteSection.hidden = true;
   websiteStatus.textContent = '';
   websiteForm.reset();
+  resetSettings();
   resetInsights();
   gradingSection.hidden = true;
   gradingStatus.textContent = '';
@@ -5721,6 +5913,7 @@ onAuthStateChanged(auth, async (user) => {
     if (request === schoolRequest) renderPromotionYears();
     if (request === schoolRequest) await loadOwnerLists(request);
     if (request === schoolRequest) await loadWebsite(request);
+    if (request === schoolRequest) await loadSettings(request);
     if (request === schoolRequest) renderInsights();
     if (request === schoolRequest) await renderSummary(request);
   } catch (error) {

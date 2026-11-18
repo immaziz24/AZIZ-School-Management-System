@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-29">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-31">
 </head>
 <body>
   <main>
@@ -475,6 +475,45 @@
           <button type="submit">Save website content</button>
         </form>
       </section>
+      <section id="siteextras" aria-labelledby="siteextras-title" hidden>
+        <h3 id="siteextras-title">Website Look and Admission Form</h3>
+        <p>Pick the colour theme of the public school page and add up to six extra questions to the admission enquiry form.</p>
+        <p id="siteextras-status" role="status"></p>
+        <form id="siteextras-form">
+          <p><label>Theme
+            <select name="theme">
+              <option value="classic">Classic navy and gold</option>
+              <option value="royal">Royal purple</option>
+              <option value="emerald">Emerald green</option>
+              <option value="crimson">Crimson red</option>
+              <option value="midnight">Midnight dark</option>
+            </select></label></p>
+          <h4>Extra admission questions</h4>
+          <div id="siteextras-slots"></div>
+          <button type="submit">Save look and form</button>
+        </form>
+      </section>
+      <section id="prefs" aria-labelledby="prefs-title" hidden>
+        <h3 id="prefs-title">School Settings</h3>
+        <p id="prefs-status" role="status"></p>
+        <form id="prefs-form">
+          <fieldset>
+            <legend>Working days</legend>
+            <label><input type="checkbox" name="day1" value="1"> Mon</label>
+            <label><input type="checkbox" name="day2" value="2"> Tue</label>
+            <label><input type="checkbox" name="day3" value="3"> Wed</label>
+            <label><input type="checkbox" name="day4" value="4"> Thu</label>
+            <label><input type="checkbox" name="day5" value="5"> Fri</label>
+            <label><input type="checkbox" name="day6" value="6"> Sat</label>
+            <label><input type="checkbox" name="day7" value="7"> Sun</label>
+          </fieldset>
+          <p><label>School starts <input name="startTime" type="time" required value="08:30"></label></p>
+          <p><label>School ends <input name="endTime" type="time" required value="14:30"></label></p>
+          <p><label>Minimum attendance percentage <input name="lowAttendance" type="number" min="1" max="100" required value="75"></label></p>
+          <p><label>Terms (optional, for example Term 1, Term 2) <input name="terms" maxlength="100"></label></p>
+          <button type="submit">Save settings</button>
+        </form>
+      </section>
       <section id="enquiries" aria-labelledby="enquiries-title" hidden>
         <h3 id="enquiries-title">Admission Enquiries</h3>
         <p id="enquiries-status" role="status"></p>
@@ -489,6 +528,9 @@
         <h3 id="checklist-title">Setup Checklist</h3>
         <p id="checklist-status" role="status"></p>
         <ul id="checklist-list"></ul>
+        <h4>Before you go live (tick each when done)</h4>
+        <p id="launch-status" role="status"></p>
+        <ul id="launch-manual"></ul>
       </section>
       <section id="defaulters" aria-labelledby="defaulters-title" hidden>
         <h3 id="defaulters-title">Fee Dues Report</h3>
@@ -1186,13 +1228,13 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-29');
+      await import('./ui.mjs?v=batch-31');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-29');
-      await import('./platform.mjs?v=batch-29');
+      await import('./sign-in.mjs?v=batch-31');
+      await import('./platform.mjs?v=batch-31');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

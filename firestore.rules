@@ -810,9 +810,10 @@ service cloud.firestore {
       // Public website. site/main holds the text of the public school page (school.html). Anyone can read
       // that one document, so it must hold only what the school is happy to publish; only the owner edits it.
       match /site/{docId} {
-        allow get: if docId == 'main';
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && docId == 'main'
-          && validSite(request.resource.data);
+        allow get: if docId in ['main', 'extras'];
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && ((docId == 'main' && validSite(request.resource.data))
+            || (docId == 'extras' && validSiteExtras(request.resource.data)));
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
@@ -946,6 +947,28 @@ service cloud.firestore {
 
       // Grading rules. settings/grading: the pass percentage and the lowest percentage for each grade
       // (A+ down to E; anything below E is F). The owner sets them; teachers and linked families read them.
+      // School settings. settings/preferences: working days (1 = Monday to 7 = Sunday), school hours, the
+      // attendance percentage below which a student is flagged, and an optional term list.
+      match /settings/preferences {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validPreferences(request.resource.data);
+      }
+
+      // Launch checklist. settings/launch: eight manual "done" ticks (m1 to m8) kept by the owner.
+      match /settings/launch {
+        allow get: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && request.resource.data.keys().hasOnly(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8'])
+          && (!request.resource.data.keys().hasAny(['m1']) || request.resource.data.m1 is bool)
+          && (!request.resource.data.keys().hasAny(['m2']) || request.resource.data.m2 is bool)
+          && (!request.resource.data.keys().hasAny(['m3']) || request.resource.data.m3 is bool)
+          && (!request.resource.data.keys().hasAny(['m4']) || request.resource.data.m4 is bool)
+          && (!request.resource.data.keys().hasAny(['m5']) || request.resource.data.m5 is bool)
+          && (!request.resource.data.keys().hasAny(['m6']) || request.resource.data.m6 is bool)
+          && (!request.resource.data.keys().hasAny(['m7']) || request.resource.data.m7 is bool)
+          && (!request.resource.data.keys().hasAny(['m8']) || request.resource.data.m8 is bool);
+      }
+
       match /settings/grading {
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validGrading(request.resource.data);
@@ -1783,16 +1806,42 @@ service cloud.firestore {
           && item.mapUrl.matches('(https://www\\.google\\.com/maps/embed\\?[^ ]*)?')));
     }
 
+    function fieldSlot(item, key) {
+      return !item.keys().hasAny([key]) || (item[key] is string && item[key].size() <= 250
+        && item[key].matches('[^|]{1,60}\\|(text|number|date|textarea|select)\\|[01](\\|[^|]{1,150})?'));
+    }
+
+    function validSiteExtras(item) {
+      return item.keys().hasOnly(['theme', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'])
+        && (!item.keys().hasAny(['theme']) || item.theme in ['classic', 'royal', 'emerald', 'crimson', 'midnight'])
+        && fieldSlot(item, 'f1') && fieldSlot(item, 'f2') && fieldSlot(item, 'f3')
+        && fieldSlot(item, 'f4') && fieldSlot(item, 'f5') && fieldSlot(item, 'f6');
+    }
+
+    function validPreferences(item) {
+      return item.keys().hasOnly(['workingDays', 'startTime', 'endTime', 'lowAttendance', 'terms'])
+        && item.keys().hasAll(['workingDays', 'startTime', 'endTime', 'lowAttendance'])
+        && item.workingDays is string && item.workingDays.matches('[1-7]{1,7}')
+        && item.startTime is string && item.startTime.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
+        && item.endTime is string && item.endTime.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
+        && item.startTime < item.endTime
+        && item.lowAttendance is int && item.lowAttendance >= 1 && item.lowAttendance <= 100
+        && optionalText(item, 'terms', 100);
+    }
+
     function validEnquiry(item) {
-      return item.keys().hasOnly(['studentName', 'classApplying', 'guardianName', 'phone', 'email', 'message', 'createdAt', 'status', 'note'])
+      return item.keys().hasOnly(['studentName', 'classApplying', 'guardianName', 'phone', 'email', 'message', 'createdAt', 'status', 'note',
+          'a1', 'a2', 'a3', 'a4', 'a5', 'a6'])
         && item.keys().hasAll(['studentName', 'classApplying', 'guardianName', 'phone', 'createdAt', 'status'])
         && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
         && item.classApplying is string && item.classApplying.size() <= 40 && item.classApplying.matches('.*[^[:space:]].*')
         && item.guardianName is string && item.guardianName.size() <= 80 && item.guardianName.matches('.*[^[:space:]].*')
         && item.phone is string && item.phone.matches('[0-9+() -]{6,20}')
         && optionalText(item, 'email', 100) && optionalText(item, 'message', 500) && optionalText(item, 'note', 300)
+        && optionalText(item, 'a1', 200) && optionalText(item, 'a2', 200) && optionalText(item, 'a3', 200)
+        && optionalText(item, 'a4', 200) && optionalText(item, 'a5', 200) && optionalText(item, 'a6', 200)
         && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
-        && item.status in ['new', 'contacted', 'admitted', 'rejected'];
+        && item.status in ['new', 'contacted', 'interview', 'offered', 'admitted', 'rejected'];
     }
 
     function validEventReg(item) {

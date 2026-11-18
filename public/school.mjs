@@ -39,7 +39,49 @@ function show(id, count) {
   document.querySelector('#' + id).hidden = !count;
 }
 
+// Colour themes chosen by the owner (site/extras). Only these fixed palettes are ever applied.
+const THEMES = {
+  classic: ['#14243d', '#faf6ec', '#b8913a', '#0f1b2f'], royal: ['#2e1a4d', '#f7f3fb', '#c29b3f', '#22123a'],
+  emerald: ['#0f3d2e', '#f3f8f4', '#c0a040', '#0a2d22'], crimson: ['#5a1020', '#fbf4f2', '#c79a3a', '#430b17'],
+  midnight: ['#0b1020', '#e8ecf5', '#d4af37', '#070a14'],
+};
+async function loadExtras() {
+  try {
+    const extras = await getDoc(doc(schoolRef, 'site', 'extras'));
+    if (!extras.exists()) return;
+    const data = extras.data();
+    const theme = THEMES[data.theme];
+    if (theme) {
+      const root = document.documentElement.style;
+      root.setProperty('--navy', theme[0]); root.setProperty('--ivory', theme[1]); root.setProperty('--gold', theme[2]);
+      document.querySelector('nav.site').style.background = theme[3];
+      if (data.theme === 'midnight') { root.setProperty('--ink', '#e8ecf5'); document.body.style.background = theme[0]; }
+    }
+    const host = document.querySelector('#extra-fields');
+    host.replaceChildren();
+    for (let slot = 1; slot <= 6; slot += 1) {
+      if (!data['f' + slot]) continue;
+      const [label, type, required, options] = String(data['f' + slot]).split('|');
+      const p = document.createElement('p');
+      const l = document.createElement('label');
+      let input;
+      if (type === 'textarea') { input = document.createElement('textarea'); input.rows = 3; }
+      else if (type === 'select') {
+        input = document.createElement('select');
+        input.append(new Option('Choose', ''));
+        for (const choice of String(options ?? '').split(';').map((c) => c.trim()).filter(Boolean)) input.append(new Option(choice, choice));
+      } else { input = document.createElement('input'); input.type = type === 'number' || type === 'date' ? type : 'text'; }
+      input.name = 'a' + slot; input.maxLength = 200;
+      if (required === '1') input.required = true;
+      l.append(label + (required === '1' ? ' *' : '') + ' ', input);
+      p.append(l);
+      host.append(p);
+    }
+  } catch { /* The standard form still works. */ }
+}
+
 async function load() {
+  loadExtras();
   try {
     const saved = await getDoc(doc(schoolRef, 'site', 'main'));
     if (!saved.exists()) {
@@ -119,6 +161,7 @@ form.addEventListener('submit', async (event) => {
     studentName: value('studentName'), classApplying: value('classApplying'), guardianName: value('guardianName'),
     phone: value('phone'), createdAt: today(), status: 'new',
   };
+  for (let slot = 1; slot <= 6; slot += 1) if (value('a' + slot)) data['a' + slot] = value('a' + slot).slice(0, 200);
   if (value('email')) data.email = value('email');
   if (value('message')) data.message = value('message');
   if (!data.studentName || !data.classApplying || !data.guardianName || !/^[0-9+() -]{6,20}$/.test(data.phone)) {
