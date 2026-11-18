@@ -131,6 +131,8 @@ body:not(.signed-in) #signup{margin:22px 0 0;background:rgba(255,255,255,.03)}
   body.printing .print-target{position:absolute;left:0;top:0;width:100%;border:0}
   body.printing .print-only{display:block;font:700 20px/1.3 Georgia,serif}
   body.printing .no-print,body.printing select{display:none}
+  body.printing .page-break{break-after:page;page-break-after:always}
+  body.printing .page-break:last-child{break-after:auto;page-break-after:auto}
   :root,body{background:#fff!important;color:#000}
   body::before,body::after{display:none}
   table{display:table;width:100%;border-collapse:collapse;border:0}
@@ -143,3 +145,6 @@ body.signed-in #signup{display:none}
 .thumb{width:56px;height:56px;object-fit:cover;border-radius:10px;border:1px solid var(--line);vertical-align:middle;margin:0 8px}
 .card-photo{width:96px;height:96px;object-fit:cover;border:1px solid #999;float:right;margin:0 0 8px 12px}
 .print-logo{display:block;max-height:64px;max-width:200px;margin:0 0 6px}
+
+/* The fee office login sees only the fee screens. */
+body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concessions){display:none!important}

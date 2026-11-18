@@ -232,7 +232,9 @@ $('#consent-accept').addEventListener('click', () => run(plan.status, async () =
 }, 'Thank you. Your acceptance is recorded.'));
 async function recountUsage() {
   const [students, staff, classes] = await Promise.all(['students', 'staff', 'classes'].map((n) => getDocs(collection(schoolRef, n))));
-  await setDoc(doc(schoolRef, 'usage', 'main'), { students: students.size, staff: staff.size, classes: classes.size, updatedAt: serverTimestamp() });
+  let storageMb = 0;
+  try { storageMb = Math.ceil((await getDocs(collection(schoolRef, 'storageRecords'))).docs.reduce((total, d) => total + (d.data().sizeKb ?? 0), 0) / 1024); } catch { storageMb = 0; }
+  await setDoc(doc(schoolRef, 'usage', 'main'), { students: students.size, staff: staff.size, classes: classes.size, storageMb, updatedAt: serverTimestamp() });
   await showUsage();
 }
 $('#usage-refresh').addEventListener('click', () => run(plan.status, recountUsage, 'Usage updated.'));
@@ -286,7 +288,12 @@ $('#invite-form').addEventListener('submit', (event) => {
 async function loadMembers() {
   try {
     const found = await getDocs(collection(schoolRef, 'members'));
-    fillList(plan.members, found.docs.map((d) => ['Member ' + d.id.slice(0, 6) + '… (' + d.data().role + ') - ' + (d.data().active ? 'active' : 'switched off'),
+    let consents = new Map();
+    try { consents = new Map((await getDocs(collection(schoolRef, 'consents'))).docs.map((c) => [c.id, c.data()])); } catch { consents = new Map(); }
+    const consentText = (uid) => (consents.has(uid)
+      ? ' - privacy policy ' + consents.get(uid).policyVersion + (dayText(consents.get(uid).acceptedAt) ? ' accepted ' + dayText(consents.get(uid).acceptedAt) : ' accepted')
+      : ' - has not accepted the privacy policy');
+    fillList(plan.members, found.docs.map((d) => ['Member ' + d.id.slice(0, 6) + '… (' + d.data().role + ') - ' + (d.data().active ? 'active' : 'switched off') + consentText(d.id),
       ...(myRole === 'owner' && d.id !== me.uid ? [button(d.data().active ? 'Switch off' : 'Switch on', () => run(plan.status, async () => {
         await updateDoc(d.ref, { active: !d.data().active });
         await loadMembers();
@@ -344,6 +351,26 @@ async function loadAdmin() {
       if (s.billing?.status === 'active') mrr += s.billing.monthlyPrice ?? 0;
     }
     admin.revenue.textContent = allSchools.length + ' school(s). Monthly recurring: ' + rupees(mrr) + '. Collected: ' + rupees(paid) + '. Unpaid: ' + rupees(due) + '.';
+    const byPlan = new Map();
+    for (const s of allSchools) {
+      const key = (s.billing?.plan ?? 'no plan') + ' / ' + (s.billing?.status ?? '-');
+      const row = byPlan.get(key) ?? { n: 0, mrr: 0 };
+      row.n += 1;
+      if (s.billing?.status === 'active') row.mrr += s.billing.monthlyPrice ?? 0;
+      byPlan.set(key, row);
+    }
+    const byMonth = new Map();
+    for (const s of allSchools) for (const i of s.invoices) {
+      const row = byMonth.get(i.period) ?? { paid: 0, unpaid: 0 };
+      if (i.status === 'paid') row.paid += i.amount; else row.unpaid += i.amount;
+      byMonth.set(i.period, row);
+    }
+    const peak = Math.max(1, ...[...byMonth.values()].map((r) => r.paid + r.unpaid));
+    const bar = (value) => '#'.repeat(Math.round(value / peak * 20));
+    fillList($('#platform-revenue-breakdown'), [
+      ...[...byPlan.entries()].sort().map(([key, r]) => ['Plan ' + key + ': ' + r.n + ' school(s), monthly ' + rupees(r.mrr)]),
+      ...[...byMonth.entries()].sort().reverse().slice(0, 12).map(([period, r]) => [period + ': paid ' + rupees(r.paid) + ', unpaid ' + rupees(r.unpaid) + ' ' + bar(r.paid) + (r.unpaid ? ' (' + bar(r.unpaid).replaceAll('#', '.') + ')' : '')]),
+    ], 'No billing yet.');
     fillList(admin.schools, allSchools.map((s) => [s.name + ' (' + s.id + ') - ' + (s.billing ? s.billing.plan + ' / ' + s.billing.status : 'no plan')
       + (s.usage ? ' - ' + s.usage.students + ' students, ' + s.usage.staff + ' staff' : ''), button('Manage', () => openSchool(s.id))]), 'No schools.');
     admin.status.textContent = '';
@@ -453,13 +480,20 @@ async function loadFlags() {
     const box = document.createElement('label');
     const input = document.createElement('input');
     input.type = 'checkbox'; input.name = key; input.checked = flags[key] !== false;
-    box.append(input, ' ' + label + '  ');
+    const percent = document.createElement('input');
+    percent.type = 'number'; percent.name = 'pct_' + key; percent.min = '0'; percent.max = '100'; percent.step = '1'; percent.placeholder = '100';
+    percent.style.width = '4.5em'; percent.value = Number.isInteger(flags['pct_' + key]) ? String(flags['pct_' + key]) : '';
+    box.append(input, ' ' + label + ' - on for ', percent, '% of schools   ');
     admin.flagBoxes.append(box);
   }
 }
 admin.flagsForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const flags = Object.fromEntries(FLAGS.map(([key]) => [key, admin.flagsForm.elements.namedItem(key).checked]));
+  for (const [key] of FLAGS) {
+    const raw = admin.flagsForm.elements.namedItem('pct_' + key).value.trim();
+    if (raw !== '' && /^[0-9]{1,3}$/.test(raw) && Number(raw) < 100) flags['pct_' + key] = Number(raw);
+  }
   run(admin.status, () => setDoc(doc(db, 'platformConfig', 'flags'), flags), 'Switches saved.');
 });
 async function loadDrills() {

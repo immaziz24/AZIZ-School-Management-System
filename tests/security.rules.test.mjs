@@ -100,3 +100,18 @@ test('storage quota: a new storage record is refused once the plan storage is us
   await set(ADMIN, `${A}/billing/main`, { plan: 'basic', status: 'active' });
   await allowed(set('owner-a', `${A}/storageRecords/ST-3`, rec()), 'no storage limit set');
 });
+
+test('concessions: a family reads only its own student\'s concessions', async () => {
+  const con = (id) => ({ studentId: id, studentName: 'Test ' + id, kind: 'Scholarship', amount: 500, givenOn: day(0) });
+  await set(ADMIN, `${A}/members/parent-1`, { role: 'parent', active: true });
+  await set(ADMIN, `${A}/familyAccess/parent-1`, { studentId: 's1', relation: 'parent', active: true });
+  await set(ADMIN, `${A}/concessions/c1`, con('s1'));
+  await set(ADMIN, `${A}/concessions/c2`, con('s2'));
+  await allowed(get('parent-1', `${A}/concessions/c1`), 'own child');
+  await denied(get('parent-1', `${A}/concessions/c2`), 'another child');
+  await allowed(query('parent-1', A, 'concessions', [['studentId', 's1']]), 'own list');
+  await denied(query('parent-1', A, 'concessions', [['studentId', 's2']]), 'other list');
+  await denied(query('parent-1', A, 'concessions', []), 'unfiltered list');
+  await denied(set('parent-1', `${A}/concessions/c9`, con('s1')), 'family cannot write');
+  await allowed(get('owner-a', `${A}/concessions/c2`), 'owner reads all');
+});

@@ -2169,6 +2169,23 @@ async function loadFees(request) {
   }
 }
 
+// The fee office login (role accountant) sees only the fees: the students, classes and years that
+// the fee screens need, the fee structures, payments, receipts and concessions.
+async function loadFeeOffice(request) {
+  const tools = academic;
+  try {
+    const [years, classes, students, enrollments] = await Promise.all(['academicYears', 'classes', 'students', 'enrollments'].map((name) => tools.list(name)));
+    if (request !== schoolRequest) return;
+    studentRecords = students.docs;
+    placementData = { years: years.docs, classes: classes.docs, sections: [], enrollments: enrollments.docs };
+    examData = { years: years.docs, classes: classes.docs, subjects: [], mappings: [], exams: [] };
+    await loadFees(request);
+    if (request === schoolRequest) await lists.concessions.load(request);
+  } catch {
+    if (request === schoolRequest) schoolStatus.hidden = false, schoolStatus.textContent = 'Could not load the fee records. Refresh to try again.';
+  }
+}
+
 async function runFeeAction(action, done) {
   const tools = academic;
   if (!tools || tools.busy) return;
@@ -2265,11 +2282,15 @@ async function loadPortalFees(tools, request, studentId) {
   portalFeesSection.hidden = false;
   portalFeesStatus.textContent = 'Loading fees.';
   try {
-    const [placements, structures, payments] = await Promise.all([
+    const [placements, structures, payments, concessionDocs] = await Promise.all([
       getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId))),
       getDocsFromServer(collection(schoolRef, 'feeStructures')),
       getDocsFromServer(query(collection(schoolRef, 'payments'), where('studentId', '==', studentId))),
+      getDocsFromServer(query(collection(schoolRef, 'concessions'), where('studentId', '==', studentId))).catch(() => ({ docs: [] })),
     ]);
+    // The family cannot read academic years, so concessions are applied to the latest year only.
+    const concessionTotal = concessionDocs.docs.reduce((sum, record) => sum + record.data().amount, 0);
+    let concessionUsed = false;
     if (request !== schoolRequest) return;
     portalFeesSummary.replaceChildren();
     portalFeesBody.replaceChildren();
@@ -2277,10 +2298,13 @@ async function loadPortalFees(tools, request, studentId) {
     for (const placement of placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))) {
       const heads = structures.docs.map((record) => record.data())
         .filter((item) => item.yearId === placement.yearId && item.classId === placement.classId);
-      const due = heads.reduce((sum, item) => sum + item.amount, 0);
+      const gross = heads.reduce((sum, item) => sum + item.amount, 0);
+      const concession = concessionUsed ? 0 : Math.min(concessionTotal, gross);
+      concessionUsed = true;
+      const due = gross - concession;
       const paid = paidList.filter((item) => item.yearId === placement.yearId && item.voided !== true)
         .reduce((sum, item) => sum + item.amount, 0);
-      listItem(portalFeesSummary, placement.yearId + ': due ' + rupees(due) + ', paid ' + rupees(paid)
+      listItem(portalFeesSummary, placement.yearId + ': due ' + rupees(due) + (concession ? ' (after concession ' + rupees(concession) + ')' : '') + ', paid ' + rupees(paid)
         + ', balance ' + rupees(due - paid)
         + (heads.length ? ' (' + heads.map((item) => item.name + ' ' + rupees(item.amount)).join(', ') + ')' : ''));
     }
@@ -2460,11 +2484,13 @@ const AUDIT_ACTION_LABEL = {
 };
 const AUDIT_SHOWN = 100;
 
+let auditItems = [];
 async function loadAuditLog(request) {
   try {
     const saved = await academic.list('auditLog');
     if (request !== schoolRequest) return;
     const items = saved.docs.map((record) => record.data()).sort((a, b) => b.at.localeCompare(a.at));
+    auditItems = items;
     auditSection.hidden = false;
     auditList.replaceChildren();
     for (const item of items.slice(0, AUDIT_SHOWN)) {
@@ -2530,7 +2556,7 @@ gradingForm.addEventListener('submit', async (event) => {
 
 // Printing. The browser's print dialog can save a PDF. Only the report card is printed (see the
 // print rules in sign-in.css); a heading with the school, student and date is filled in first.
-function printCard(headingId, who) {
+function printCard(headingId, who, after) {
   const heading = document.querySelector(headingId);
   heading.textContent = (schoolName.textContent || 'School') + ' - ' + who + ' - ' + localToday();
   let logo;
@@ -2544,6 +2570,7 @@ function printCard(headingId, who) {
   document.body.classList.add('printing');
   const done = () => {
     logo?.remove();
+    after?.();
     document.body.classList.remove('printing');
     window.removeEventListener('afterprint', done);
   };
@@ -3826,6 +3853,7 @@ const phoneOk = (value) => /^[0-9+() -]{0,20}$/.test(value);
 const byStudentName = (a, b) => a.data().name.localeCompare(b.data().name);
 const studentOption = (item) => item.name + ' (' + item.admissionNo + ')';
 const teacherRecords = () => staffRoster.map((uid) => ({ id: uid, data: () => ({ label: staffLabel(uid) }) }));
+const routeFee = (id) => lists.routes.items.find((record) => record.id === id)?.data().monthlyFee ?? 0;
 const routeName = (id) => lists.routes.items.find((record) => record.id === id)?.data().name ?? id;
 const activityName = (id) => lists.activities.items.find((record) => record.id === id)?.data().name ?? id;
 
@@ -3858,10 +3886,16 @@ lists.routes = ownerList({
   build: (fields) => {
     if (!text(fields, 'name')) return { error: 'Enter the route name.' };
     if (!phoneOk(text(fields, 'driverPhone'))) return { error: 'Phone may use digits, +, spaces, hyphens and brackets only.' };
-    return { id: newId('RT'), data: { name: text(fields, 'name'), ...optional(fields, 'vehicle', 'driver', 'driverPhone', 'stops') } };
+    const fee = text(fields, 'monthlyFee') ? wholeNumber(fields, 'monthlyFee') : 0;
+    if (Number.isNaN(fee) || fee > 100000) return { error: 'The transport fee must be whole rupees, up to 100000.' };
+    return { id: newId('RT'), data: { name: text(fields, 'name'), ...optional(fields, 'vehicle', 'driver', 'driverPhone', 'stops'),
+      ...(fee ? { monthlyFee: fee } : {}) } };
   },
-  line: (item) => item.name + (item.vehicle ? ' - ' + item.vehicle : '') + (item.driver ? ' - driver ' + item.driver : '')
-    + (item.driverPhone ? ' (' + item.driverPhone + ')' : '') + (item.stops ? ' - stops: ' + item.stops : ''),
+  line: (item, record) => item.name + (item.vehicle ? ' - ' + item.vehicle : '') + (item.driver ? ' - driver ' + item.driver : '')
+    + (item.driverPhone ? ' (' + item.driverPhone + ')' : '') + (item.stops ? ' - stops: ' + item.stops : '')
+    + (item.monthlyFee ? ' - fee ' + rupees(item.monthlyFee) + '/student/month, '
+      + lists.riders.items.filter((rider) => rider.data().routeId === record.id).length + ' rider(s) = '
+      + rupees(item.monthlyFee * lists.riders.items.filter((rider) => rider.data().routeId === record.id).length) + '/month' : ''),
 });
 
 lists.riders = ownerList({
@@ -3876,7 +3910,8 @@ lists.riders = ownerList({
     if (!text(fields, 'studentId') || !text(fields, 'routeId')) return { error: 'Choose a student and a route. Add a route first if there is none.' };
     return { id: text(fields, 'studentId'), data: { studentId: text(fields, 'studentId'), routeId: text(fields, 'routeId'), ...optional(fields, 'stop') } };
   },
-  line: (item) => nameOfStudent(item.studentId) + ' - ' + routeName(item.routeId) + (item.stop ? ' - stop ' + item.stop : ''),
+  line: (item) => nameOfStudent(item.studentId) + ' - ' + routeName(item.routeId) + (item.stop ? ' - stop ' + item.stop : '')
+    + (routeFee(item.routeId) ? ' - fee ' + rupees(routeFee(item.routeId)) + '/month' : ''),
 });
 
 lists.activities = ownerList({
@@ -4251,6 +4286,38 @@ lists.diary = ownerList({
 // Needs attention: counts of open work, taken from the lists the owner screens have already loaded.
 const attentionList = document.querySelector('#attention-list');
 const attentionStatus = document.querySelector('#attention-status');
+// Backup reminder and simple security checks, worked out from the settings/backupLog record and the activity log.
+let backupLog = null;
+async function loadBackupLog() {
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const found = await getDocFromServer(doc(academic.schoolRef, 'settings', 'backupLog'));
+    backupLog = found.exists() ? found.data() : null;
+  } catch {
+    backupLog = null;
+  }
+}
+async function noteBackup(kind) {
+  try {
+    await academic.save('settings', 'backupLog', { lastAt: localToday(), kind });
+    backupLog = { lastAt: localToday(), kind };
+    refreshAttention();
+  } catch { /* the backup itself already succeeded */ }
+}
+function securityNotes() {
+  const notes = [];
+  const days = backupLog ? Math.floor((Date.parse(localToday()) - Date.parse(backupLog.lastAt)) / 86400000) : null;
+  if (!backupLog) notes.push('No data backup has been downloaded yet. Use Data Backup below.');
+  else if (days > 14) notes.push('The last data backup was ' + days + ' days ago. Download a fresh one.');
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  const recent = auditItems.filter((item) => item.at >= since);
+  const voids = recent.filter((item) => item.action === 'void').length;
+  const removals = recent.filter((item) => item.action === 'remove').length;
+  if (voids >= 3) notes.push(voids + ' payments were voided in the last 7 days. Check the activity log.');
+  if (removals >= 10) notes.push(removals + ' records were removed in the last 7 days. Check the activity log.');
+  return notes;
+}
+
 function refreshAttention() {
   const count = (list, test) => list.items.filter((record) => test(record.data())).length;
   const checks = [
@@ -4276,7 +4343,9 @@ function refreshAttention() {
     item.textContent = number + ' ' + label;
     attentionList.append(item);
   }
-  attentionStatus.textContent = checks.length || birthdays.length ? '' : 'Nothing needs attention right now.';
+  const notes = securityNotes();
+  for (const note of notes) listItem(attentionList, note);
+  attentionStatus.textContent = checks.length || birthdays.length || notes.length ? '' : 'Nothing needs attention right now.';
 }
 document.querySelector('#attention-refresh').addEventListener('click', refreshAttention);
 
@@ -4430,11 +4499,16 @@ lists.health = ownerList({
   build: (fields) => {
     if (!text(fields, 'studentId')) return { error: 'Choose a student.' };
     return { id: text(fields, 'studentId'), data: { studentId: text(fields, 'studentId'), bloodGroup: text(fields, 'bloodGroup'),
-      ...optional(fields, 'allergies', 'conditions', 'emergencyContact', 'notes') } };
+      ...optional(fields, 'allergies', 'conditions', 'emergencyContact', 'notes', 'vaccinations'),
+      ...(DATE_TEXT.test(text(fields, 'lastCheckup')) ? { lastCheckup: text(fields, 'lastCheckup') } : {}),
+      ...(DATE_TEXT.test(text(fields, 'nextCheckup')) ? { nextCheckup: text(fields, 'nextCheckup') } : {}) } };
   },
   line: (item) => nameOfStudent(item.studentId) + (item.bloodGroup ? ' - blood group ' + item.bloodGroup : '')
     + (item.allergies ? ' - allergies: ' + item.allergies : '') + (item.conditions ? ' - conditions: ' + item.conditions : '')
-    + (item.emergencyContact ? ' - emergency: ' + item.emergencyContact : '') + (item.notes ? ' (' + item.notes + ')' : ''),
+    + (item.emergencyContact ? ' - emergency: ' + item.emergencyContact : '')
+    + (item.vaccinations ? ' - vaccinations: ' + item.vaccinations : '') + (item.lastCheckup ? ' - last checkup ' + item.lastCheckup : '')
+    + (item.nextCheckup ? ' - next checkup ' + item.nextCheckup + (item.nextCheckup < localToday() ? ' (OVERDUE)' : '') : '')
+    + (item.notes ? ' (' + item.notes + ')' : ''),
 });
 
 lists.lessons = ownerList({
@@ -4477,13 +4551,33 @@ lists.payroll = ownerList({
   line: (item) => item.month + ' - ' + staffLabel(item.staffUid) + ' - net ' + rupees(item.basic + item.allowances - item.deductions)
     + ' (basic ' + rupees(item.basic) + ', allowances ' + rupees(item.allowances) + ', deductions ' + rupees(item.deductions) + ')'
     + (item.paidOn ? ' - paid ' + item.paidOn : ' - NOT PAID') + (item.note ? ' (' + item.note + ')' : ''),
+  extra: (record) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Payslip';
+    button.addEventListener('click', () => printPayslip(record.data()));
+    return [button];
+  },
+});
+
+// Payroll helper: provident fund as a percentage of basic pay plus professional tax fill the deductions box.
+document.querySelector('#payroll-calc').addEventListener('click', () => {
+  const form = document.querySelector('#payroll-form');
+  const basic = Number(form.elements.namedItem('basic').value);
+  const percent = Number(form.elements.namedItem('pfPercent').value);
+  const ptax = Number(form.elements.namedItem('ptax').value);
+  if (!(basic >= 0) || !(percent >= 0) || !(ptax >= 0)) { document.querySelector('#payroll-status').textContent = 'Enter the basic pay first.'; return; }
+  form.elements.namedItem('deductions').value = String(Math.round(basic * percent / 100) + Math.round(ptax));
+  document.querySelector('#payroll-status').textContent = 'Deductions filled in as provident fund plus professional tax. Check them before saving. Income tax is not worked out here.';
 });
 
 lists.inbox = ownerList({
   id: 'inbox', collection: 'messages', empty: 'No messages yet.',
   sort: (a, b) => b.data().createdAt.localeCompare(a.data().createdAt) || b.id.localeCompare(a.id),
-  line: (item) => item.createdAt + ' - ' + nameOfStudent(item.studentId) + ' - ' + item.subject + ': ' + item.body
-    + (item.reply ? ' | REPLY (' + item.repliedAt + '): ' + item.reply : ' | NOT ANSWERED'),
+  line: (item) => (item.mod === 'hidden' ? '[HIDDEN from parent] ' : item.mod === 'flagged' ? '[FLAGGED] ' : '')
+    + item.createdAt + ' - ' + nameOfStudent(item.studentId) + ' - ' + item.subject + ': ' + item.body
+    + (item.reply ? ' | REPLY (' + item.repliedAt + '): ' + item.reply : ' | NOT ANSWERED')
+    + (item.modNote ? ' | NOTE: ' + item.modNote : ''),
   extra: (record, act) => {
     const button = document.createElement('button');
     button.type = 'button';
@@ -4493,7 +4587,27 @@ lists.inbox = ownerList({
       if (!reply || reply.length > 1000) return;
       act(() => academic.save('messages', record.id, { ...record.data(), reply, repliedAt: localToday() }), 'Reply saved.');
     });
-    return [button];
+    const moderate = (label, mod, done) => {
+      const control = document.createElement('button');
+      control.type = 'button';
+      control.textContent = label;
+      control.addEventListener('click', () => {
+        const next = { ...record.data() };
+        delete next.mod;
+        delete next.modNote;
+        if (mod) {
+          const note = (prompt('Short reason (optional):', '') ?? '').trim().slice(0, 200);
+          next.mod = mod;
+          if (note) next.modNote = note;
+        }
+        act(() => academic.save('messages', record.id, next), done);
+      });
+      return control;
+    };
+    const mod = record.data().mod;
+    return mod
+      ? [button, moderate('Restore', '', 'Message restored.')]
+      : [button, moderate('Flag', 'flagged', 'Message flagged.'), moderate('Hide', 'hidden', 'Message hidden from the parent.')];
   },
 });
 
@@ -4547,7 +4661,7 @@ const websiteSection = document.querySelector('#website');
 const websiteStatus = document.querySelector('#website-status');
 const websiteForm = document.querySelector('#website-form');
 const WEBSITE_FIELDS = ['name', 'tagline', 'about', 'vision', 'mission', 'leadership', 'programmes', 'faculty', 'facilities', 'news',
-  'phone', 'email', 'address', 'mapUrl'];
+  'phone', 'email', 'address', 'mapUrl', 'seoTitle', 'seoDesc', 'gallery'];
 const MAP_PREFIX = /^https:\/\/www\.google\.com\/maps\/embed\?[^ ]*$/;
 
 async function loadWebsite(request) {
@@ -4603,12 +4717,16 @@ async function readFlags() {
     return found.exists() ? found.data() : {};
   } catch { return {}; }
 }
+// Gradual rollout: a flag may also carry pct_<flag> (0-99). The school is in the rollout when a number
+// worked out from its ID, between 0 and 99, is below that percentage. The same school always gets the same answer.
+const rolloutNumber = () => [...SCHOOL_ID].reduce((total, ch) => (total * 31 + ch.charCodeAt(0)) % 100, 7);
+const flagOff = (flags, flag) => flags[flag] === false || (Number.isInteger(flags['pct_' + flag]) && rolloutNumber() >= flags['pct_' + flag]);
 function applyFlags(flags) {
   for (const [flag, ids] of Object.entries(FLAG_MODULES)) {
     for (const id of ids) {
       const section = document.querySelector('#' + id);
       if (!section) continue;
-      if (flags[flag] === false) section.setAttribute('data-off', ''); else section.removeAttribute('data-off');
+      if (flagOff(flags, flag)) section.setAttribute('data-off', ''); else section.removeAttribute('data-off');
     }
   }
 }
@@ -4941,6 +5059,280 @@ const defaultersList = document.querySelector('#defaulters-list');
 const workloadSection = document.querySelector('#workload');
 const workloadStatus = document.querySelector('#workload-status');
 const workloadList = document.querySelector('#workload-list');
+// Reports (batch 36): financial report, class ranks, report builder, bulk report cards and payslips.
+// They only read records already loaded, plus the marks of published exams. Nothing is written.
+const reportsSection = document.querySelector('#reports');
+const reportsStatus = document.querySelector('#reports-status');
+const finBody = document.querySelector('#fin-body');
+const rankBody = document.querySelector('#rank-body');
+const rankToppers = document.querySelector('#rank-toppers');
+let finRows = [];
+let rankRows = [];
+
+function showReportSections() {
+  fillSelect(document.querySelector('#rank-class'), [...examData.classes].sort(byClassOrder), (item) => item.name);
+  fillSelect(document.querySelector('#bulk-class'), [...examData.classes].sort(byClassOrder), (item) => item.name);
+  fillSelect(document.querySelector('#prog-student'), [...studentRecords].sort((a, b) => a.data().name.localeCompare(b.data().name)),
+    (student) => student.name + ' (' + student.admissionNo + ')');
+  const source = document.querySelector('#rb-source');
+  if (!source.children.length) {
+    for (const key of Object.keys(REPORT_SOURCES)) source.append(new Option(REPORT_SOURCES[key].label, key));
+    renderBuilderColumns();
+  }
+  reportsSection.hidden = false;
+}
+
+function hideReportSections() {
+  reportsSection.hidden = true;
+  finBody.replaceChildren();
+  rankBody.replaceChildren();
+  rankToppers.textContent = '';
+  reportsStatus.textContent = '';
+  finRows = [];
+  rankRows = [];
+  document.querySelector('#bulk-body').replaceChildren();
+  document.querySelector('#prog-body').replaceChildren();
+}
+
+// Financial report
+document.querySelector('#fin-run').addEventListener('click', () => {
+  const from = document.querySelector('#fin-from').value;
+  const to = document.querySelector('#fin-to').value;
+  if (!/^20[0-9]{2}-[0-9]{2}$/.test(from) || !/^20[0-9]{2}-[0-9]{2}$/.test(to) || from > to) {
+    reportsStatus.textContent = 'Choose a start month and an end month that is not before it.';
+    return;
+  }
+  const months = new Map();
+  const slot = (month) => {
+    if (month < from || month > to) return null;
+    if (!months.has(month)) months.set(month, { fees: 0, spent: 0, salary: 0 });
+    return months.get(month);
+  };
+  for (const record of feeData.payments) {
+    const p = record.data();
+    if (p.voided !== true) { const row = slot(p.date.slice(0, 7)); if (row) row.fees += p.amount; }
+  }
+  for (const record of lists.expenses.items) { const row = slot(record.data().date.slice(0, 7)); if (row) row.spent += record.data().amount; }
+  for (const record of lists.payroll.items) {
+    const p = record.data();
+    if (!p.paidOn) continue;
+    const row = slot(p.paidOn.slice(0, 7));
+    if (row) row.salary += p.basic + p.allowances - p.deductions;
+  }
+  finBody.replaceChildren();
+  finRows = [...months.keys()].sort().map((month) => {
+    const r = months.get(month);
+    return [month, r.fees, r.spent, r.salary, r.fees - r.spent - r.salary];
+  });
+  const totals = finRows.reduce((t, r) => t.map((value, index) => (index ? value + r[index] : value)), ['Total', 0, 0, 0, 0]);
+  for (const row of [...finRows, ...(finRows.length ? [totals] : [])]) addRow(finBody, row.map((value, index) => (index ? rupees(value) : value)));
+  if (finRows.length) finRows.push(totals);
+  reportsStatus.textContent = finRows.length ? '' : 'There is no money activity in those months.';
+});
+
+document.querySelector('#fin-csv').addEventListener('click', () => {
+  if (!finRows.length) { reportsStatus.textContent = 'Show the financial report first.'; return; }
+  downloadCsv('financial-report', [['Month', 'Fees collected (Rs)', 'Expenses (Rs)', 'Salaries paid (Rs)', 'Net (Rs)'], ...finRows]);
+});
+
+// Class rank list: total of every published exam for the class in the active year.
+document.querySelector('#rank-run').addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools) return;
+  const request = schoolRequest;
+  const classId = document.querySelector('#rank-class').value;
+  const year = examData.years.find((record) => record.data().status === 'active');
+  if (!classId || !year) { reportsStatus.textContent = 'Choose a class. An academic year must be active.'; return; }
+  const exams = examData.exams.filter((record) => record.data().classId === classId && record.data().yearId === year.id && record.data().published === true);
+  if (!exams.length) { reportsStatus.textContent = 'This class has no published exams in the active year.'; return; }
+  reportsStatus.textContent = 'Working out the ranks.';
+  try {
+    const results = await Promise.all(exams.map((exam) => tools.marksFor(exam.id)));
+    if (request !== schoolRequest) return;
+    const totals = new Map();
+    exams.forEach((record, index) => {
+      const exam = record.data();
+      for (const mark of results[index].docs) {
+        const m = mark.data();
+        if (m.draft === true) continue;
+        const row = totals.get(m.studentId) ?? { got: 0, max: 0, failed: 0 };
+        row.got += m.score;
+        row.max += exam.maxMarks;
+        if (!passedExam(exam, m.score)) row.failed += 1;
+        totals.set(m.studentId, row);
+      }
+    });
+    const ranked = [...totals.entries()].map(([studentId, r]) => ({ studentId, ...r, percent: Math.round(r.got / r.max * 1000) / 10 }))
+      .sort((a, b) => b.percent - a.percent || nameOfStudent(a.studentId).localeCompare(nameOfStudent(b.studentId)));
+    rankBody.replaceChildren();
+    rankRows = [];
+    let rank = 0;
+    ranked.forEach((r, index) => {
+      if (index === 0 || r.percent !== ranked[index - 1].percent) rank = index + 1;
+      const row = [rank, nameOfStudent(r.studentId), r.got + ' / ' + r.max, r.percent + '%', gradeFor(r.percent), resultText(r.failed)];
+      rankRows.push(row);
+      addRow(rankBody, row.map(String));
+    });
+    const toppers = rankRows.filter((row) => row[0] <= 3).map((row) => row[0] + '. ' + row[1] + ' (' + row[3] + ')');
+    rankToppers.textContent = toppers.length ? 'Toppers: ' + toppers.join('; ') : '';
+    reportsStatus.textContent = ranked.length ? '' : 'No marks have been entered for these exams yet.';
+  } catch {
+    if (request === schoolRequest) reportsStatus.textContent = 'Could not work out the ranks. Try again.';
+  }
+});
+
+document.querySelector('#rank-csv').addEventListener('click', () => {
+  if (!rankRows.length) { reportsStatus.textContent = 'Show the ranks first.'; return; }
+  downloadCsv('class-ranks', [['Rank', 'Student', 'Total', 'Percent', 'Grade', 'Result'], ...rankRows]);
+});
+
+// Student progress: published results of one student by subject, with the change from the previous exam.
+document.querySelector('#prog-run').addEventListener('click', async () => {
+  const tools = academic;
+  const studentId = document.querySelector('#prog-student').value;
+  if (!tools || !studentId) { reportsStatus.textContent = 'Choose a student.'; return; }
+  const request = schoolRequest;
+  reportsStatus.textContent = 'Loading results.';
+  try {
+    const saved = await tools.marksOfStudent(studentId);
+    if (request !== schoolRequest) return;
+    const published = new Map(examData.exams.filter((record) => record.data().published === true).map((record) => [record.id, record.data()]));
+    const subjectName = (id) => examData.subjects.find((record) => record.id === id)?.data().name ?? id;
+    const rows = saved.docs.map((record) => record.data()).filter((mark) => published.has(mark.examId) && mark.draft !== true)
+      .map((mark) => ({ exam: published.get(mark.examId), percent: Math.round(mark.score / published.get(mark.examId).maxMarks * 1000) / 10 }))
+      .sort((a, b) => subjectName(a.exam.subjectId).localeCompare(subjectName(b.exam.subjectId))
+        || a.exam.yearId.localeCompare(b.exam.yearId) || a.exam.examKey.localeCompare(b.exam.examKey));
+    const body = document.querySelector('#prog-body');
+    body.replaceChildren();
+    let previous;
+    for (const row of rows) {
+      const same = previous && previous.exam.subjectId === row.exam.subjectId;
+      const change = same ? row.percent - previous.percent : null;
+      addRow(body, [subjectName(row.exam.subjectId), row.exam.yearId, row.exam.name, row.percent + '%',
+        change === null ? '-' : (change > 0 ? 'Up ' : change < 0 ? 'Down ' : 'Same ') + (change === 0 ? '' : Math.abs(Math.round(change * 10) / 10) + ' points')]);
+      previous = row;
+    }
+    reportsStatus.textContent = rows.length ? '' : 'No published results for this student yet.';
+  } catch {
+    if (request === schoolRequest) reportsStatus.textContent = 'Could not load the results. Try again.';
+  }
+});
+
+// Report builder: pick a list and its columns, download as CSV.
+const REPORT_SOURCES = {
+  students: { label: 'Students', rows: () => studentRecords.map((r) => r.data()),
+    dateOf: () => '',
+    cols: { 'Admission no': (s) => s.admissionNo, Name: (s) => s.name, Guardian: (s) => s.guardianName, 'Guardian phone': (s) => s.guardianPhone,
+      Status: (s) => s.status, 'Date of birth': (s) => s.dob ?? '', Address: (s) => s.address ?? '' } },
+  payments: { label: 'Fee payments', rows: () => feeData.payments.map((r) => r.data()), dateOf: (p) => p.date,
+    cols: { Receipt: (p) => p.receiptNo, Date: (p) => p.date, Student: (p) => nameOfStudent(p.studentId), Year: (p) => p.yearId,
+      Method: (p) => METHOD_LABEL[p.method] ?? p.method, 'Amount (Rs)': (p) => p.amount, Status: (p) => (p.voided ? 'Voided' : 'Valid') } },
+  expenses: { label: 'Expenses', rows: () => lists.expenses.items.map((r) => r.data()), dateOf: (e) => e.date,
+    cols: { Date: (e) => e.date, Amount: (e) => e.amount, Category: (e) => e.category ?? '', Note: (e) => e.note ?? '' } },
+  payroll: { label: 'Salary records', rows: () => lists.payroll.items.map((r) => r.data()), dateOf: (p) => p.month + '-01',
+    cols: { Month: (p) => p.month, Staff: (p) => staffLabel(p.staffUid), Basic: (p) => p.basic, Allowances: (p) => p.allowances,
+      Deductions: (p) => p.deductions, Net: (p) => p.basic + p.allowances - p.deductions, 'Paid on': (p) => p.paidOn ?? '' } },
+};
+
+function renderBuilderColumns() {
+  const box = document.querySelector('#rb-columns');
+  box.replaceChildren(box.firstElementChild);
+  for (const name of Object.keys(REPORT_SOURCES[document.querySelector('#rb-source').value].cols)) {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = name;
+    input.checked = true;
+    label.append(input, ' ' + name + ' ');
+    box.append(label);
+  }
+}
+document.querySelector('#rb-source').addEventListener('change', renderBuilderColumns);
+
+document.querySelector('#rb-csv').addEventListener('click', () => {
+  const key = document.querySelector('#rb-source').value;
+  const source = REPORT_SOURCES[key];
+  const picked = [...document.querySelectorAll('#rb-columns input:checked')].map((input) => input.value);
+  if (!picked.length) { reportsStatus.textContent = 'Tick at least one column.'; return; }
+  const from = document.querySelector('#rb-from').value;
+  const to = document.querySelector('#rb-to').value;
+  const rows = source.rows().filter((row) => {
+    const when = source.dateOf(row);
+    return !when || ((!from || when >= from) && (!to || when <= to));
+  });
+  downloadCsv('report-' + key, [picked, ...rows.map((row) => picked.map((name) => source.cols[name](row)))]);
+});
+
+// Report cards for a whole class: one page per student, published exams only.
+document.querySelector('#bulk-run').addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools) return;
+  const request = schoolRequest;
+  const classId = document.querySelector('#bulk-class').value;
+  const year = examData.years.find((record) => record.data().status === 'active');
+  if (!classId || !year) { reportsStatus.textContent = 'Choose a class. An academic year must be active.'; return; }
+  const ids = new Set(placementData.enrollments.filter((r) => r.data().yearId === year.id && r.data().classId === classId).map((r) => r.data().studentId));
+  const exams = examData.exams.filter((record) => record.data().classId === classId && record.data().published === true);
+  if (!ids.size || !exams.length) { reportsStatus.textContent = 'This class needs students and published exams first.'; return; }
+  reportsStatus.textContent = 'Preparing report cards.';
+  try {
+    const results = await Promise.all(exams.map((exam) => tools.marksFor(exam.id)));
+    if (request !== schoolRequest) return;
+    const body = document.querySelector('#bulk-body');
+    body.replaceChildren();
+    const subjectName = (id) => examData.subjects.find((r) => r.id === id)?.data().name ?? id;
+    for (const studentId of [...ids].sort((a, b) => nameOfStudent(a).localeCompare(nameOfStudent(b)))) {
+      const page = document.createElement('div');
+      page.className = 'page-break';
+      const title = document.createElement('h4');
+      title.textContent = 'Report Card - ' + nameOfStudent(studentId) + ' (' + nameOfClass(classId) + ')';
+      const table = document.createElement('table');
+      const head = document.createElement('tr');
+      for (const label of ['Subject', 'Exam', 'Marks', 'Percent', 'Grade']) { const th = document.createElement('th'); th.textContent = label; head.append(th); }
+      table.append(head);
+      let got = 0;
+      let max = 0;
+      let failed = 0;
+      exams.forEach((record, index) => {
+        const exam = record.data();
+        const mark = results[index].docs.map((d) => d.data()).find((m) => m.studentId === studentId && m.draft !== true);
+        if (!mark) return;
+        got += mark.score;
+        max += exam.maxMarks;
+        if (!passedExam(exam, mark.score)) failed += 1;
+        const tr = document.createElement('tr');
+        for (const value of [subjectName(exam.subjectId), exam.name, mark.score + ' / ' + exam.maxMarks,
+          Math.round(mark.score / exam.maxMarks * 1000) / 10 + '%', gradeTextFor(exam, mark.score)]) {
+          const td = document.createElement('td'); td.textContent = value; tr.append(td);
+        }
+        table.append(tr);
+      });
+      const total = document.createElement('p');
+      total.textContent = max ? 'Total ' + got + ' / ' + max + ' - ' + Math.round(got / max * 1000) / 10 + '% - ' + resultText(failed) : 'No published results.';
+      page.append(title, table, total);
+      body.append(page);
+    }
+    reportsStatus.textContent = '';
+    const section = document.querySelector('#bulk-cards');
+    section.hidden = false;
+    printCard('#bulk-print-head', 'Report Cards - ' + nameOfClass(classId), () => { section.hidden = true; body.replaceChildren(); });
+  } catch {
+    if (request === schoolRequest) reportsStatus.textContent = 'Could not prepare the report cards. Try again.';
+  }
+});
+
+// Payslip for one salary record.
+function printPayslip(item) {
+  const body = document.querySelector('#payslip-body');
+  body.replaceChildren();
+  for (const row of [['Staff member', staffLabel(item.staffUid)], ['Month', item.month], ['Basic pay', rupees(item.basic)],
+    ['Allowances', rupees(item.allowances)], ['Deductions', rupees(item.deductions)],
+    ['Net pay', rupees(item.basic + item.allowances - item.deductions)], ['Paid on', item.paidOn ?? 'Not paid yet']]) addRow(body, row);
+  const section = document.querySelector('#payslip');
+  section.hidden = false;
+  printCard('#payslip-print-head', 'Payslip - ' + staffLabel(item.staffUid) + ' - ' + item.month, () => { section.hidden = true; body.replaceChildren(); });
+}
+
 const backupSection = document.querySelector('#backup');
 const backupStatus = document.querySelector('#backup-status');
 const backupRun = document.querySelector('#backup-run');
@@ -5145,6 +5537,7 @@ document.querySelector('#backup-zip').addEventListener('click', async () => {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     await tools.log('bulk', 'backup', 'data pack', files.length - 1 + ' files');
+    noteBackup('zip');
     if (request === schoolRequest) backupStatus.textContent = 'Data pack downloaded (' + (files.length - 1) + ' files).' + (notRead.length ? ' Could not read: ' + notRead.join(', ') + '.' : '');
   } catch {
     if (request === schoolRequest) backupStatus.textContent = 'The data pack did not finish. Try again.';
@@ -5185,6 +5578,7 @@ backupRun.addEventListener('click', async () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     await tools.log('bulk', 'backup', 'download', Object.keys(backup.collections).length + ' collections');
     if (request === schoolRequest) {
+      noteBackup('full');
       backupStatus.textContent = 'Backup downloaded (' + Object.keys(backup.collections).length + ' lists).'
         + (backup.notRead.length ? ' Could not read: ' + backup.notRead.join(', ') + '.' : '');
     }
@@ -5214,10 +5608,14 @@ async function loadOwnerLists(request) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }
-  if (request === schoolRequest) refreshAttention();
+  if (request === schoolRequest) await loadBackupLog();
+  if (request === schoolRequest) { refreshAttention(); showReportSections(); }
 }
 const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.render(); };
 const resetOwnerLists = () => {
+  hideReportSections();
+  backupLog = null;
+  auditItems = [];
   for (const api of ownerLists) api.reset();
   financeList.replaceChildren();
   financeStatus.textContent = '';
@@ -5555,6 +5953,7 @@ async function loadPortalMessages(request) {
     portalMessagesList.replaceChildren();
     for (const record of saved.docs.sort((a, b) => b.data().createdAt.localeCompare(a.data().createdAt) || b.id.localeCompare(a.id))) {
       const item = record.data();
+      if (item.mod === 'hidden') continue;
       listItem(portalMessagesList, item.createdAt + ' - ' + item.subject + ': ' + item.body
         + (item.reply ? ' | School replied (' + item.repliedAt + '): ' + item.reply : ' | Waiting for a reply'));
     }
@@ -5890,6 +6289,32 @@ function writeAudit(schoolRef, uid, action, target, docId, detail) {
   ).catch(() => {});
 }
 
+// Session expiry: a signed-in person who does nothing for IDLE_MINUTES is signed out, with a warning two minutes before.
+const IDLE_MINUTES = 30;
+let idleOn = false;
+let idleWarned = false;
+let idleTimer;
+let idleWarnTimer;
+let idleLast = 0;
+function idleWatch(on, throttled) {
+  if (on && throttled && Date.now() - idleLast < 5000 && !idleWarned) return;
+  idleOn = on;
+  clearTimeout(idleTimer);
+  clearTimeout(idleWarnTimer);
+  if (!on) { idleWarned = false; return; }
+  idleLast = Date.now();
+  if (idleWarned) { idleWarned = false; status.textContent = ''; }
+  idleWarnTimer = setTimeout(() => {
+    idleWarned = true;
+    status.hidden = false;
+    status.textContent = 'You will be signed out in 2 minutes because the page has not been used. Click anywhere to stay signed in.';
+  }, (IDLE_MINUTES - 2) * 60000);
+  idleTimer = setTimeout(() => { signOut(auth).catch(() => {}); }, IDLE_MINUTES * 60000);
+}
+for (const eventName of ['click', 'keydown', 'pointerdown', 'touchstart', 'scroll']) {
+  document.addEventListener(eventName, () => { if (idleOn) idleWatch(true, true); }, { passive: true });
+}
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -5989,6 +6414,7 @@ onAuthStateChanged(auth, async (user) => {
   portalChoice = '';
   portalTools = undefined;
   viewOnly = false;
+  delete document.body.dataset.role;
   viewOnlyNote.hidden = true;
   portalChildWrap.hidden = true;
   portalChild.replaceChildren();
@@ -6182,6 +6608,7 @@ onAuthStateChanged(auth, async (user) => {
   status.textContent = user ? 'Signed in as ' + user.email : 'Sign in with your AZIZ account.';
   schoolStatus.hidden = !user;
   schoolStatus.textContent = '';
+  idleWatch(Boolean(user));
   if (!user) return;
 
   schoolStatus.textContent = 'Checking school access.';
@@ -6265,8 +6692,10 @@ onAuthStateChanged(auth, async (user) => {
     }
     schoolUid = user.uid;
     viewOnly = membership.data()?.role === 'principal';
+    const feeOffice = membership.data()?.active === true && membership.data()?.role === 'accountant';
+    if (feeOffice) document.body.dataset.role = 'accountant';
     viewOnlyNote.hidden = !viewOnly;
-    ownerRole.textContent = viewOnly ? 'Principal (view only)' : 'School Owner';
+    ownerRole.textContent = feeOffice ? 'Fee office' : viewOnly ? 'Principal (view only)' : 'School Owner';
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);
     saveAssignment = (uid, assignment) => setDoc(doc(schoolRef, 'teacherAssignments', uid), assignment);
     ownerEmail.textContent = user.email;
@@ -6278,8 +6707,10 @@ onAuthStateChanged(auth, async (user) => {
       list: () => getDocsFromServer(staff),
       save: (id, profile) => (id ? updateDoc(doc(staff, id), profile) : addDoc(staff, profile).then((ref) => { document.dispatchEvent(new Event('usage-changed')); return ref; })),
     };
-    staffStatus.textContent = 'Loading staff profiles.';
-    await loadStaff(staffDirectory, request);
+    if (!feeOffice) {
+      staffStatus.textContent = 'Loading staff profiles.';
+      await loadStaff(staffDirectory, request);
+    }
     const firestore = getFirestore(app);
     // Every owner change is written to the activity log after it succeeds. The log never blocks the
     // change itself: if the entry cannot be written, the change still stands.
@@ -6293,7 +6724,7 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: async (name, id, data) => {
         await setDoc(doc(schoolRef, name, id), data);
-        if (name === 'students') document.dispatchEvent(new Event('usage-changed'));
+        if (name === 'students' || name === 'storageRecords') document.dispatchEvent(new Event('usage-changed'));
         const voided = name === 'payments' && data.voided === true;
         await log(voided ? 'void' : 'save', name, id, name === 'payments' ? 'Rs ' + data.amount : '');
       },
@@ -6333,6 +6764,10 @@ onAuthStateChanged(auth, async (user) => {
         return batch.commit().then(() => (quiet ? undefined : log('bulk', ops[0]?.path[0] ?? 'records', ops.length + ' records', '')));
       },
     };
+    if (feeOffice) {
+      await loadFeeOffice(request);
+      return;
+    }
     academicSection.hidden = false;
     studentSection.hidden = false;
     examSection.hidden = false;

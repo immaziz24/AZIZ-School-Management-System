@@ -648,7 +648,7 @@ service cloud.firestore {
 
       // Fee concessions. concessions/{id}: studentId, studentName, kind, amount, givenOn, optional note. Owner only.
       match /concessions/{docId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId));
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId) || familyOwns(resource.data.studentId));
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validConcession(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));

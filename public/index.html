@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-35">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-43">
 </head>
 <body>
   <main>
@@ -458,6 +458,9 @@
           <p><label>Basic pay (Rs) <input name="basic" type="number" min="0" step="1" required></label></p>
           <p><label>Allowances (Rs) <input name="allowances" type="number" min="0" step="1" value="0" required></label></p>
           <p><label>Deductions (Rs) <input name="deductions" type="number" min="0" step="1" value="0" required></label></p>
+          <p><label>Provident fund % of basic (helper) <input name="pfPercent" type="number" min="0" max="30" step="0.5" value="12"></label>
+            <label>Professional tax (Rs, helper) <input name="ptax" type="number" min="0" step="1" value="0"></label>
+            <button type="button" id="payroll-calc">Work out deductions</button></p>
           <p><label>Paid on (optional) <input name="paidOn" type="date"></label></p>
           <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
           <button type="submit">Save salary record</button>
@@ -481,9 +484,12 @@
           <p><label>Mission <textarea name="mission" rows="2" maxlength="500"></textarea></label></p>
           <p><label>Leadership (one person per line) <textarea name="leadership" rows="3" maxlength="1000"></textarea></label></p>
           <p><label>Programmes and classes (one per line) <textarea name="programmes" rows="4" maxlength="2000"></textarea></label></p>
-          <p><label>Faculty and staff (one per line, approved details only) <textarea name="faculty" rows="4" maxlength="2000"></textarea></label></p>
+          <p><label>Faculty and staff (one per line, like: Name | qualification | subject - approved details only) <textarea name="faculty" rows="4" maxlength="2000"></textarea></label></p>
           <p><label>Facilities (one per line) <textarea name="facilities" rows="3" maxlength="1500"></textarea></label></p>
           <p><label>News and announcements (one per line) <textarea name="news" rows="3" maxlength="1500"></textarea></label></p>
+          <p><label>Photo gallery (one per line: https image link | caption) <textarea name="gallery" rows="3" maxlength="1500"></textarea></label></p>
+          <p><label>Search engine title (optional, up to 70 letters) <input name="seoTitle" type="text" maxlength="70"></label></p>
+          <p><label>Search engine description (optional, up to 160 letters) <input name="seoDesc" type="text" maxlength="160"></label></p>
           <p><label>Phone <input name="phone" type="text" maxlength="30"></label></p>
           <p><label>Email <input name="email" type="email" maxlength="100"></label></p>
           <p><label>Address <input name="address" type="text" maxlength="200"></label></p>
@@ -503,6 +509,9 @@
               <option value="emerald">Emerald green</option>
               <option value="crimson">Crimson red</option>
               <option value="midnight">Midnight dark</option>
+              <option value="saffron">Saffron</option>
+              <option value="ocean">Ocean blue</option>
+              <option value="slate">Slate grey</option>
             </select></label></p>
           <h4>Extra admission questions</h4>
           <div id="siteextras-slots"></div>
@@ -572,6 +581,54 @@
         <p id="workload-status" role="status"></p>
         <ul id="workload-list"></ul>
       </section>
+      <section id="reports" aria-labelledby="reports-title" hidden>
+        <h3 id="reports-title">Reports</h3>
+        <p id="reports-status" role="status"></p>
+        <h4>Financial report</h4>
+        <p>Fees collected, expenses and salaries paid, month by month. Voided payments are left out.</p>
+        <p><label>From month <input id="fin-from" type="month"></label> <label>To month <input id="fin-to" type="month"></label></p>
+        <button type="button" id="fin-run">Show report</button> <button type="button" id="fin-csv">Download CSV</button>
+        <table>
+          <thead><tr><th>Month</th><th>Fees collected</th><th>Expenses</th><th>Salaries paid</th><th>Net</th></tr></thead>
+          <tbody id="fin-body"></tbody>
+        </table>
+        <h4>Class rank list and toppers</h4>
+        <p>Adds up every published exam for the class in the active year. Ranks go by total percentage.</p>
+        <p><label>Class <select id="rank-class"></select></label></p>
+        <button type="button" id="rank-run">Show ranks</button> <button type="button" id="rank-csv">Download CSV</button>
+        <p id="rank-toppers" role="status"></p>
+        <table>
+          <thead><tr><th>Rank</th><th>Student</th><th>Total</th><th>Percent</th><th>Grade</th><th>Result</th></tr></thead>
+          <tbody id="rank-body"></tbody>
+        </table>
+        <h4>Student progress</h4>
+        <p>All published results for one student, grouped by subject, with the change from the previous exam.</p>
+        <p><label>Student <select id="prog-student"></select></label></p>
+        <button type="button" id="prog-run">Show progress</button>
+        <table>
+          <thead><tr><th>Subject</th><th>Year</th><th>Exam</th><th>Percent</th><th>Change</th></tr></thead>
+          <tbody id="prog-body"></tbody>
+        </table>
+        <h4>Report builder</h4>
+        <p>Choose a list and the columns you want, then download it as a spreadsheet (CSV).</p>
+        <p><label>List <select id="rb-source"></select></label></p>
+        <p><label>Only from date (optional) <input id="rb-from" type="date"></label> <label>to date (optional) <input id="rb-to" type="date"></label></p>
+        <fieldset id="rb-columns"><legend>Columns</legend></fieldset>
+        <button type="button" id="rb-csv">Download CSV</button>
+        <h4>Report cards for a whole class</h4>
+        <p>Makes one report card per student, each on its own page. Choose "Save as PDF" in the print window.</p>
+        <p><label>Class <select id="bulk-class"></select></label></p>
+        <button type="button" id="bulk-run">Print report cards</button>
+      </section>
+      <section id="bulk-cards" class="print-target" aria-label="Report cards" hidden>
+        <p id="bulk-print-head" class="print-only"></p>
+        <div id="bulk-body"></div>
+      </section>
+      <section id="payslip" class="print-target" aria-label="Payslip" hidden>
+        <p id="payslip-print-head" class="print-only"></p>
+        <h3>Payslip</h3>
+        <table><tbody id="payslip-body"></tbody></table>
+      </section>
       <section id="backup" aria-labelledby="backup-title" hidden>
         <h3 id="backup-title">Data Backup</h3>
         <p>Downloads a copy of the school's records as one file. It contains private student, family and staff details: keep it somewhere safe and do not share it.</p>
@@ -590,6 +647,7 @@
           <p><label>Driver <input name="driver" type="text" maxlength="60"></label></p>
           <p><label>Driver phone <input name="driverPhone" type="text" maxlength="20"></label></p>
           <p><label>Stops (in order) <input name="stops" type="text" maxlength="300"></label></p>
+          <p><label>Monthly transport fee per student (Rs, optional) <input name="monthlyFee" type="number" min="0" max="100000" step="1"></label></p>
           <button type="submit">Add route</button>
         </form>
         <ul id="routes-list"></ul>
@@ -885,6 +943,9 @@
           <p><label>Allergies <input name="allergies" type="text" maxlength="200"></label></p>
           <p><label>Medical conditions <input name="conditions" type="text" maxlength="200"></label></p>
           <p><label>Emergency contact (name and phone) <input name="emergencyContact" type="text" maxlength="100"></label></p>
+          <p><label>Vaccinations (optional) <input name="vaccinations" type="text" maxlength="200"></label></p>
+          <p><label>Last health checkup (optional) <input name="lastCheckup" type="date"></label></p>
+          <p><label>Next checkup due (optional) <input name="nextCheckup" type="date"></label></p>
           <p><label>Notes <input name="notes" type="text" maxlength="300"></label></p>
           <button type="submit">Save health record</button>
         </form>
@@ -1197,7 +1258,7 @@
       <h3>People and invitations</h3>
       <form id="invite-form" class="owner-only">
         <p><label>Email <input name="email" type="email" required maxlength="120"></label>
-          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
+          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="accountant">Fee office (fees only)</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
         <button type="submit">Send invitation</button>
       </form>
       <p><small>The invited person signs in with that email on this page and accepts. To hand over ownership: invite the new owner, then they switch the old owner off.</small></p>
@@ -1222,6 +1283,7 @@
       <p id="platform-status" role="status"></p>
       <h3>Revenue</h3>
       <p id="platform-revenue"></p>
+      <ul id="platform-revenue-breakdown"></ul>
       <h3>Schools</h3>
       <ul id="platform-schools"></ul>
       <div id="platform-school" hidden>
@@ -1281,14 +1343,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-35');
-      await import('./i18n.mjs?v=batch-35');
+      await import('./ui.mjs?v=batch-43');
+      await import('./i18n.mjs?v=batch-43');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-35');
-      await import('./platform.mjs?v=batch-35');
+      await import('./sign-in.mjs?v=batch-43');
+      await import('./platform.mjs?v=batch-43');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

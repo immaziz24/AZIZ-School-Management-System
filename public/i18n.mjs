@@ -1,6 +1,9 @@
 // Interface language: English, Hindi and Bengali. Headings, tile names, buttons and common labels are
 // translated; anything not in the list stays in English. The choice is kept in this browser only.
 const HI = {
+  'Reports': 'रिपोर्ट', 'Financial report': 'वित्तीय रिपोर्ट', 'Class rank list and toppers': 'कक्षा रैंक सूची और टॉपर', 'Report builder': 'रिपोर्ट बिल्डर',
+  'Payslip': 'वेतन पर्ची', 'Photo Gallery': 'फोटो गैलरी', 'Show report': 'रिपोर्ट दिखाएँ', 'Download CSV': 'CSV डाउनलोड करें', 'Show ranks': 'रैंक दिखाएँ',
+  'Print report cards': 'रिपोर्ट कार्ड प्रिंट करें', 'Rank': 'रैंक', 'Total': 'कुल', 'Percent': 'प्रतिशत', 'Grade': 'ग्रेड', 'Result': 'परिणाम', 'Month': 'महीना',
   'Students': 'छात्र', 'Attendance': 'उपस्थिति', 'Daily Attendance': 'दैनिक उपस्थिति', 'Fees': 'शुल्क', 'Exams': 'परीक्षाएँ',
   'Timetable': 'समय सारणी', 'Notices': 'सूचनाएँ', 'Notice Board': 'सूचना पट्ट', 'Homework': 'गृहकार्य', 'Library': 'पुस्तकालय',
   'Report Card': 'रिपोर्ट कार्ड', 'Enter Marks': 'अंक दर्ज करें', 'Marks Review': 'अंकों की समीक्षा', 'School Calendar': 'विद्यालय कैलेंडर',
@@ -18,6 +21,9 @@ const HI = {
   'Email': 'ईमेल', 'Password': 'पासवर्ड', 'Name': 'नाम', 'Date': 'तारीख', 'Class': 'कक्षा', 'Student': 'छात्र', 'Status': 'स्थिति', 'Result': 'परिणाम', 'Row': 'पंक्ति',
 };
 const BN = {
+  'Reports': 'রিপোর্ট', 'Financial report': 'আর্থিক রিপোর্ট', 'Class rank list and toppers': 'শ্রেণির র‍্যাঙ্ক তালিকা ও শীর্ষস্থানাধিকারী', 'Report builder': 'রিপোর্ট বিল্ডার',
+  'Payslip': 'বেতন স্লিপ', 'Photo Gallery': 'ছবির গ্যালারি', 'Show report': 'রিপোর্ট দেখান', 'Download CSV': 'CSV ডাউনলোড করুন', 'Show ranks': 'র‍্যাঙ্ক দেখান',
+  'Print report cards': 'রিপোর্ট কার্ড প্রিন্ট করুন', 'Rank': 'র‍্যাঙ্ক', 'Total': 'মোট', 'Percent': 'শতাংশ', 'Grade': 'গ্রেড', 'Result': 'ফলাফল', 'Month': 'মাস',
   'Students': 'শিক্ষার্থী', 'Attendance': 'উপস্থিতি', 'Daily Attendance': 'দৈনিক উপস্থিতি', 'Fees': 'ফি', 'Exams': 'পরীক্ষা',
   'Timetable': 'ক্লাস রুটিন', 'Notices': 'বিজ্ঞপ্তি', 'Notice Board': 'নোটিশ বোর্ড', 'Homework': 'বাড়ির কাজ', 'Library': 'গ্রন্থাগার',
   'Report Card': 'রিপোর্ট কার্ড', 'Enter Marks': 'নম্বর দিন', 'Marks Review': 'নম্বর পর্যালোচনা', 'School Calendar': 'স্কুল ক্যালেন্ডার',

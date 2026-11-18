@@ -10,7 +10,7 @@ const schoolRef = doc(db, 'schools', SCHOOL_ID);
 const status = document.querySelector('#site-status');
 const MAP = /^https:\/\/www\.google\.com\/maps\/embed\?[^ ]*$/;
 const SECTIONS = [['about', 'About'], ['vision', 'Vision'], ['leadership', 'Leadership'], ['programmes', 'Programmes'],
-  ['faculty', 'Faculty'], ['facilities', 'Facilities'], ['news', 'News'], ['contact', 'Contact'], ['admissions', 'Admissions']];
+  ['faculty', 'Faculty'], ['facilities', 'Facilities'], ['news', 'News'], ['gallery', 'Gallery'], ['contact', 'Contact'], ['admissions', 'Admissions']];
 
 const lines = (value) => String(value ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 
@@ -44,6 +44,8 @@ const THEMES = {
   classic: ['#14243d', '#faf6ec', '#b8913a', '#0f1b2f'], royal: ['#2e1a4d', '#f7f3fb', '#c29b3f', '#22123a'],
   emerald: ['#0f3d2e', '#f3f8f4', '#c0a040', '#0a2d22'], crimson: ['#5a1020', '#fbf4f2', '#c79a3a', '#430b17'],
   midnight: ['#0b1020', '#e8ecf5', '#d4af37', '#070a14'],
+  saffron: ['#7a2e0e', '#fdf6ee', '#d19a2a', '#5a2009'], ocean: ['#0b3550', '#f1f7fa', '#c9a23c', '#082a40'],
+  slate: ['#2b2f38', '#f4f5f7', '#b8913a', '#1f2229'],
 };
 async function loadExtras() {
   try {
@@ -112,9 +114,32 @@ async function load() {
     show('vision', vision);
     show('leadership', fill(document.querySelector('#leadership-body'), data.leadership, true));
     show('programmes', fill(document.querySelector('#programmes-body'), data.programmes, true));
-    show('faculty', fill(document.querySelector('#faculty-body'), data.faculty, true));
+    show('faculty', fill(document.querySelector('#faculty-body'), (data.faculty ?? '').split('\n').map((row) => row.split('|').map((part) => part.trim()).filter(Boolean).join(' - ')).join('\n'), true));
     show('facilities', fill(document.querySelector('#facilities-body'), data.facilities, true));
     show('news', fill(document.querySelector('#news-body'), data.news, true));
+    const galleryBody = document.querySelector('#gallery-body');
+    galleryBody.replaceChildren();
+    for (const row of lines(data.gallery)) {
+      const [url, ...caption] = row.split('|').map((part) => part.trim());
+      if (!/^https:\/\/[^ "'<>]{4,300}$/.test(url)) continue;
+      const figure = document.createElement('figure');
+      const image = document.createElement('img');
+      image.src = url;
+      image.alt = caption.join(' ') || 'School photo';
+      image.loading = 'lazy';
+      image.referrerPolicy = 'no-referrer';
+      image.style.maxWidth = '100%';
+      figure.append(image);
+      if (caption.length) {
+        const text = document.createElement('figcaption');
+        text.textContent = caption.join(' ');
+        figure.append(text);
+      }
+      galleryBody.append(figure);
+    }
+    show('gallery', galleryBody.children.length);
+    if (data.seoTitle) document.title = data.seoTitle;
+    if (data.seoDesc) document.querySelector('meta[name="description"]')?.setAttribute('content', data.seoDesc);
     const contact = document.querySelector('#contact-body');
     contact.replaceChildren();
     for (const [label, value] of [['Phone', data.phone], ['Email', data.email], ['Address', data.address]]) {
