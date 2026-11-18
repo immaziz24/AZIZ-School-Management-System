@@ -2169,6 +2169,23 @@ async function loadFees(request) {
   }
 }
 
+// The fee office login (role accountant) sees only the fees: the students, classes and years that
+// the fee screens need, the fee structures, payments, receipts and concessions.
+async function loadFeeOffice(request) {
+  const tools = academic;
+  try {
+    const [years, classes, students, enrollments] = await Promise.all(['academicYears', 'classes', 'students', 'enrollments'].map((name) => tools.list(name)));
+    if (request !== schoolRequest) return;
+    studentRecords = students.docs;
+    placementData = { years: years.docs, classes: classes.docs, sections: [], enrollments: enrollments.docs };
+    examData = { years: years.docs, classes: classes.docs, subjects: [], mappings: [], exams: [] };
+    await loadFees(request);
+    if (request === schoolRequest) await lists.concessions.load(request);
+  } catch {
+    if (request === schoolRequest) schoolStatus.hidden = false, schoolStatus.textContent = 'Could not load the fee records. Refresh to try again.';
+  }
+}
+
 async function runFeeAction(action, done) {
   const tools = academic;
   if (!tools || tools.busy) return;
@@ -4439,11 +4456,16 @@ lists.health = ownerList({
   build: (fields) => {
     if (!text(fields, 'studentId')) return { error: 'Choose a student.' };
     return { id: text(fields, 'studentId'), data: { studentId: text(fields, 'studentId'), bloodGroup: text(fields, 'bloodGroup'),
-      ...optional(fields, 'allergies', 'conditions', 'emergencyContact', 'notes') } };
+      ...optional(fields, 'allergies', 'conditions', 'emergencyContact', 'notes', 'vaccinations'),
+      ...(DATE_TEXT.test(text(fields, 'lastCheckup')) ? { lastCheckup: text(fields, 'lastCheckup') } : {}),
+      ...(DATE_TEXT.test(text(fields, 'nextCheckup')) ? { nextCheckup: text(fields, 'nextCheckup') } : {}) } };
   },
   line: (item) => nameOfStudent(item.studentId) + (item.bloodGroup ? ' - blood group ' + item.bloodGroup : '')
     + (item.allergies ? ' - allergies: ' + item.allergies : '') + (item.conditions ? ' - conditions: ' + item.conditions : '')
-    + (item.emergencyContact ? ' - emergency: ' + item.emergencyContact : '') + (item.notes ? ' (' + item.notes + ')' : ''),
+    + (item.emergencyContact ? ' - emergency: ' + item.emergencyContact : '')
+    + (item.vaccinations ? ' - vaccinations: ' + item.vaccinations : '') + (item.lastCheckup ? ' - last checkup ' + item.lastCheckup : '')
+    + (item.nextCheckup ? ' - next checkup ' + item.nextCheckup + (item.nextCheckup < localToday() ? ' (OVERDUE)' : '') : '')
+    + (item.notes ? ' (' + item.notes + ')' : ''),
 });
 
 lists.lessons = ownerList({
@@ -6261,6 +6283,7 @@ onAuthStateChanged(auth, async (user) => {
   portalChoice = '';
   portalTools = undefined;
   viewOnly = false;
+  delete document.body.dataset.role;
   viewOnlyNote.hidden = true;
   portalChildWrap.hidden = true;
   portalChild.replaceChildren();
@@ -6537,8 +6560,10 @@ onAuthStateChanged(auth, async (user) => {
     }
     schoolUid = user.uid;
     viewOnly = membership.data()?.role === 'principal';
+    const feeOffice = membership.data()?.active === true && membership.data()?.role === 'accountant';
+    if (feeOffice) document.body.dataset.role = 'accountant';
     viewOnlyNote.hidden = !viewOnly;
-    ownerRole.textContent = viewOnly ? 'Principal (view only)' : 'School Owner';
+    ownerRole.textContent = feeOffice ? 'Fee office' : viewOnly ? 'Principal (view only)' : 'School Owner';
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);
     saveAssignment = (uid, assignment) => setDoc(doc(schoolRef, 'teacherAssignments', uid), assignment);
     ownerEmail.textContent = user.email;
@@ -6550,8 +6575,10 @@ onAuthStateChanged(auth, async (user) => {
       list: () => getDocsFromServer(staff),
       save: (id, profile) => (id ? updateDoc(doc(staff, id), profile) : addDoc(staff, profile).then((ref) => { document.dispatchEvent(new Event('usage-changed')); return ref; })),
     };
-    staffStatus.textContent = 'Loading staff profiles.';
-    await loadStaff(staffDirectory, request);
+    if (!feeOffice) {
+      staffStatus.textContent = 'Loading staff profiles.';
+      await loadStaff(staffDirectory, request);
+    }
     const firestore = getFirestore(app);
     // Every owner change is written to the activity log after it succeeds. The log never blocks the
     // change itself: if the entry cannot be written, the change still stands.
@@ -6605,6 +6632,10 @@ onAuthStateChanged(auth, async (user) => {
         return batch.commit().then(() => (quiet ? undefined : log('bulk', ops[0]?.path[0] ?? 'records', ops.length + ' records', '')));
       },
     };
+    if (feeOffice) {
+      await loadFeeOffice(request);
+      return;
+    }
     academicSection.hidden = false;
     studentSection.hidden = false;
     examSection.hidden = false;

@@ -48,6 +48,13 @@ service cloud.firestore {
       return exists(path) && get(path).data.active == true && get(path).data.role in ['owner', 'principal'];
     }
 
+    // The fee office login. It reads the students, classes, years and fees and records payments; it cannot
+    // void a payment, change fees or students, or read anything else.
+    function isFeeStaff(schoolId) {
+      let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
+      return exists(path) && get(path).data.active == true && get(path).data.role == 'accountant' && !schoolSuspended(schoolId);
+    }
+
     function isSchoolPrincipal(schoolId) {
       let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
       return exists(path) && get(path).data.active == true && get(path).data.role == 'principal';
@@ -104,7 +111,7 @@ service cloud.firestore {
     }
 
     match /schools/{schoolId} {
-      allow get: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
+      allow get: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId) || isPlatformAdmin());
       allow list: if isPlatformAdmin();
       // Self-service signup (features 065, 099). The signed-in user creates the school, becomes its owner and
       // gets a trial billing record in the same batch. A school ID is a lowercase slug and cannot be reused.
@@ -129,7 +136,7 @@ service cloud.firestore {
         // An accepted invitation makes the invited person a member with the invited role.
         allow create: if request.auth != null && request.auth.uid == uid
           && request.resource.data.keys().hasOnly(['role', 'active', 'inviteId'])
-          && request.resource.data.active == true && request.resource.data.role in ['teacher', 'principal', 'owner']
+          && request.resource.data.active == true && request.resource.data.role in ['teacher', 'principal', 'owner', 'accountant']
           && request.resource.data.inviteId is string && request.resource.data.inviteId.matches('[A-Za-z0-9-]{1,30}')
           && request.auth.token.email_verified == true
           && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteId)).data.status == 'pending'
@@ -313,7 +320,7 @@ service cloud.firestore {
       // mistake is voided once. Family accounts read only their own student's payments. Teachers
       // read neither.
       match /feeStructures/{feeId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyActive());
+        allow get, list: if request.auth != null && ((isSchoolViewer(schoolId) || isFeeStaff(schoolId)) || familyActive());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validFeeStructure(request.resource.data)
           && feeId == request.resource.data.yearId + '_' + request.resource.data.classId + '_' + request.resource.data.head
@@ -323,8 +330,8 @@ service cloud.firestore {
       }
 
       match /payments/{paymentId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if request.auth != null && ((isSchoolViewer(schoolId) || isFeeStaff(schoolId)) || familyOwns(resource.data.studentId));
+        allow create: if request.auth != null && (isSchoolOwner(schoolId) || isFeeStaff(schoolId))
           && validPayment(request.resource.data)
           && !request.resource.data.keys().hasAny(['voided'])
           && request.resource.data.receivedBy == request.auth.uid
@@ -633,7 +640,7 @@ service cloud.firestore {
 
       // Fee concessions. concessions/{id}: studentId, studentName, kind, amount, givenOn, optional note. Owner only.
       match /concessions/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId));
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validConcession(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
@@ -1037,7 +1044,7 @@ service cloud.firestore {
 
       match /academicYears/{yearId} {
         // Teachers read years (label, dates, status only) so a class teacher can find the active year.
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher());
+        allow get, list: if request.auth != null && ((isSchoolViewer(schoolId) || isFeeStaff(schoolId)) || isActiveTeacher());
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && yearId.matches('[a-z0-9-]{1,20}')
           && validYear(request.resource.data) && request.resource.data.status == 'draft';
@@ -1054,7 +1061,7 @@ service cloud.firestore {
 
       // classes/{classId}: name, order. sections/{sectionId}: classId, name.
       match /classes/{classId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId));
         // A class teacher reads their own class by ID, to show its name on the attendance sheet.
         allow get: if request.auth != null && classTeacherOf(classId);
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
@@ -1167,7 +1174,7 @@ service cloud.firestore {
       // lowercase admission number, so admission numbers are unique by construction.
       // students/{studentId}: admissionNo, name, guardianName, guardianPhone, status.
       match /students/{studentId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId));
         allow get: if request.auth != null && familyOwns(studentId);
         // A class teacher reads, one by one, the students placed in their class in the active year.
         allow get: if request.auth != null && classTeacherOfStudent(studentId);
@@ -1186,7 +1193,7 @@ service cloud.firestore {
       // studentId. The two are always written in one batch, so a roll number belongs to one
       // student per section per year. Closed years are frozen.
       match /enrollments/{enrollmentId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || teachesClass(resource.data.classId)
+        allow get, list: if request.auth != null && ((isSchoolViewer(schoolId) || isFeeStaff(schoolId)) || teachesClass(resource.data.classId)
           || classTeacherOf(resource.data.classId) || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && validEnrollment(request.resource.data)
@@ -1773,7 +1780,7 @@ service cloud.firestore {
         && item.keys().hasAll(['schoolId', 'email', 'role', 'status', 'createdBy'])
         && item.schoolId is string && item.schoolId.matches('[a-z0-9-]{1,40}')
         && item.email is string && item.email.size() <= 120 && item.email.matches('[^@ A-Z]+@[^@ A-Z]+')
-        && item.role in ['teacher', 'principal', 'owner']
+        && item.role in ['teacher', 'principal', 'owner', 'accountant']
         && item.status in ['pending', 'accepted', 'revoked']
         && item.createdBy is string;
     }
@@ -1799,7 +1806,10 @@ service cloud.firestore {
     }
 
     function validHealthRecord(item) {
-      return item.keys().hasOnly(['studentId', 'bloodGroup', 'allergies', 'conditions', 'emergencyContact', 'notes'])
+      return item.keys().hasOnly(['studentId', 'bloodGroup', 'allergies', 'conditions', 'emergencyContact', 'notes', 'vaccinations', 'lastCheckup', 'nextCheckup'])
+        && optionalText(item, 'vaccinations', 200)
+        && (!item.keys().hasAny(['lastCheckup']) || dateText(item.lastCheckup))
+        && (!item.keys().hasAny(['nextCheckup']) || dateText(item.nextCheckup))
         && item.keys().hasAll(['studentId', 'bloodGroup'])
         && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
         && item.bloodGroup in ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']

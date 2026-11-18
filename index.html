@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-37">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-38">
 </head>
 <body>
   <main>
@@ -928,6 +928,9 @@
           <p><label>Allergies <input name="allergies" type="text" maxlength="200"></label></p>
           <p><label>Medical conditions <input name="conditions" type="text" maxlength="200"></label></p>
           <p><label>Emergency contact (name and phone) <input name="emergencyContact" type="text" maxlength="100"></label></p>
+          <p><label>Vaccinations (optional) <input name="vaccinations" type="text" maxlength="200"></label></p>
+          <p><label>Last health checkup (optional) <input name="lastCheckup" type="date"></label></p>
+          <p><label>Next checkup due (optional) <input name="nextCheckup" type="date"></label></p>
           <p><label>Notes <input name="notes" type="text" maxlength="300"></label></p>
           <button type="submit">Save health record</button>
         </form>
@@ -1240,7 +1243,7 @@
       <h3>People and invitations</h3>
       <form id="invite-form" class="owner-only">
         <p><label>Email <input name="email" type="email" required maxlength="120"></label>
-          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
+          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="accountant">Fee office (fees only)</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
         <button type="submit">Send invitation</button>
       </form>
       <p><small>The invited person signs in with that email on this page and accepts. To hand over ownership: invite the new owner, then they switch the old owner off.</small></p>
@@ -1324,14 +1327,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-37');
-      await import('./i18n.mjs?v=batch-37');
+      await import('./ui.mjs?v=batch-38');
+      await import('./i18n.mjs?v=batch-38');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-37');
-      await import('./platform.mjs?v=batch-37');
+      await import('./sign-in.mjs?v=batch-38');
+      await import('./platform.mjs?v=batch-38');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
