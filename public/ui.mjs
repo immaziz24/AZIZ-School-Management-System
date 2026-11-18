@@ -66,6 +66,7 @@ function prepare(dash, label) {
     section.classList.add('mod-open');
     dash.dataset.open = '1';
     bar.querySelector('strong').textContent = titleOf(section);
+    section.dispatchEvent(new CustomEvent('mod-open', { bubbles: true }));
     scrollTo({ top: 0 });
   };
   let queued = false;

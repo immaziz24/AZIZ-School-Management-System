@@ -3,3 +3,4 @@ firebase-debug.log
 ui-debug.log
 tests/test-output.txt
 tests/marks-test-output.txt
+demo-seed/

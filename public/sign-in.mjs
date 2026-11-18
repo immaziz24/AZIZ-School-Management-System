@@ -3760,6 +3760,10 @@ behaviourForm.addEventListener('submit', async (event) => {
 // sees them, and removes them. Every save and removal goes through academic.save / academic.remove,
 // so it lands in the activity log. Records are never edited in place unless the rules say so.
 const ownerLists = [];
+document.addEventListener('mod-open', (event) => {
+  const api = ownerLists.find((item) => document.querySelector('#' + item.cfg.id) === event.target);
+  if (api?.dirty) api.render();
+});
 
 function ownerList(cfg) {
   const section = document.querySelector('#' + cfg.id);
@@ -3785,7 +3789,13 @@ function ownerList(cfg) {
     }
   }
 
+  // A list is only drawn while its module is open; otherwise it waits (dirty) until the module is opened.
+  api.draw = () => {
+    if (section.closest('.mod-open')) api.render();
+    else api.dirty = true;
+  };
   api.render = () => {
+    api.dirty = false;
     if (form && cfg.prepare) cfg.prepare(form, api.items);
     list.replaceChildren();
     for (const record of [...api.items].sort(cfg.sort ?? ((a, b) => a.id.localeCompare(b.id)))) {
@@ -3812,7 +3822,7 @@ function ownerList(cfg) {
       api.items = saved.docs;
       section.hidden = false;
       status.textContent = '';
-      api.render();
+      api.draw();
     } catch {
       if (request === schoolRequest) {
         section.hidden = false;
@@ -5604,14 +5614,11 @@ const resetInsights = () => {
 };
 
 async function loadOwnerLists(request) {
-  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage']) {
-    if (request !== schoolRequest) return;
-    await lists[name].load(request);
-  }
-  if (request === schoolRequest) await loadBackupLog();
+  const names = ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage'];
+  await Promise.allSettled([...names.map((name) => lists[name].load(request)), loadBackupLog()]);
   if (request === schoolRequest) { refreshAttention(); showReportSections(); }
 }
-const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.render(); };
+const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.draw(); };
 const resetOwnerLists = () => {
   hideReportSections();
   backupLog = null;
@@ -6768,42 +6775,30 @@ onAuthStateChanged(auth, async (user) => {
       await loadFeeOffice(request);
       return;
     }
-    academicSection.hidden = false;
-    studentSection.hidden = false;
-    examSection.hidden = false;
-    reviewSection.hidden = false;
-    reportSection.hidden = false;
-    linkSection.hidden = false;
-    classTeacherSection.hidden = false;
-    attReviewSection.hidden = false;
+    // Show every module tile straight away; each module fills in its own data in the background.
+    for (const module of document.querySelectorAll('#owner-dashboard > .mod')) {
+      if (!['bulk-cards', 'payslip'].includes(module.id) && !module.hasAttribute('data-off')) module.hidden = false;
+    }
     attReviewDate.value = localToday();
     await loadGrading(schoolRef);
     if (request === schoolRequest) showGrading();
     academicStatus.textContent = 'Loading academic setup.';
     await loadAcademic(request);
-    if (request === schoolRequest) await loadStaffAttendance(request);
     if (request === schoolRequest) {
       leaveReviewSection.hidden = false;
-      await renderLeaveReview();
-    }
-    if (request === schoolRequest) await loadFees(request);
-    if (request === schoolRequest) await loadNotices(request);
-    if (request === schoolRequest) await loadAuditLog(request);
-    if (request === schoolRequest) await loadTimetable(request);
-    if (request === schoolRequest) await loadOwnerHomework(request);
-    if (request === schoolRequest) await loadCalendar(request);
-    if (request === schoolRequest) renderCardStudents();
-    if (request === schoolRequest) {
+      renderCardStudents();
       renderAttrepClasses();
       importSection.hidden = false;
+      renderPromotionYears();
+      // Everything below only reads, so it runs side by side instead of one after another.
+      const roster = loadStaffAttendance(request);
+      await Promise.allSettled([
+        roster.then(() => (request === schoolRequest ? renderLeaveReview() : undefined)),
+        roster.then(() => (request === schoolRequest ? loadOwnerLists(request) : undefined)),
+        loadFees(request), loadNotices(request), loadAuditLog(request), loadTimetable(request), loadOwnerHomework(request),
+        loadCalendar(request), loadLibrary(request), loadVisitors(request), loadBehaviour(request), loadWebsite(request), loadSettings(request),
+      ]);
     }
-    if (request === schoolRequest) await loadLibrary(request);
-    if (request === schoolRequest) await loadVisitors(request);
-    if (request === schoolRequest) await loadBehaviour(request);
-    if (request === schoolRequest) renderPromotionYears();
-    if (request === schoolRequest) await loadOwnerLists(request);
-    if (request === schoolRequest) await loadWebsite(request);
-    if (request === schoolRequest) await loadSettings(request);
     if (request === schoolRequest) renderInsights();
     if (request === schoolRequest) await renderSummary(request);
   } catch (error) {
