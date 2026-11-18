@@ -326,6 +326,35 @@ service cloud.firestore {
           && validLeaveRequest(request.resource.data);
       }
 
+      // Student leave. studentLeaves/{studentId}_{fromDate}: studentId, studentName, classId, fromDate,
+      // toDate (YYYY-MM-DD), reason (text), status (pending, approved or rejected), requestedBy (the
+      // student or parent login), and decidedBy and decisionNote once decided. A linked student or
+      // parent creates a pending request for their own student only, and the classId must be the class
+      // the student is placed in this year. The class teacher of that class decides it, once; the owner
+      // or an active principal can also read and decide. Family accounts read only their own student's
+      // requests (query by studentId). Never deleted.
+      match /studentLeaves/{leaveId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
+          || classTeacherOf(resource.data.classId)
+          || familyOwns(resource.data.studentId));
+        allow create: if request.auth != null && familyOwns(request.resource.data.studentId)
+          && validStudentLeave(request.resource.data)
+          && request.resource.data.status == 'pending'
+          && !request.resource.data.keys().hasAny(['decidedBy', 'decisionNote'])
+          && request.resource.data.requestedBy == request.auth.uid
+          && leaveId == request.resource.data.studentId + '_' + request.resource.data.fromDate
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/settings/academic)
+          && get(/databases/$(database)/documents/schools/$(schoolId)/enrollments/$(get(/databases/$(database)/documents/schools/$(schoolId)/settings/academic).data.activeYearId + '_' + request.resource.data.studentId)).data.classId
+            == request.resource.data.classId;
+        allow update: if request.auth != null
+          && (isSchoolOwner(schoolId) || isActivePrincipal(schoolId) || classTeacherOf(resource.data.classId))
+          && resource.data.status == 'pending'
+          && request.resource.data.status in ['approved', 'rejected']
+          && request.resource.data.decidedBy == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy', 'decisionNote'])
+          && validStudentLeave(request.resource.data);
+      }
+
       // Fees. feeStructures/{yearId}_{classId}_{head}: yearId, classId, head (key), name, amount
       // (whole rupees). The owner sets and removes them. A linked student or parent account can read
       // them. payments/{receiptNo}: studentId, yearId, amount, date, method, receiptNo, receivedBy,
@@ -1397,6 +1426,21 @@ service cloud.firestore {
         && item.reason is string && item.reason.size() <= 200 && item.reason.matches('.*[^[:space:]].*')
         && item.status in ['pending', 'approved', 'rejected']
         && (!item.keys().hasAny(['decidedBy']) || item.decidedBy is string);
+    }
+
+    function validStudentLeave(item) {
+      return item.keys().hasAll(['studentId', 'studentName', 'classId', 'fromDate', 'toDate', 'reason', 'status', 'requestedBy'])
+        && item.keys().hasOnly(['studentId', 'studentName', 'classId', 'fromDate', 'toDate', 'reason', 'status', 'requestedBy', 'decidedBy', 'decisionNote'])
+        && item.studentId is string && item.studentId.size() >= 1 && item.studentId.size() <= 40
+        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 100
+        && item.classId is string && item.classId.size() >= 1 && item.classId.size() <= 40
+        && item.fromDate is string && item.fromDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.fromDate >= '2020-01-01'
+        && item.toDate is string && item.toDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.toDate >= item.fromDate
+        && item.reason is string && item.reason.size() <= 300 && item.reason.matches('.*[^[:space:]].*')
+        && item.status in ['pending', 'approved', 'rejected']
+        && item.requestedBy is string && item.requestedBy.size() <= 128
+        && (!item.keys().hasAny(['decidedBy']) || item.decidedBy is string)
+        && (!item.keys().hasAny(['decisionNote']) || (item.decisionNote is string && item.decisionNote.size() <= 200));
     }
 
     function validFeeStructure(item) {

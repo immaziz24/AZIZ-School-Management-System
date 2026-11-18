@@ -1043,6 +1043,7 @@ const portalChildWrap = document.querySelector('#portal-child-wrap');
 const portalChild = document.querySelector('#portal-child');
 let portalChoice = '';
 let portalTools;
+let portalRole = 'parent'; // 'student' or 'parent', from familyAccess.relation
 portalChild.addEventListener('change', () => {
   portalChoice = portalChild.value;
   if (portalTools) loadPortal(portalTools, schoolRequest);
@@ -1126,6 +1127,9 @@ async function loadPortal(tools, request) {
       portalStatus.textContent = 'Your account is not linked to a student yet. Ask the school office.';
       return;
     }
+    portalRole = link.data().relation === 'student' ? 'student' : 'parent';
+    document.querySelector('#portal-title').textContent = portalRole === 'student' ? 'Student Portal' : 'Parent Portal';
+    portalEmail.textContent = (portalRole === 'student' ? 'Student login: ' : 'Parent login: ') + user.email;
     const children = [link.data().studentId, ...(link.data().extraStudentIds ?? [])];
     const studentId = children.includes(portalChoice) ? portalChoice : children[0];
     portalTools = tools;
@@ -1161,6 +1165,7 @@ async function loadPortal(tools, request) {
     loadPortalCommunity(tools, request, studentId);
     loadPortalEvents(tools, request, studentId);
     loadPortalCoursework(tools, request, studentId);
+    loadPortalLeave(tools, request, studentId);
     loadUpcomingEvents(tools.schoolRef, portalCalendarSection, portalCalendarStatus, portalCalendarList);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
@@ -2434,6 +2439,7 @@ const portalFeesBody = document.querySelector('#portal-fees-body');
 
 async function loadPortalFees(tools, request, studentId) {
   const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  if (portalRole === 'student') { portalFeesSection.hidden = true; return; } // fees are for the parent
   portalFeesSection.hidden = false;
   portalFeesStatus.textContent = 'Loading fees.';
   try {
@@ -6383,6 +6389,7 @@ let portalMessaging; // { tools, studentId, uid, busy }
 
 async function loadPortalCommunity(tools, request, studentId) {
   const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  if (portalRole === 'student') { portalPtmSection.hidden = true; portalMessagesSection.hidden = true; return; } // meetings and messages are for the parent
   portalMessaging = { tools, studentId, uid: tools.user.uid, busy: false };
   portalPtmSection.hidden = false;
   portalMessagesSection.hidden = false;
@@ -6684,7 +6691,7 @@ const portalAssessmentsList = document.querySelector('#portal-assessments-list')
 async function loadPortalCoursework(tools, request, studentId) {
   const { schoolRef, collection, getDocsFromServer, getDocFromServer, doc, query, where } = tools;
   const { setDoc } = firestoreTools;
-  portalSubmitSection.hidden = false;
+  portalSubmitSection.hidden = portalRole !== 'student'; // only the student submits homework
   portalAssessmentsSection.hidden = false;
   portalSubmitStatus.textContent = 'Loading homework.';
   portalAssessmentsStatus.textContent = 'Loading scores.';
@@ -6941,6 +6948,14 @@ onAuthStateChanged(auth, async (user) => {
   portalFeesSummary.replaceChildren();
   portalFeesBody.replaceChildren();
   schoolUid = '';
+  for (const [section, status, list] of [[studentLeaveSection, studentLeaveStatus, studentLeaveList],
+    [teacherStudentLeaveSection, teacherStudentLeaveStatus, teacherStudentLeaveList], [portalLeaveSection, portalLeaveStatus, portalLeaveList]]) {
+    section.hidden = true;
+    status.textContent = '';
+    list.replaceChildren();
+  }
+  portalLeave = null;
+  portalLeaveForm.reset();
   leaveReviewSection.hidden = true;
   leaveReviewStatus.textContent = '';
   leaveReviewBody.replaceChildren();
@@ -7126,15 +7141,18 @@ onAuthStateChanged(auth, async (user) => {
       // Show every screen at once, then load them side by side. Before, each one waited for the one before it, so
       // the tiles popped in one by one and a slow class sheet held everything else back. The daily attendance
       // screen only appears for a class teacher, which one quick query tells us first.
-      const isClassTeacher = await getDocsFromServer(query(collection(schoolRef, 'classTeachers'), where('teacherUid', '==', user.uid)))
-        .then((found) => !found.empty).catch(() => false);
+      const myClassIds = await getDocsFromServer(query(collection(schoolRef, 'classTeachers'), where('teacherUid', '==', user.uid)))
+        .then((found) => found.docs.map((record) => record.id)).catch(() => []);
+      const isClassTeacher = myClassIds.length > 0;
       if (request !== schoolRequest) return;
       for (const id of ['my-attendance', 'leave-request', 'teacher-homework', 'teacher-timetable', 'teacher-calendar', 'teacher-cover',
         'teacher-lessons', 'teacher-notices', 'teacher-submissions', 'teacher-assessments']) document.querySelector('#' + id).hidden = false;
       attMarkSection.hidden = !isClassTeacher;
+      teacherStudentLeaveSection.hidden = !isClassTeacher;
       if (isClassTeacher) attMarkStatus.textContent = 'Loading your class.';
       await Promise.allSettled([
         isClassTeacher ? loadAttendanceClasses(request, schoolRef, user.uid) : undefined,
+        isClassTeacher ? loadStudentLeaveBoard(request, schoolRef, user.uid, { status: teacherStudentLeaveStatus, list: teacherStudentLeaveList }, myClassIds) : undefined,
         examsLoader?.(),
         loadMyAttendance(request, schoolRef, user.uid),
         loadMyLeave(request, schoolRef, user.uid),
@@ -7261,6 +7279,8 @@ onAuthStateChanged(auth, async (user) => {
     await loadAcademic(request);
     if (request === schoolRequest) {
       leaveReviewSection.hidden = false;
+      studentLeaveSection.hidden = false;
+      loadStudentLeaveBoard(request, schoolRef, user.uid, { status: studentLeaveStatus, list: studentLeaveList }, null);
       renderCardStudents();
       renderAttrepClasses();
       importSection.hidden = false;
@@ -7344,30 +7364,140 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
-// Parent and student portal: a jump bar. It lists only the sections that are showing for this child, and sticks to the
-// bottom of a phone screen (see sign-in.css), so a parent reaches fees, attendance or notices with one tap.
-{
-  const nav = document.querySelector('#portal-nav');
-  const PARTS = [['portal-results', 'Results'], ['portal-attendance', 'Attendance'], ['portal-fees', 'Fees'], ['portal-homework', 'Homework'],
-    ['portal-timetable', 'Timetable'], ['portal-calendar', 'Calendar'], ['portal-notices', 'Notices'], ['portal-messages', 'Messages'], ['portal-ptm', 'Meetings']];
-  let queued = false;
-  const rebuild = () => {
-    queued = false;
-    nav.replaceChildren();
-    if (portalDashboard.hidden) return;
-    for (const [id, label] of PARTS) {
-      const target = document.querySelector('#' + id);
-      if (!target || target.hidden) continue;
-      const link = document.createElement('a');
-      link.href = '#' + id;
-      link.textContent = label;
-      link.addEventListener('click', (event) => {
-        event.preventDefault();
-        target.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
-      });
-      nav.append(link);
-    }
-  };
-  new MutationObserver(() => { if (!queued) { queued = true; setTimeout(rebuild, 50); } })
-    .observe(portalDashboard, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
+// Student leave. A student or parent applies from the portal; the class teacher of that class approves or rejects it
+// (the owner and principal can also decide). The family sees the answer, with the teacher's note.
+const studentLeaveSection = document.querySelector('#student-leave');
+const studentLeaveStatus = document.querySelector('#student-leave-status');
+const studentLeaveList = document.querySelector('#student-leave-list');
+const teacherStudentLeaveSection = document.querySelector('#teacher-studentleave');
+const teacherStudentLeaveStatus = document.querySelector('#teacher-studentleave-status');
+const teacherStudentLeaveList = document.querySelector('#teacher-studentleave-list');
+const portalLeaveSection = document.querySelector('#portal-leave');
+const portalLeaveStatus = document.querySelector('#portal-leave-status');
+const portalLeaveList = document.querySelector('#portal-leave-list');
+const portalLeaveForm = document.querySelector('#portal-leave-form');
+let portalLeave = null; // { tools, studentId, items, busy }
+
+function studentLeaveLine(item) {
+  return item.studentName + ' | ' + item.fromDate + (item.toDate !== item.fromDate ? ' to ' + item.toDate : '') + ' | ' + item.reason
+    + ' | ' + LEAVE_LABEL[item.status] + (item.decisionNote ? ' | Note: ' + item.decisionNote : '');
 }
+
+function drawStudentLeaves(list, items, onDecide) {
+  list.replaceChildren();
+  const sorted = [...items].sort((a, b) => (a.data.status === 'pending' ? 0 : 1) - (b.data.status === 'pending' ? 0 : 1)
+    || b.data.fromDate.localeCompare(a.data.fromDate));
+  for (const item of sorted) {
+    const entry = document.createElement('li');
+    entry.textContent = studentLeaveLine(item.data) + (onDecide && item.data.status === 'pending' ? ' ' : '');
+    if (onDecide && item.data.status === 'pending') {
+      for (const next of ['approved', 'rejected']) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = next === 'approved' ? 'Approve' : 'Reject';
+        button.addEventListener('click', () => onDecide(item, next));
+        entry.append(button, ' ');
+      }
+    }
+    list.append(entry);
+  }
+}
+
+// Used by the class teacher (classIds = the classes they lead) and by the owner or principal (classIds = null, everything).
+async function loadStudentLeaveBoard(request, schoolRef, uid, board, classIds) {
+  const { collection, doc, query, where, getDocsFromServer, setDoc } = firestoreTools;
+  board.status.textContent = 'Loading leave requests.';
+  try {
+    const parts = classIds
+      ? await Promise.all(classIds.map((id) => getDocsFromServer(query(collection(schoolRef, 'studentLeaves'), where('classId', '==', id)))))
+      : [await getDocsFromServer(collection(schoolRef, 'studentLeaves'))];
+    if (request !== schoolRequest) return;
+    const items = parts.flatMap((part) => part.docs.map((record) => ({ id: record.id, data: record.data() })));
+    drawStudentLeaves(board.list, items, async (item, next) => {
+      const answer = prompt((next === 'approved' ? 'Approve' : 'Reject') + ' leave for ' + item.data.studentName + '. Note for the family (optional):');
+      if (answer === null || board.busy) return;
+      board.busy = true;
+      board.status.textContent = 'Saving decision.';
+      try {
+        const note = answer.trim().slice(0, 200);
+        await setDoc(doc(schoolRef, 'studentLeaves', item.id), { ...item.data, status: next, decidedBy: uid, ...(note ? { decisionNote: note } : {}) });
+        board.busy = false;
+        if (request === schoolRequest) await loadStudentLeaveBoard(request, schoolRef, uid, board, classIds);
+      } catch (error) {
+        board.busy = false;
+        if (request === schoolRequest) board.status.textContent = 'Could not save the decision (' + (error?.code ?? 'error') + '). Try again.';
+      }
+    });
+    board.status.textContent = items.length ? '' : 'No leave requests yet.';
+  } catch (error) {
+    if (request === schoolRequest) board.status.textContent = 'Could not load leave requests (' + (error?.code ?? 'error') + ').';
+  }
+}
+
+// Portal side: the student or parent's own requests, and the form.
+async function loadPortalLeave(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalLeaveSection.hidden = false;
+  portalLeave = { tools, studentId, items: [], busy: false };
+  portalLeaveForm.elements.namedItem('fromDate').min = localToday();
+  portalLeaveForm.elements.namedItem('toDate').min = localToday();
+  portalLeaveStatus.textContent = 'Loading leave requests.';
+  try {
+    const found = await getDocsFromServer(query(collection(schoolRef, 'studentLeaves'), where('studentId', '==', studentId)));
+    if (request !== schoolRequest || portalLeave?.studentId !== studentId) return;
+    portalLeave.items = found.docs.map((record) => ({ id: record.id, data: record.data() }));
+    drawStudentLeaves(portalLeaveList, portalLeave.items, null);
+    portalLeaveStatus.textContent = portalLeave.items.length ? '' : 'No leave requests yet.';
+  } catch (error) {
+    if (request === schoolRequest) portalLeaveStatus.textContent = 'Could not load leave requests (' + (error?.code ?? 'error') + ').';
+  }
+}
+
+portalLeaveForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = portalLeave;
+  if (!context || context.busy) return;
+  const fields = new FormData(portalLeaveForm);
+  const fromDate = String(fields.get('fromDate') ?? '');
+  const toDate = String(fields.get('toDate') ?? '');
+  const reason = String(fields.get('reason') ?? '').trim();
+  if (!DATE_TEXT.test(fromDate) || !DATE_TEXT.test(toDate) || toDate < fromDate) {
+    portalLeaveStatus.textContent = 'Choose a start date, and an end date that is not before it.';
+    return;
+  }
+  if (!reason) {
+    portalLeaveStatus.textContent = 'Enter a reason for the leave.';
+    return;
+  }
+  const id = context.studentId + '_' + fromDate;
+  if (context.items.some((item) => item.id === id)) {
+    portalLeaveStatus.textContent = 'A leave request starting on that date was already sent.';
+    return;
+  }
+  const { schoolRef, collection, doc, getDocsFromServer, getDocFromServer, query, where, user } = context.tools;
+  const { setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  portalLeaveStatus.textContent = 'Sending leave request.';
+  try {
+    const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', context.studentId)));
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    const student = await getDocFromServer(doc(schoolRef, 'students', context.studentId));
+    if (!latest || !student.exists()) {
+      portalLeaveStatus.textContent = 'This student is not placed in a class yet. Ask the school office.';
+      return;
+    }
+    const data = { studentId: context.studentId, studentName: student.data().name, classId: latest.classId, fromDate, toDate, reason,
+      status: 'pending', requestedBy: user.uid };
+    await setDoc(doc(schoolRef, 'studentLeaves', id), data);
+    if (request !== schoolRequest) return;
+    context.items.push({ id, data });
+    portalLeaveForm.reset();
+    drawStudentLeaves(portalLeaveList, context.items, null);
+    portalLeaveStatus.textContent = 'Leave request sent. The class teacher will approve or reject it.';
+  } catch (error) {
+    if (request === schoolRequest) portalLeaveStatus.textContent = 'Could not send the leave request (' + (error?.code ?? 'error') + '). Try again.';
+  } finally {
+    context.busy = false;
+  }
+});

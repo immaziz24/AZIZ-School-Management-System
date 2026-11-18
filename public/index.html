@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-49">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-50">
 </head>
 <body>
   <main>
@@ -247,6 +247,12 @@
           <thead><tr><th>Teacher</th><th>From</th><th>To</th><th>Reason</th><th>Status</th><th>Decision</th></tr></thead>
           <tbody id="leave-review-body"></tbody>
         </table>
+      </section>
+      <section id="student-leave" aria-labelledby="student-leave-title" hidden>
+        <h3 id="student-leave-title">Student Leave</h3>
+        <p>Leave asked for by students and parents. The class teacher normally decides; you can also approve or reject.</p>
+        <p id="student-leave-status" role="status"></p>
+        <ul id="student-leave-list"></ul>
       </section>
       <section id="fees" aria-labelledby="fees-title" hidden>
         <h3 id="fees-title">Fees</h3>
@@ -1152,6 +1158,12 @@
         <p id="teacher-notices-status" role="status"></p>
         <ul id="teacher-notices-list"></ul>
       </section>
+      <section id="teacher-studentleave" aria-labelledby="teacher-studentleave-title" hidden>
+        <h3 id="teacher-studentleave-title">Student Leave (my class)</h3>
+        <p>Leave asked for by the students of your class. You approve or reject each one.</p>
+        <p id="teacher-studentleave-status" role="status"></p>
+        <ul id="teacher-studentleave-list"></ul>
+      </section>
       <section id="teacher-submissions" aria-labelledby="teacher-submissions-title" hidden>
         <h3 id="teacher-submissions-title">Homework Submissions</h3>
         <p id="teacher-submissions-status" role="status"></p>
@@ -1187,7 +1199,6 @@
       </form>
     </section>
     <section id="portal-dashboard" aria-labelledby="portal-title" hidden>
-      <nav id="portal-nav" aria-label="Jump to a section"></nav>
       <div id="portal-head">
         <h2 id="portal-title">Student Portal</h2>
         <p id="portal-child-wrap" hidden><label>Child <select id="portal-child"></select></label></p>
@@ -1279,6 +1290,18 @@
         <h3 id="portal-assessments-title">Class Test Scores</h3>
         <p id="portal-assessments-status" role="status"></p>
         <ul id="portal-assessments-list"></ul>
+      </section>
+      <section id="portal-leave" aria-labelledby="portal-leave-title" hidden>
+        <h3 id="portal-leave-title">Leave Request</h3>
+        <p>Ask for leave for a school day. The class teacher will approve or reject it.</p>
+        <p id="portal-leave-status" role="status"></p>
+        <form id="portal-leave-form">
+          <p><label>From <input type="date" name="fromDate" required></label></p>
+          <p><label>To <input type="date" name="toDate" required></label></p>
+          <p><label>Reason <input name="reason" maxlength="300" required></label></p>
+          <button type="submit">Send leave request</button>
+        </form>
+        <ul id="portal-leave-list"></ul>
       </section>
       <section id="portal-notices" aria-labelledby="portal-notices-title" hidden>
         <h3 id="portal-notices-title">Notices</h3>
@@ -1414,14 +1437,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-49');
-      await import('./i18n.mjs?v=batch-49');
+      await import('./ui.mjs?v=batch-50');
+      await import('./i18n.mjs?v=batch-50');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-49');
-      await import('./platform.mjs?v=batch-49');
+      await import('./sign-in.mjs?v=batch-50');
+      await import('./platform.mjs?v=batch-50');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

@@ -146,8 +146,19 @@ async function loadMyInvites(user) {
   accept.list.replaceChildren();
   if (!user.email) return;
   if (!user.emailVerified) {
+    // Someone who already belongs to this school (a teacher, parent or student the owner set up) has no invitation to
+    // accept, so show nothing. Only a person with no place here is told how to see invitations.
+    try {
+      const member = await getDoc(doc(db, 'schools', SCHOOL_ID, 'members', user.uid));
+      if (member.exists() && member.data().active === true) return;
+    } catch { /* not a member */ }
     accept.section.hidden = false;
-    accept.status.textContent = 'Verify your email address (we sent you a link) to see and accept invitations. Then refresh this page.';
+    accept.status.textContent = 'Your email address is not verified yet, so invitations cannot be shown. No email has been sent unless you ask for one below.';
+    accept.list.replaceChildren();
+    fillList(accept.list, [['Get a verification link by email.',
+      button('Send verification email', () => run(accept.status, async () => {
+        await sendEmailVerification(user);
+      }, 'Verification email sent to ' + user.email + '. Open it, then refresh this page.'))]], '');
     return;
   }
   try {
