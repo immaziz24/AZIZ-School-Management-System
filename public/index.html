@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-54">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-55">
 </head>
 <body>
   <main>
@@ -21,8 +21,7 @@
     <p id="firebase-status" role="status">Loading sign-in.</p>
     <form id="sign-in" hidden>
       <p><label>Email <input name="email" type="email" autocomplete="username" required></label></p>
-      <p><label>Password <input name="password" type="password" autocomplete="current-password" required></label></p>
-      <p><label><input type="checkbox" data-show-password> Show password</label></p>
+      <p><label>Password <span class="pw-wrap"><input name="password" type="password" autocomplete="current-password" required><button type="button" class="pw-eye" aria-label="Show password" title="Show password" aria-pressed="false"><svg class="on" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg><svg class="off" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.6 10.6 0 0 1 12 19C5.5 19 1.5 12 1.5 12a18.5 18.5 0 0 1 4.6-5.4M9.9 5.2A9.9 9.9 0 0 1 12 5c6.5 0 10.5 7 10.5 7a18.6 18.6 0 0 1-2.2 3.2M1 1l22 22"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></span></label></p>
       <button type="submit">Sign in</button>
     </form>
     <section id="owner-dashboard" aria-labelledby="school-name" hidden>
@@ -1383,8 +1382,7 @@
         <p><label>Phone <input name="phone" type="tel" maxlength="40"></label></p>
         <p><label>Address <input name="address" maxlength="500"></label></p>
         <p id="signup-account"><label>Your email <input name="email" type="email" autocomplete="username"></label>
-          <label>Choose a password <input name="password" type="password" minlength="8" autocomplete="new-password"></label>
-          <label><input type="checkbox" data-show-password> Show password</label></p>
+          <label>Choose a password <span class="pw-wrap"><input name="password" type="password" minlength="8" autocomplete="new-password"><button type="button" class="pw-eye" aria-label="Show password" title="Show password" aria-pressed="false"><svg class="on" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg><svg class="off" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.6 10.6 0 0 1 12 19C5.5 19 1.5 12 1.5 12a18.5 18.5 0 0 1 4.6-5.4M9.9 5.2A9.9 9.9 0 0 1 12 5c6.5 0 10.5 7 10.5 7a18.6 18.6 0 0 1-2.2 3.2M1 1l22 22"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></span></label></p>
         <button type="submit">Create school</button>
         <p id="signup-status" role="status"></p>
       </form>
@@ -1503,11 +1501,19 @@
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
-    // "Show password" tick-boxes: show or hide what is typed in the password box of the same form.
-    document.addEventListener('change', (event) => {
-      if (!event.target.matches?.('[data-show-password]')) return;
-      const box = event.target.closest('form')?.querySelector('input[name="password"]');
-      if (box) box.type = event.target.checked ? 'text' : 'password';
+    // Eye button inside the password box: show or hide what is typed.
+    document.addEventListener('click', (event) => {
+      const eye = event.target.closest?.('.pw-eye');
+      if (!eye) return;
+      event.preventDefault();
+      const box = eye.parentElement.querySelector('input');
+      const show = box.type === 'password';
+      box.type = show ? 'text' : 'password';
+      eye.setAttribute('aria-pressed', String(show));
+      const label = show ? 'Hide password' : 'Show password';
+      eye.setAttribute('aria-label', label);
+      eye.title = label;
+      box.focus();
     });
     try {
       await import('./ui.mjs?v=batch-51');

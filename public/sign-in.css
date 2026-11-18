@@ -202,3 +202,13 @@ body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concession
 .chart-box { background: #faf6ea; color: #14243d; border: 1px solid #d9d2bd; border-radius: 8px; padding: 12px; margin: 12px 0; }
 .chart-box svg { display: block; max-width: 100%; height: auto; }
 .chart-box p { margin: 8px 0 0; }
+
+/* Eye button inside a password box (show or hide what is typed). The sign-in form gives every button the gold style, so the ID rule below puts this one back to a plain icon. */
+.pw-wrap{position:relative;display:block}
+.pw-wrap input{padding-right:46px}
+.pw-wrap .pw-eye,#sign-in .pw-wrap .pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;padding:0;margin:0;display:flex;align-items:center;justify-content:center;background:none;border:0;border-radius:50%;box-shadow:none;color:var(--mut)}
+.pw-wrap .pw-eye:hover,#sign-in .pw-wrap .pw-eye:hover{background:rgba(201,162,74,.14);color:var(--gold2);box-shadow:none;transform:translateY(-50%)}
+.pw-wrap .pw-eye:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+.pw-eye .off{display:none}
+.pw-eye[aria-pressed="true"] .on{display:none}
+.pw-eye[aria-pressed="true"] .off{display:block}
