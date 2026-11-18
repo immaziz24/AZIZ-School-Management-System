@@ -176,7 +176,9 @@ function showBanner() {
     plan.banner.textContent = 'This school is ' + billing.status + '. Everything is read-only until the account is reactivated. Contact support.';
   } else if (billing.status === 'trial') {
     plan.banner.textContent = left === null ? 'Free trial.' : left >= 0 ? 'Free trial: ' + left + ' day(s) left.' : 'The free trial ended ' + (-left)
-      + ' day(s) ago' + (billing.graceDays ? ' (grace period: ' + billing.graceDays + ' days).' : '. Contact support to continue.');
+      + ' day(s) ago. ' + (billing.graceDays && billing.graceDays + left >= 0
+        ? 'Grace period: ' + (billing.graceDays + left) + ' day(s) left, then the school becomes read-only.'
+        : 'The school is now read-only. Contact support to continue; you can still download your data from Data Backup.');
   } else if (billing.renewsOn) {
     const d = daysLeft(Timestamp.fromDate(new Date(billing.renewsOn + 'T00:00:00')));
     plan.banner.textContent = d !== null && d < 0 ? 'Renewal was due on ' + billing.renewsOn + '. Please pay to avoid suspension.' : 'Renews on ' + billing.renewsOn + '.';
@@ -228,11 +230,18 @@ $('#consent-accept').addEventListener('click', () => run(plan.status, async () =
   await setDoc(doc(schoolRef, 'consents', me.uid), { policyVersion: POLICY_VERSION, acceptedAt: serverTimestamp() });
   plan.consentBox.hidden = true;
 }, 'Thank you. Your acceptance is recorded.'));
-$('#usage-refresh').addEventListener('click', () => run(plan.status, async () => {
+async function recountUsage() {
   const [students, staff, classes] = await Promise.all(['students', 'staff', 'classes'].map((n) => getDocs(collection(schoolRef, n))));
   await setDoc(doc(schoolRef, 'usage', 'main'), { students: students.size, staff: staff.size, classes: classes.size, updatedAt: serverTimestamp() });
   await showUsage();
-}, 'Usage updated.'));
+}
+$('#usage-refresh').addEventListener('click', () => run(plan.status, recountUsage, 'Usage updated.'));
+// The plan limits are checked against the last counted usage, so the count is refreshed after students or staff are added.
+let usageTimer = 0;
+document.addEventListener('usage-changed', () => {
+  clearTimeout(usageTimer);
+  usageTimer = setTimeout(() => { if (schoolRef && myRole === 'owner') recountUsage().catch(() => {}); }, 1500);
+});
 
 async function loadTickets() {
   try {
@@ -287,7 +296,9 @@ async function loadMembers() {
 async function loadDomains() {
   try {
     const found = await getDocs(collection(schoolRef, 'domainRequests'));
-    fillList(plan.domains, found.docs.map((d) => [d.data().domain + ' - ' + d.data().status + (d.data().note ? ' (' + d.data().note + ')' : '')]), 'No domain requests.');
+    fillList(plan.domains, found.docs.map((d) => [d.data().domain + ' - ' + d.data().status + (d.data().note ? ' (' + d.data().note + ')' : '')
+      + (d.data().dnsTarget ? '. Set this at your domain provider: ' + d.data().dnsTarget : '')
+      + (d.data().ssl ? '. Secure certificate: ' + d.data().ssl : '') + (d.data().checkedOn ? '. Last checked ' + d.data().checkedOn : '')]), 'No domain requests.');
   } catch { fillList(plan.domains, [], 'Requests could not be loaded.'); }
 }
 $('#domain-form').addEventListener('submit', (event) => {
@@ -367,7 +378,18 @@ async function openSchool(id) {
     const [dm, dr] = await Promise.all([getDocs(collection(ref, 'domainRequests')), getDocs(collection(ref, 'dataRequests'))]);
     const rows = [];
     for (const d of dm.docs) rows.push(['Domain ' + d.data().domain + ' - ' + d.data().status,
-      ...['dns-pending', 'verified', 'rejected'].map((st) => button(st, () => run(admin.status, async () => { await setDoc(d.ref, { ...d.data(), status: st }); await openSchool(id); }, 'Updated.')))]);
+      ...['dns-pending', 'verified', 'rejected'].map((st) => button(st, () => run(admin.status, async () => {
+        const next = { ...d.data(), status: st, checkedOn: today() };
+        if (st === 'dns-pending') {
+          const target = prompt('What should the school set at its domain provider? (for example: CNAME to azizschoolmanagement.plateria.in)', d.data().dnsTarget ?? '');
+          if (target === null) return;
+          if (target.trim()) next.dnsTarget = target.trim().slice(0, 100);
+          next.ssl = 'pending';
+        }
+        if (st === 'verified') next.ssl = 'active';
+        await setDoc(d.ref, next);
+        await openSchool(id);
+      }, 'Updated.')))]);
     for (const d of dr.docs) rows.push(['Data ' + d.data().kind + ' - ' + d.data().status,
       ...['approved', 'completed', 'held'].map((st) => button(st, () => run(admin.status, async () => { await setDoc(d.ref, { ...d.data(), status: st }); await openSchool(id); }, 'Updated.')))]);
     fillList(admin.requests, rows, 'No requests.');

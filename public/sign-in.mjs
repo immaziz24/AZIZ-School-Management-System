@@ -3247,6 +3247,19 @@ importRun.addEventListener('click', async () => {
   if (!tools || tools.busy || !importReady.length) return;
   const request = schoolRequest;
   const ops = importReady;
+  // Plan limit: do not start an import that would pass the student limit of the plan.
+  if (importKind.value === 'students') {
+    try {
+      const { doc, getDocFromServer } = firestoreTools;
+      const plan = await getDocFromServer(doc(tools.schoolRef, 'billing', 'main'));
+      const limit = plan.exists() ? plan.data().studentLimit : undefined;
+      if (typeof limit === 'number' && studentRecords.length + ops.length > limit) {
+        importStatus.textContent = 'Your plan allows ' + limit + ' students and you have ' + studentRecords.length + '. You can add ' + Math.max(0, limit - studentRecords.length)
+          + ' more; remove rows or ask support to raise the limit.';
+        return;
+      }
+    } catch { /* No plan record: no limit to check. */ }
+  }
   tools.busy = true;
   importRun.disabled = true;
   let done = 0;
@@ -3261,6 +3274,7 @@ importRun.addEventListener('click', async () => {
     importText.value = '';
     importBody.replaceChildren();
     await loadAcademic(request);
+    document.dispatchEvent(new Event('usage-changed'));
     if (request === schoolRequest) importStatus.textContent = 'Imported ' + done + ' row' + (done === 1 ? '' : 's') + '.';
   } catch {
     tools.busy = false;
@@ -4429,6 +4443,27 @@ websiteForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Feature switches set by the platform administrator hide the matching modules for every school.
+// This hides them in the app; it does not block the underlying records.
+const FLAG_MODULES = { website: ['website', 'siteextras', 'enquiries'], finance: ['fees', 'payroll', 'expenses', 'finance', 'concessions', 'sales', 'vendors', 'defaulters'],
+  library: ['library'], transport: ['routes', 'riders'] };
+async function readFlags() {
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const found = await getDocFromServer(doc(academic.schoolRef.firestore, 'platformConfig', 'flags'));
+    return found.exists() ? found.data() : {};
+  } catch { return {}; }
+}
+function applyFlags(flags) {
+  for (const [flag, ids] of Object.entries(FLAG_MODULES)) {
+    for (const id of ids) {
+      const section = document.querySelector('#' + id);
+      if (!section) continue;
+      if (flags[flag] === false) section.setAttribute('data-off', ''); else section.removeAttribute('data-off');
+    }
+  }
+}
+
 // Website look, admission form questions, school settings and the launch checklist.
 const siteExtrasSection = document.querySelector('#siteextras');
 const siteExtrasStatus = document.querySelector('#siteextras-status');
@@ -4512,6 +4547,8 @@ async function loadSettings(request) {
   const { doc, getDocFromServer } = firestoreTools;
   siteExtrasSection.hidden = false;
   prefsSection.hidden = false;
+  const flags = await readFlags();
+  if (request === schoolRequest) applyFlags(flags);
   try {
     const [extras, prefs, launch] = await Promise.all(['site/extras', 'settings/preferences', 'settings/launch'].map((path) => {
       const [collectionName, id] = path.split('/');
@@ -4824,6 +4861,102 @@ const BACKUP_COLLECTIONS = ['members', 'students', 'academicYears', 'classes', '
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
   'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
   'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog'];
+
+// School data pack: every list as a CSV file inside one ZIP (stored, not compressed) built here in the browser.
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (const byte of bytes) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function buildZip(files) {
+  const encoder = new TextEncoder();
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  const now = new Date();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  for (const [name, content] of files) {
+    const nameBytes = encoder.encode(name);
+    const data = encoder.encode(content);
+    const crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true); local.setUint16(8, 0, true);
+    local.setUint16(10, dosTime, true); local.setUint16(12, dosDate, true); local.setUint32(14, crc, true);
+    local.setUint32(18, data.length, true); local.setUint32(22, data.length, true); local.setUint16(26, nameBytes.length, true); local.setUint16(28, 0, true);
+    parts.push(local.buffer, nameBytes, data);
+    const entry = new DataView(new ArrayBuffer(46));
+    entry.setUint32(0, 0x02014b50, true); entry.setUint16(4, 20, true); entry.setUint16(6, 20, true); entry.setUint16(8, 0x0800, true); entry.setUint16(10, 0, true);
+    entry.setUint16(12, dosTime, true); entry.setUint16(14, dosDate, true); entry.setUint32(16, crc, true);
+    entry.setUint32(20, data.length, true); entry.setUint32(24, data.length, true); entry.setUint16(28, nameBytes.length, true);
+    entry.setUint32(42, offset, true);
+    central.push(entry.buffer, nameBytes);
+    offset += 30 + nameBytes.length + data.length;
+  }
+  const centralSize = central.reduce((sum, part) => sum + part.byteLength, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, centralSize, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end.buffer], { type: 'application/zip' });
+}
+const plainValue = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') return typeof value.toDate === 'function' ? value.toDate().toISOString() : JSON.stringify(value);
+  return String(value);
+};
+document.querySelector('#backup-zip').addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  if (!confirm('Download a data pack that contains private records? Keep the file safe.')) return;
+  const request = schoolRequest;
+  const button = document.querySelector('#backup-zip');
+  tools.busy = true;
+  button.disabled = true;
+  const files = [];
+  const notRead = [];
+  try {
+    let done = 0;
+    for (let start = 0; start < BACKUP_COLLECTIONS.length; start += 5) {
+      const group = BACKUP_COLLECTIONS.slice(start, start + 5);
+      const results = await Promise.allSettled(group.map((name) => tools.list(name)));
+      results.forEach((result, index) => {
+        if (result.status !== 'fulfilled') { notRead.push(group[index]); return; }
+        const docs = result.value.docs;
+        const columns = [...new Set(docs.flatMap((record) => Object.keys(record.data())))].sort();
+        files.push([group[index] + '.csv', '﻿' + [['id', ...columns], ...docs.map((record) => [record.id, ...columns.map((key) => plainValue(record.data()[key]))])]
+          .map((row) => row.map(csvCell).join(',')).join('\r\n')]);
+      });
+      done += group.length;
+      if (request === schoolRequest) backupStatus.textContent = 'Reading ' + done + ' of ' + BACKUP_COLLECTIONS.length + '.';
+    }
+    files.unshift(['README.txt', 'AZIZ school data pack for ' + SCHOOL_ID + ', made on ' + new Date().toISOString() + '.\r\nOne CSV file per list. The first column is the record id. Open with Excel or Google Sheets.\r\n'
+      + (notRead.length ? 'Could not be read: ' + notRead.join(', ') + '.\r\n' : '')]);
+    const url = URL.createObjectURL(buildZip(files));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'school-data-pack-' + localToday() + '.zip';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await tools.log('bulk', 'backup', 'data pack', files.length - 1 + ' files');
+    if (request === schoolRequest) backupStatus.textContent = 'Data pack downloaded (' + (files.length - 1) + ' files).' + (notRead.length ? ' Could not read: ' + notRead.join(', ') + '.' : '');
+  } catch {
+    if (request === schoolRequest) backupStatus.textContent = 'The data pack did not finish. Try again.';
+  } finally {
+    tools.busy = false;
+    button.disabled = false;
+  }
+});
 
 backupRun.addEventListener('click', async () => {
   const tools = academic;
@@ -5910,6 +6043,12 @@ onAuthStateChanged(auth, async (user) => {
     if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
       status.hidden = true;
       schoolStatus.hidden = true;
+      const portalFlags = await (async () => { try { const found = await getDocFromServer(doc(getFirestore(app), 'platformConfig', 'flags')); return found.exists() ? found.data() : {}; } catch { return {}; } })();
+      if (portalFlags.portal === false) {
+        status.hidden = false;
+        status.textContent = 'The parent and student portal is switched off for now. Please contact the school.';
+        return;
+      }
       await loadPortal({ schoolRef, user, doc, collection, getDocFromServer, getDocsFromServer, query, where }, request);
       return;
     }
@@ -5936,7 +6075,7 @@ onAuthStateChanged(auth, async (user) => {
     const staff = collection(schoolRef, 'staff');
     staffDirectory = {
       list: () => getDocsFromServer(staff),
-      save: (id, profile) => id ? updateDoc(doc(staff, id), profile) : addDoc(staff, profile),
+      save: (id, profile) => (id ? updateDoc(doc(staff, id), profile) : addDoc(staff, profile).then((ref) => { document.dispatchEvent(new Event('usage-changed')); return ref; })),
     };
     staffStatus.textContent = 'Loading staff profiles.';
     await loadStaff(staffDirectory, request);
@@ -5953,6 +6092,7 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: async (name, id, data) => {
         await setDoc(doc(schoolRef, name, id), data);
+        if (name === 'students') document.dispatchEvent(new Event('usage-changed'));
         const voided = name === 'payments' && data.voided === true;
         await log(voided ? 'void' : 'save', name, id, name === 'payments' ? 'Rs ' + data.amount : '');
       },

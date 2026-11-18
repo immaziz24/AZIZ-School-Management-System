@@ -14,7 +14,24 @@ service cloud.firestore {
     // A school whose billing record says suspended or cancelled is read-only for its owner.
     function schoolSuspended(schoolId) {
       let billing = /databases/$(database)/documents/schools/$(schoolId)/billing/main;
-      return exists(billing) && get(billing).data.status in ['suspended', 'cancelled'];
+      return exists(billing) && billingBlocked(get(billing).data);
+    }
+
+    // A school is read-only when it is suspended or cancelled, or when its free trial ended and the grace
+    // period (graceDays, none if unset) has run out. The platform administrator can reactivate it any time.
+    function billingBlocked(b) {
+      return b.status in ['suspended', 'cancelled']
+        || (b.status == 'trial' && b.keys().hasAny(['trialEnds'])
+          && request.time > b.trialEnds + duration.value(b.get('graceDays', 0), 'd'));
+    }
+
+    // Plan limits. usageKey is 'students' or 'staff'; the school may add another only while its last
+    // recorded count (usage/main) is below the plan limit. No plan, no limit set or no count yet means no cap.
+    function withinLimit(schoolId, usageKey, limitKey) {
+      let billing = /databases/$(database)/documents/schools/$(schoolId)/billing/main;
+      let usage = /databases/$(database)/documents/schools/$(schoolId)/usage/main;
+      return !exists(billing) || !get(billing).data.keys().hasAny([limitKey]) || !exists(usage)
+        || get(usage).data[usageKey] < get(billing).data[limitKey];
     }
 
     function isOwnerRole(schoolId) {
@@ -75,6 +92,7 @@ service cloud.firestore {
       allow get, list: if request.auth != null && request.auth.token.email_verified == true
         && resource.data.email == request.auth.token.email.lower();
       allow create: if request.auth != null && isSchoolOwner(request.resource.data.schoolId)
+        && withinLimit(request.resource.data.schoolId, 'staff', 'staffLimit')
         && inviteId.matches('[A-Za-z0-9-]{1,30}') && validInvite(request.resource.data)
         && request.resource.data.status == 'pending' && request.resource.data.createdBy == request.auth.uid;
       allow update: if request.auth != null && validInvite(request.resource.data)
@@ -150,7 +168,9 @@ service cloud.firestore {
 
       match /staff/{staffId} {
         allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if request.auth != null && isSchoolOwner(schoolId) && withinLimit(schoolId, 'staff', 'staffLimit')
+          && validStaff(request.resource.data);
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
           && validStaff(request.resource.data);
       }
 
@@ -703,7 +723,8 @@ service cloud.firestore {
       match /domainRequests/{requestId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
         allow create: if request.auth != null && isSchoolOwner(schoolId) && requestId.matches('[A-Za-z0-9-]{1,30}')
-          && validDomainRequest(request.resource.data) && request.resource.data.status == 'requested';
+          && validDomainRequest(request.resource.data) && request.resource.data.status == 'requested'
+          && !request.resource.data.keys().hasAny(['dnsTarget', 'checkedOn', 'ssl']);
         allow update: if isPlatformAdmin() && validDomainRequest(request.resource.data)
           && request.resource.data.domain == resource.data.domain;
       }
@@ -1123,6 +1144,7 @@ service cloud.firestore {
         allow get: if request.auth != null && classTeacherOfStudent(studentId);
         allow create: if request.auth != null && isSchoolOwner(schoolId)
           && studentId.matches('[a-z0-9-]{1,20}') && validStudentRecord(request.resource.data)
+          && withinLimit(schoolId, 'students', 'studentLimit')
           && request.resource.data.admissionNo.lower() == studentId
           && request.resource.data.status == 'active';
         allow update: if request.auth != null && isSchoolOwner(schoolId)
@@ -1663,8 +1685,11 @@ service cloud.firestore {
     }
 
     function validDomainRequest(item) {
-      return item.keys().hasOnly(['domain', 'status', 'note', 'createdOn'])
+      return item.keys().hasOnly(['domain', 'status', 'note', 'createdOn', 'dnsTarget', 'checkedOn', 'ssl'])
         && item.keys().hasAll(['domain', 'status', 'createdOn'])
+        && optionalText(item, 'dnsTarget', 100)
+        && (!item.keys().hasAny(['checkedOn']) || dateText(item.checkedOn))
+        && (!item.keys().hasAny(['ssl']) || item.ssl in ['pending', 'active'])
         && item.domain is string && item.domain.matches('[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?[.][a-z]{2,20}')
         && item.status in ['requested', 'dns-pending', 'verified', 'rejected']
         && dateText(item.createdOn)

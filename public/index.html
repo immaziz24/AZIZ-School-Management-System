@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-32">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-33">
 </head>
 <body>
   <main>
@@ -562,6 +562,9 @@
         <p>Downloads a copy of the school's records as one file. It contains private student, family and staff details: keep it somewhere safe and do not share it.</p>
         <p id="backup-status" role="status"></p>
         <button type="button" id="backup-run">Download backup</button>
+        <h4>School data pack</h4>
+        <p>Downloads every list as its own spreadsheet (CSV) file, packed in one ZIP file you can open in Excel. Use it when you leave AZIZ or want your own copy. It also works after a school is cancelled.</p>
+        <button type="button" id="backup-zip">Download data pack (ZIP)</button>
       </section>
       <section id="routes" aria-labelledby="routes-title" hidden>
         <h3 id="routes-title">Transport Routes</h3>
@@ -1261,14 +1264,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-32');
-      await import('./i18n.mjs?v=batch-32');
+      await import('./ui.mjs?v=batch-33');
+      await import('./i18n.mjs?v=batch-33');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-32');
-      await import('./platform.mjs?v=batch-32');
+      await import('./sign-in.mjs?v=batch-33');
+      await import('./platform.mjs?v=batch-33');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

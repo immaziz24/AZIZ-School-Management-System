@@ -71,7 +71,7 @@ function prepare(dash, label) {
   let queued = false;
   const rebuild = () => {
     queued = false;
-    const modules = [...dash.querySelectorAll(':scope > .mod')].filter((m) => !m.hidden && titleOf(m));
+    const modules = [...dash.querySelectorAll(':scope > .mod')].filter((m) => !m.hidden && !m.hasAttribute('data-off') && titleOf(m));
     const openNow = dash.querySelector(':scope > .mod-open');
     if (openNow && openNow.hidden) close();
     const words = search.value.trim().toLowerCase();
@@ -93,7 +93,7 @@ function prepare(dash, label) {
   };
   const schedule = () => { if (!queued) { queued = true; requestAnimationFrame(rebuild); } };
   search.addEventListener('input', rebuild);
-  new MutationObserver(schedule).observe(dash, { attributes: true, attributeFilter: ['hidden'], subtree: true });
+  new MutationObserver(schedule).observe(dash, { attributes: true, attributeFilter: ['hidden', 'data-off'], subtree: true });
   schedule();
   dash.addEventListener('ui-open', (e) => { const target = dash.querySelector(':scope > #' + e.detail); if (target) open(target); });
 }
