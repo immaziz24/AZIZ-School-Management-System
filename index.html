@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-42">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-43">
 </head>
 <body>
   <main>
@@ -1343,14 +1343,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-42');
-      await import('./i18n.mjs?v=batch-42');
+      await import('./ui.mjs?v=batch-43');
+      await import('./i18n.mjs?v=batch-43');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-42');
-      await import('./platform.mjs?v=batch-42');
+      await import('./sign-in.mjs?v=batch-43');
+      await import('./platform.mjs?v=batch-43');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
