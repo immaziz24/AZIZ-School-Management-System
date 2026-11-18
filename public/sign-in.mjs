@@ -220,8 +220,9 @@ async function loadAcademic(request) {
     try { photoMap = new Map((await tools.list('studentPhotos')).docs.map((record) => [record.id, record.data().photo])); } catch { photoMap = new Map(); }
     if (request !== schoolRequest) return;
     studentRecords = studentDocs.docs;
-    renderStudents();
     placementData = { years: years.docs, classes: classes.docs, sections: sections.docs, enrollments: enrollments.docs };
+    fillStudentFilters();
+    renderStudents();
     renderPlacements();
     examData = { years: years.docs, classes: classes.docs, subjects: subjects.docs, mappings: mappings.docs, exams: exams.docs };
     renderExams();
@@ -359,6 +360,9 @@ const studentSection = document.querySelector('#student-roster');
 const studentStatus = document.querySelector('#student-status');
 const studentList = document.querySelector('#student-list');
 const studentSearch = document.querySelector('#student-search');
+const studentClassFilter = document.querySelector('#student-class-filter');
+const studentSectionFilter = document.querySelector('#student-section-filter');
+const studentCount = document.querySelector('#student-count');
 const studentForm = document.querySelector('#student-form');
 const studentSave = studentForm.querySelector('[type="submit"]');
 const studentCancel = studentForm.querySelector('[type="reset"]');
@@ -433,17 +437,64 @@ async function showStudentHistory(studentId, name) {
   }
 }
 
+// The class a student sits in this year (the active academic year), used by the filters below.
+function activePlacements() {
+  const year = placementData.years.find((record) => record.data().status === 'active');
+  const map = new Map();
+  if (year) for (const record of placementData.enrollments) if (record.data().yearId === year.id) map.set(record.data().studentId, record.data());
+  return { year, map };
+}
+function fillSectionFilter() {
+  const keep = studentSectionFilter.value;
+  studentSectionFilter.replaceChildren(new Option('All sections', ''));
+  for (const record of [...placementData.sections].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (record.data().classId === studentClassFilter.value) studentSectionFilter.append(new Option('Section ' + record.data().name, record.id));
+  }
+  studentSectionFilter.value = [...studentSectionFilter.options].some((option) => option.value === keep) ? keep : '';
+}
+function fillStudentFilters() {
+  const keep = studentClassFilter.value;
+  const classes = [...placementData.classes].sort((a, b) => a.data().order - b.data().order);
+  studentClassFilter.replaceChildren();
+  for (const record of classes) studentClassFilter.append(new Option(record.data().name, record.id));
+  studentClassFilter.append(new Option('All classes (first 100)', 'all'), new Option('Not placed in a class', 'none'));
+  studentClassFilter.value = [...studentClassFilter.options].some((option) => option.value === keep) ? keep : (classes[0]?.id ?? 'all');
+  fillSectionFilter();
+}
+studentClassFilter.addEventListener('change', () => { fillSectionFilter(); studentStatus.textContent = ''; renderStudents(); renderPlacements(); });
+studentSectionFilter.addEventListener('change', () => { studentStatus.textContent = ''; renderStudents(); renderPlacements(); });
+
 function renderStudents() {
   studentList.replaceChildren();
   const term = studentSearch.value.trim().toLowerCase();
-  const matches = studentRecords
-    .filter((record) => !term || (record.data().name + ' ' + record.data().admissionNo).toLowerCase().includes(term))
-    .sort((a, b) => a.data().name.localeCompare(b.data().name));
+  const { year, map } = activePlacements();
+  const classFilter = studentClassFilter.value;
+  const sectionFilter = studentSectionFilter.value;
+  const className = (id) => placementData.classes.find((record) => record.id === id)?.data().name ?? id;
+  const sectionName = (id) => placementData.sections.find((record) => record.id === id)?.data().name ?? '';
+  const wide = Boolean(term) || classFilter === 'all' || classFilter === 'none';
+  const all = studentRecords.filter((record) => {
+    const item = record.data();
+    if (term) return (item.name + ' ' + item.admissionNo).toLowerCase().includes(term);
+    const placed = map.get(record.id);
+    if (classFilter === 'all') return true;
+    if (classFilter === 'none') return !placed;
+    return Boolean(placed) && placed.classId === classFilter && (!sectionFilter || placed.sectionId === sectionFilter);
+  });
+  all.sort(wide ? (a, b) => a.data().name.localeCompare(b.data().name)
+    : (a, b) => (map.get(a.id).sectionId.localeCompare(map.get(b.id).sectionId)) || map.get(a.id).rollNo - map.get(b.id).rollNo);
+  const matches = wide ? all.slice(0, 100) : all;
+  studentCount.textContent = studentRecords.length
+    ? 'Showing ' + matches.length + (all.length > matches.length ? ' of ' + all.length : '') + ' student(s)'
+      + (term ? ' matching your search (all classes).' : classFilter === 'all' || classFilter === 'none' ? '.' : ' in this class.')
+    : '';
   for (const record of matches) {
     const student = record.data();
+    const placed = map.get(record.id);
     const row = document.createElement('li');
     if (photoMap.has(record.id)) { const thumb = document.createElement('img'); thumb.className = 'thumb'; thumb.alt = ''; thumb.src = photoMap.get(record.id); row.append(thumb); }
-    row.append(student.name + ' - ' + student.admissionNo + ' - ' + student.guardianName
+    row.append((placed ? className(placed.classId) + ' ' + sectionName(placed.sectionId) + ', roll ' + placed.rollNo + ' - ' : 'Not placed - ')
+      + student.name + ' - ' + student.admissionNo + ' - ' + student.guardianName
       + (student.guardianPhone ? ' (' + student.guardianPhone + ')' : '') + ' - ' + student.status + ' ');
     const edit = document.createElement('button');
     edit.type = 'button';
@@ -475,10 +526,24 @@ function renderStudents() {
       'Student marked ' + next + '.', studentStatus,
     ));
     row.append(edit, toggle, history);
+    if (year && student.status === 'active') {
+      const move = document.createElement('button');
+      move.type = 'button';
+      move.textContent = (placed ? 'Change class of ' : 'Place ') + student.name;
+      move.addEventListener('click', () => {
+        placementForm.elements.namedItem('yearId').value = year.id;
+        placementForm.elements.namedItem('studentId').value = record.id;
+        if (placed) placementForm.elements.namedItem('sectionId').value = placed.sectionId;
+        placementForm.elements.namedItem('rollNo').value = placed ? placed.rollNo : '';
+        placementStatus.textContent = 'Choose the class, section and roll number below, then press Place student.';
+        placementForm.scrollIntoView({ block: 'center' });
+      });
+      row.append(move);
+    }
     studentList.append(row);
   }
   if (!studentRecords.length) studentStatus.textContent = studentStatus.textContent || 'No students yet.';
-  else if (!matches.length) studentStatus.textContent = 'No students match your search.';
+  else if (!matches.length) studentStatus.textContent = 'No students found here. Pick another class or use the search box.';
 }
 
 studentSearch.addEventListener('input', () => {
@@ -551,8 +616,12 @@ function renderPlacements() {
   const className = (id) => classes.find((record) => record.id === id)?.data().name ?? id;
   const sectionLabel = (record) => className(record.data().classId) + ' - ' + record.data().name;
   placementList.replaceChildren();
-  const sorted = [...enrollments].sort((a, b) => (a.data().yearId + a.data().sectionId).localeCompare(
-    b.data().yearId + b.data().sectionId) || a.data().rollNo - b.data().rollNo);
+  const classFilter = studentClassFilter.value;
+  const sectionFilter = studentSectionFilter.value;
+  const sorted = [...enrollments].filter((record) => classFilter === 'all' || (classFilter !== 'none'
+    && record.data().classId === classFilter && (!sectionFilter || record.data().sectionId === sectionFilter)))
+    .sort((a, b) => (a.data().yearId + a.data().sectionId).localeCompare(
+      b.data().yearId + b.data().sectionId) || a.data().rollNo - b.data().rollNo).slice(0, 100);
   for (const record of sorted) {
     const item = record.data();
     const student = studentRecords.find((candidate) => candidate.id === item.studentId)?.data();
@@ -3765,12 +3834,46 @@ document.addEventListener('mod-open', (event) => {
   if (api?.dirty) api.render();
 });
 
+// Owner can change any saved record in these lists. Records that keep their number (like a payment receipt)
+// are not here: the rules only allow a payment to be voided, never edited.
+const NO_EDIT = new Set(['messages', 'enquiries', 'eventRegistrations', 'activityMembers']);
+const KEEP_ID = new Set(['routes', 'activities', 'inventory', 'expenses', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound',
+  'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'alumni', 'ptmSlots', 'storageRecords']);
 function ownerList(cfg) {
   const section = document.querySelector('#' + cfg.id);
   const status = document.querySelector('#' + cfg.id + '-status');
   const form = document.querySelector('#' + cfg.id + '-form');
   const list = document.querySelector('#' + cfg.id + '-list');
   const api = { cfg, items: [] };
+  let editing = null;
+  const submitButton = form?.querySelector('button[type="submit"], button:not([type])');
+  const submitLabel = submitButton?.textContent;
+  const cancelEdit = document.createElement('button');
+  cancelEdit.type = 'button';
+  cancelEdit.textContent = 'Cancel edit';
+  cancelEdit.hidden = true;
+  submitButton?.after(cancelEdit);
+  function stopEdit() {
+    editing = null;
+    cancelEdit.hidden = true;
+    if (submitButton) submitButton.textContent = submitLabel;
+    form?.reset();
+  }
+  cancelEdit.addEventListener('click', () => { stopEdit(); status.textContent = ''; });
+  function startEdit(record) {
+    editing = record;
+    const data = record.data();
+    form.reset();
+    for (const field of form.elements) {
+      if (!field.name || !(field.name in data)) continue;
+      if (field.type === 'checkbox') field.checked = Boolean(data[field.name]);
+      else field.value = String(data[field.name]);
+    }
+    if (submitButton) submitButton.textContent = 'Save changes';
+    cancelEdit.hidden = false;
+    status.textContent = 'Editing this record. Change what you need and press Save changes.';
+    form.scrollIntoView({ block: 'center' });
+  }
 
   async function act(action, message, question) {
     const tools = academic;
@@ -3802,6 +3905,13 @@ function ownerList(cfg) {
       const item = document.createElement('li');
       item.textContent = cfg.line(record.data(), record) + ' ';
       for (const extra of cfg.extra?.(record, act) ?? []) item.append(extra, ' ');
+      if (form && !NO_EDIT.has(cfg.collection) && !cfg.noEdit) {
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.textContent = 'Edit';
+        editButton.addEventListener('click', () => startEdit(record));
+        item.append(editButton, ' ');
+      }
       if (!cfg.noRemove && (!cfg.canRemove || cfg.canRemove(record))) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -3836,14 +3946,24 @@ function ownerList(cfg) {
     status.textContent = '';
     list.replaceChildren();
     api.items = [];
-    form?.reset();
+    stopEdit();
   };
 
   form?.addEventListener('submit', (event) => {
     event.preventDefault();
-    const built = cfg.build(new FormData(form), api.items);
+    const built = cfg.build(new FormData(form), editing ? api.items.filter((record) => record.id !== editing.id) : api.items);
     if (built.error) {
       status.textContent = built.error;
+      return;
+    }
+    if (editing) {
+      const old = editing;
+      const id = KEEP_ID.has(cfg.collection) ? old.id : built.id;
+      act(async () => {
+        if (id === old.id) await academic.save(cfg.collection, id, built.data);
+        else await academic.commit([{ path: [cfg.collection, id], data: built.data }, { path: [cfg.collection, old.id], delete: true }]);
+        stopEdit();
+      }, 'Changes saved.');
       return;
     }
     act(async () => {

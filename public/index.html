@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-44">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-45">
 </head>
 <body>
   <main>
@@ -103,7 +103,10 @@
       <section id="student-roster" aria-labelledby="student-title" hidden>
         <h3 id="student-title">Students</h3>
         <p id="student-status" role="status"></p>
-        <p><label>Search students <input id="student-search" type="search" maxlength="120" placeholder="Name or admission number"></label></p>
+        <p><label>Class <select id="student-class-filter"></select></label>
+          <label>Section <select id="student-section-filter"></select></label></p>
+        <p id="student-count" role="status"></p>
+        <p><label>Search students (looks in all classes) <input id="student-search" type="search" maxlength="120" placeholder="Name or admission number"></label></p>
         <ul id="student-list"></ul>
         <h4 id="student-history-title" hidden>Change history</h4>
         <ul id="student-history" hidden></ul>
@@ -1343,14 +1346,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-44');
-      await import('./i18n.mjs?v=batch-44');
+      await import('./ui.mjs?v=batch-45');
+      await import('./i18n.mjs?v=batch-45');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-44');
-      await import('./platform.mjs?v=batch-44');
+      await import('./sign-in.mjs?v=batch-45');
+      await import('./platform.mjs?v=batch-45');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
