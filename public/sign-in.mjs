@@ -1572,8 +1572,8 @@ async function loadAttendanceClasses(request, schoolRef, uid) {
     attDate.value = today >= year.startDate && today <= year.endDate ? today : attDate.max;
     attPrev = { classId: attClass.value, date: attDate.value };
     await renderTeacherAttendance(request);
-  } catch {
-    if (request === schoolRequest) attMarkStatus.textContent = 'Could not load your class. Refresh to try again.';
+  } catch (error) {
+    if (request === schoolRequest) attMarkStatus.textContent = 'Could not load your class. Refresh to try again.' + (error?.code ? ' (' + error.code + ')' : '');
   }
 }
 
@@ -1652,8 +1652,8 @@ async function renderTeacherAttendance(request) {
     attSave.disabled = attAllPresent.disabled = !rows.length;
     updateAttendanceCounts();
     attMarkStatus.textContent = rows.length ? '' : 'No students have been placed in this class for this year yet.';
-  } catch {
-    if (!stale()) attMarkStatus.textContent = 'Could not load students. Try again.';
+  } catch (error) {
+    if (!stale()) attMarkStatus.textContent = 'Could not load students. Try again.' + (error?.code ? ' (' + error.code + ')' : '');
   }
 }
 
@@ -7051,6 +7051,7 @@ onAuthStateChanged(auth, async (user) => {
       status.hidden = true;
       schoolStatus.hidden = true;
       assignmentSummary.textContent = 'Loading assignment.';
+      let examsLoader = null;
       try {
         const assignment = await getDocFromServer(doc(schoolRef, 'teacherAssignments', user.uid));
         if (request !== schoolRequest) return;
@@ -7065,7 +7066,7 @@ onAuthStateChanged(auth, async (user) => {
             teacherMarks = { schoolRef, uid: user.uid, classId, subjectId, exams: [], busy: false };
             examMarksSection.hidden = false;
             examMarksStatus.textContent = 'Loading exams.';
-            await loadTeacherExams(request);
+            examsLoader = () => loadTeacherExams(request);
           } else {
             assignmentSummary.textContent += ' - ask the principal to save your assignment again to use the new marks screen.';
             saveMark = (mark) => setDoc(doc(assignment.ref, 'marks', mark.exam + '_' + mark.roll), {
@@ -7078,17 +7079,30 @@ onAuthStateChanged(auth, async (user) => {
         if (request === schoolRequest) assignmentSummary.textContent = 'Could not load your assignment.';
       }
       // A class teacher also gets the daily attendance sheet, with or without a subject assignment.
-      await loadAttendanceClasses(request, schoolRef, user.uid);
-      if (request === schoolRequest) await loadMyAttendance(request, schoolRef, user.uid);
-      if (request === schoolRequest) await loadMyLeave(request, schoolRef, user.uid);
-      if (request === schoolRequest) await loadTeacherNotices(request, schoolRef, user.uid);
-      if (request === schoolRequest) await loadTeacherHomework(request);
-      if (request === schoolRequest) await loadTeacherTimetable(request, schoolRef, user.uid);
-      if (request === schoolRequest) await loadTeacherCover(request, schoolRef, user.uid);
-      if (request === schoolRequest) await loadTeacherLessons(request);
-      if (request === schoolRequest) await loadTeacherSubmissions(request);
-      if (request === schoolRequest) await loadTeacherAssessments(request);
-      if (request === schoolRequest) await loadUpcomingEvents(schoolRef, teacherCalendarSection, teacherCalendarStatus, teacherCalendarList);
+      // Show every screen at once, then load them side by side. Before, each one waited for the one before it, so
+      // the tiles popped in one by one and a slow class sheet held everything else back. The daily attendance
+      // screen only appears for a class teacher, which one quick query tells us first.
+      const isClassTeacher = await getDocsFromServer(query(collection(schoolRef, 'classTeachers'), where('teacherUid', '==', user.uid)))
+        .then((found) => !found.empty).catch(() => false);
+      if (request !== schoolRequest) return;
+      for (const id of ['my-attendance', 'leave-request', 'teacher-homework', 'teacher-timetable', 'teacher-calendar', 'teacher-cover',
+        'teacher-lessons', 'teacher-notices', 'teacher-submissions', 'teacher-assessments']) document.querySelector('#' + id).hidden = false;
+      attMarkSection.hidden = !isClassTeacher;
+      if (isClassTeacher) attMarkStatus.textContent = 'Loading your class.';
+      await Promise.allSettled([
+        isClassTeacher ? loadAttendanceClasses(request, schoolRef, user.uid) : undefined,
+        examsLoader?.(),
+        loadMyAttendance(request, schoolRef, user.uid),
+        loadMyLeave(request, schoolRef, user.uid),
+        loadTeacherNotices(request, schoolRef, user.uid),
+        loadTeacherHomework(request),
+        loadTeacherTimetable(request, schoolRef, user.uid),
+        loadTeacherCover(request, schoolRef, user.uid),
+        loadTeacherLessons(request),
+        loadTeacherSubmissions(request),
+        loadTeacherAssessments(request),
+        loadUpcomingEvents(schoolRef, teacherCalendarSection, teacherCalendarStatus, teacherCalendarList),
+      ]);
       return;
     }
     if (membership.data()?.active === true && ['student', 'parent'].includes(membership.data().role)) {
