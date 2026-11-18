@@ -1128,7 +1128,7 @@ async function loadPortal(tools, request) {
       return;
     }
     portalRole = link.data().relation === 'student' ? 'student' : 'parent';
-    document.querySelector('#portal-title').textContent = portalRole === 'student' ? 'Student Portal' : 'Parent Portal';
+    applyPortalRole(portalRole);
     portalEmail.textContent = (portalRole === 'student' ? 'Student login: ' : 'Parent login: ') + user.email;
     const children = [link.data().studentId, ...(link.data().extraStudentIds ?? [])];
     const studentId = children.includes(portalChoice) ? portalChoice : children[0];
@@ -1166,6 +1166,11 @@ async function loadPortal(tools, request) {
     loadPortalEvents(tools, request, studentId);
     loadPortalCoursework(tools, request, studentId);
     loadPortalLeave(tools, request, studentId);
+    portalHome = { att: null, pending: null, avg: null, subjects: null, due: null, today: [], homework: [], upcoming: [], name: '', classId: '', section: '', roll: '', admissionNo: '', photo: '' };
+    renderPortalHome();
+    loadPortalHome(tools, request, studentId);
+    loadPortalProfile(tools, request, studentId);
+    loadPortalMaterials(tools, request, studentId);
     loadUpcomingEvents(tools.schoolRef, portalCalendarSection, portalCalendarStatus, portalCalendarList);
     const [student, exams] = await Promise.all([
       getDocFromServer(doc(schoolRef, 'students', studentId)),
@@ -1185,6 +1190,13 @@ async function loadPortal(tools, request) {
       .sort((a, b) => a.exam.yearId.localeCompare(b.exam.yearId) || a.subject.localeCompare(b.subject));
     portalStudent.textContent = student.exists() ? student.data().name + ' (' + student.data().admissionNo + ')' : '';
     portalLines = lines;
+    if (lines.length) {
+      const gotAll = lines.reduce((sum, line) => sum + line.mark.score, 0);
+      const maxAll = lines.reduce((sum, line) => sum + line.exam.maxMarks, 0);
+      portalHome.avg = maxAll ? Math.round(gotAll / maxAll * 1000) / 10 : null;
+      portalHome.subjects = new Set(lines.map((line) => line.subject)).size;
+      renderPortalHome();
+    }
     portalChosenExam = '';
     buildPortalExamPicker();
     portalStatus.textContent = lines.length ? '' : 'No results have been published yet.';
@@ -2452,6 +2464,7 @@ async function loadPortalFees(tools, request, studentId) {
     // The family cannot read academic years, so concessions are applied to the latest year only.
     const concessionTotal = concessionDocs.docs.reduce((sum, record) => sum + record.data().amount, 0);
     let concessionUsed = false;
+    let balanceTotal = 0;
     if (request !== schoolRequest) return;
     portalFeesSummary.replaceChildren();
     portalFeesBody.replaceChildren();
@@ -2465,6 +2478,7 @@ async function loadPortalFees(tools, request, studentId) {
       const due = gross - concession;
       const paid = paidList.filter((item) => item.yearId === placement.yearId && item.voided !== true)
         .reduce((sum, item) => sum + item.amount, 0);
+      balanceTotal += due - paid;
       listItem(portalFeesSummary, placement.yearId + ': due ' + rupees(due) + (concession ? ' (after concession ' + rupees(concession) + ')' : '') + ', paid ' + rupees(paid)
         + ', balance ' + rupees(due - paid)
         + (heads.length ? ' (' + heads.map((item) => item.name + ' ' + rupees(item.amount)).join(', ') + ')' : ''));
@@ -2474,6 +2488,8 @@ async function loadPortalFees(tools, request, studentId) {
         payment.voided === true ? 'Voided' : 'Paid']);
     }
     portalFeesStatus.textContent = placements.empty && payments.empty ? 'No fee records yet.' : '';
+    portalHome.due = Math.max(0, balanceTotal);
+    renderPortalHome();
   } catch {
     if (request === schoolRequest) portalFeesStatus.textContent = 'Could not load fees. Try again.';
   }
@@ -6956,6 +6972,14 @@ onAuthStateChanged(auth, async (user) => {
   }
   portalLeave = null;
   portalLeaveForm.reset();
+  teacherMaterialsSection.hidden = true;
+  teacherMaterialsList.replaceChildren();
+  for (const section of [portalProfileSection, portalIdSection, portalMaterialsSection]) section.hidden = true;
+  portalProfileList.replaceChildren();
+  portalMaterialsList.replaceChildren();
+  idCard.replaceChildren();
+  portalHome = { ...portalHome, att: null, pending: null, avg: null, subjects: null, due: null, today: [], homework: [], upcoming: [] };
+  portalStats.replaceChildren();
   leaveReviewSection.hidden = true;
   leaveReviewStatus.textContent = '';
   leaveReviewBody.replaceChildren();
@@ -7149,6 +7173,7 @@ onAuthStateChanged(auth, async (user) => {
         'teacher-lessons', 'teacher-notices', 'teacher-submissions', 'teacher-assessments']) document.querySelector('#' + id).hidden = false;
       attMarkSection.hidden = !isClassTeacher;
       teacherStudentLeaveSection.hidden = !isClassTeacher;
+      teacherMaterialsSection.hidden = !teacherHomework;
       if (isClassTeacher) attMarkStatus.textContent = 'Loading your class.';
       await Promise.allSettled([
         isClassTeacher ? loadAttendanceClasses(request, schoolRef, user.uid) : undefined,
@@ -7158,6 +7183,7 @@ onAuthStateChanged(auth, async (user) => {
         loadMyLeave(request, schoolRef, user.uid),
         loadTeacherNotices(request, schoolRef, user.uid),
         loadTeacherHomework(request),
+        loadTeacherMaterials(request),
         loadTeacherTimetable(request, schoolRef, user.uid),
         loadTeacherCover(request, schoolRef, user.uid),
         loadTeacherLessons(request),
@@ -7497,6 +7523,306 @@ portalLeaveForm.addEventListener('submit', async (event) => {
     portalLeaveStatus.textContent = 'Leave request sent. The class teacher will approve or reject it.';
   } catch (error) {
     if (request === schoolRequest) portalLeaveStatus.textContent = 'Could not send the leave request (' + (error?.code ?? 'error') + '). Try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+
+// ---------- Student and parent dashboards (batch 51) ----------
+// The two logins now look and work differently. The student sees their own school day: homework to hand in, results,
+// timetable, materials and an ID card. The parent sees the child from outside: fees, bus, meetings, messages and leave.
+const portalStats = document.querySelector('#portal-stats');
+const portalProfileSection = document.querySelector('#portal-profile');
+const portalProfileStatus = document.querySelector('#portal-profile-status');
+const portalProfileList = document.querySelector('#portal-profile-list');
+const portalIdSection = document.querySelector('#portal-idcard');
+const portalIdStatus = document.querySelector('#portal-idcard-status');
+const idCard = document.querySelector('#idcard');
+const portalMaterialsSection = document.querySelector('#portal-materials');
+const portalMaterialsStatus = document.querySelector('#portal-materials-status');
+const portalMaterialsList = document.querySelector('#portal-materials-list');
+const teacherMaterialsSection = document.querySelector('#teacher-materials');
+const teacherMaterialsStatus = document.querySelector('#teacher-materials-status');
+const teacherMaterialsList = document.querySelector('#teacher-materials-list');
+const materialsForm = document.querySelector('#materials-form');
+let portalHome = { att: null, pending: null, avg: null, subjects: null, due: null, today: [], homework: [], upcoming: [], name: '', classId: '', section: '', roll: '', admissionNo: '', photo: '' };
+
+const PORTAL_PLAN = {
+  student: {
+    title: 'Student Dashboard', tagline: 'Learn \u2022 Track \u2022 Achieve \u2022 All in One Place',
+    order: ['portal-profile', 'portal-attendance', 'portal-timetable', 'portal-homework', 'portal-submit', 'portal-results', 'portal-assessments',
+      'portal-materials', 'portal-notices', 'portal-calendar', 'portal-events', 'portal-leave', 'portal-life', 'portal-idcard'],
+    names: { 'portal-profile': 'My Profile', 'portal-attendance': 'My Attendance', 'portal-timetable': 'My Timetable', 'portal-homework': 'Homework & Assignments',
+      'portal-submit': 'Submit Homework', 'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-materials': 'Study Materials',
+      'portal-notices': 'Notices & Notifications', 'portal-calendar': 'School Calendar', 'portal-events': 'School Events', 'portal-leave': 'Apply for Leave',
+      'portal-life': 'My Bus & Activities', 'portal-idcard': 'Digital ID Card' },
+    quick: [['Homework', 'portal-homework'], ['Exams & Results', 'portal-results'], ['My Timetable', 'portal-timetable'], ['Study Materials', 'portal-materials']],
+  },
+  parent: {
+    title: 'Parent Dashboard', tagline: 'Stay Connected \u2022 Monitor Progress \u2022 Support Your Child',
+    order: ['portal-profile', 'portal-attendance', 'portal-homework', 'portal-timetable', 'portal-results', 'portal-assessments', 'portal-fees',
+      'portal-materials', 'portal-life', 'portal-leave', 'portal-messages', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
+    names: { 'portal-profile': 'My Child', 'portal-attendance': 'Attendance', 'portal-homework': 'Homework & Assignments', 'portal-timetable': 'Timetable',
+      'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-fees': 'Fees & Payments', 'portal-materials': 'Study Materials',
+      'portal-life': 'Bus & Route', 'portal-leave': 'Leave Application', 'portal-messages': 'Messages & Communication', 'portal-ptm': 'Parent-Teacher Meetings',
+      'portal-notices': 'Notices', 'portal-calendar': 'School Calendar', 'portal-events': 'School Events' },
+    quick: [['Exams & Results', 'portal-results'], ['Fees & Payments', 'portal-fees'], ['Bus & Route', 'portal-life'], ['Apply for Leave', 'portal-leave']],
+  },
+};
+
+function applyPortalRole(role) {
+  const plan = PORTAL_PLAN[role];
+  portalDashboard.dataset.role = role;
+  document.querySelector('#portal-title').textContent = plan.title;
+  document.querySelector('#portal-tagline').textContent = plan.tagline;
+  for (const [id, name] of Object.entries(plan.names)) {
+    const heading = document.querySelector('#' + id + ' > h3');
+    if (heading) heading.textContent = name;
+  }
+  // The sections that belong to this role come first, in this role's order; the rest follow.
+  for (const id of plan.order) {
+    const section = document.querySelector('#' + id);
+    if (section) portalDashboard.append(section);
+  }
+  const quick = document.querySelector('#portal-quick');
+  quick.replaceChildren();
+  for (const [label, id] of plan.quick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', () => portalDashboard.dispatchEvent(new CustomEvent('ui-open', { detail: id })));
+    quick.append(button);
+  }
+}
+
+const prettyClass = (id) => id ? id.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase()) : '';
+
+function renderPortalHome() {
+  const h = portalHome;
+  const role = portalRole;
+  const first = (h.name || '').split(' ')[0];
+  document.querySelector('#portal-hello').textContent = role === 'student'
+    ? 'Welcome back' + (first ? ', ' + first : '') + '!'
+    : 'Welcome back!' + (h.name ? ' Here is how ' + first + ' is doing.' : '');
+  document.querySelector('#portal-date').textContent = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const card = document.querySelector('#portal-childcard');
+  card.replaceChildren();
+  if (h.name) {
+    if (h.photo) { const img = document.createElement('img'); img.alt = ''; img.src = h.photo; card.append(img); }
+    const text = document.createElement('div');
+    for (const [line, strong] of [[h.name, true], [[prettyClass(h.classId), h.section ? 'Section ' + h.section.toUpperCase() : '', h.roll ? 'Roll ' + h.roll : ''].filter(Boolean).join(' | '), false],
+      ['Admission No: ' + h.admissionNo, false]]) {
+      if (!line) continue;
+      const p = document.createElement('p');
+      if (strong) { const b = document.createElement('strong'); b.textContent = line; p.append(b); } else p.textContent = line;
+      text.append(p);
+    }
+    card.append(text);
+  }
+  const money = (n) => 'Rs ' + n.toLocaleString('en-IN');
+  const cards = role === 'student'
+    ? [[h.att === null ? '-' : h.att + '%', 'Attendance', 'portal-attendance'], [h.pending === null ? '-' : String(h.pending), 'Pending homework', 'portal-submit'],
+      [h.avg === null ? '-' : h.avg + '%', 'Average score', 'portal-results'], [h.subjects === null ? '-' : String(h.subjects), 'Subjects with results', 'portal-results']]
+    : [[h.att === null ? '-' : h.att + '%', 'Attendance', 'portal-attendance'], [h.pending === null ? '-' : String(h.pending), 'Homework not yet submitted', 'portal-homework'],
+      [h.upcoming.length ? String(h.upcoming.length) : '0', 'Upcoming dates', 'portal-calendar'], [h.due === null ? '-' : money(h.due), 'Fees due', 'portal-fees']];
+  portalStats.replaceChildren();
+  for (const [value, label, target] of cards) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    const strong = document.createElement('strong');
+    strong.textContent = value;
+    const span = document.createElement('span');
+    span.textContent = label;
+    button.append(strong, span);
+    button.addEventListener('click', () => portalDashboard.dispatchEvent(new CustomEvent('ui-open', { detail: target })));
+    portalStats.append(button);
+  }
+  const fill = (id, items, empty) => {
+    const list = document.querySelector(id);
+    list.replaceChildren();
+    for (const text of (items.length ? items : [empty])) { const li = document.createElement('li'); li.textContent = text; list.append(li); }
+  };
+  fill('#glance-timetable', h.today, 'No periods set for today.');
+  fill('#glance-homework', h.homework, 'No homework yet.');
+  fill('#glance-upcoming', h.upcoming, 'Nothing coming up.');
+}
+
+// One set of quick reads for the home panel. Each part fails on its own, so one slow or blocked read never blanks the rest.
+async function loadPortalHome(tools, request, studentId) {
+  const { schoolRef, collection, doc, getDocsFromServer, getDocFromServer, query, where } = tools;
+  const safe = (promise, fallback) => promise.catch(() => fallback);
+  const [attendance, placements, submitted, calendar, student, photo] = await Promise.all([
+    safe(getDocsFromServer(query(collection(schoolRef, 'attendance'), where('studentId', '==', studentId))), { docs: [] }),
+    safe(getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId))), { docs: [] }),
+    safe(getDocsFromServer(query(collection(schoolRef, 'submissions'), where('studentId', '==', studentId))), { docs: [] }),
+    safe(getDocsFromServer(collection(schoolRef, 'calendar')), { docs: [] }),
+    safe(getDocFromServer(doc(schoolRef, 'students', studentId)), null),
+    safe(getDocFromServer(doc(schoolRef, 'studentPhotos', studentId)), null)]);
+  if (request !== schoolRequest) return;
+  const marks = attendance.docs.map((record) => record.data());
+  const counted = marks.filter((mark) => mark.status !== 'leave');
+  portalHome.att = counted.length ? Math.round(counted.filter((mark) => mark.status !== 'absent').length / counted.length * 1000) / 10 : null;
+  const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+  if (student?.exists()) { portalHome.name = student.data().name; portalHome.admissionNo = student.data().admissionNo; }
+  if (photo?.exists()) portalHome.photo = photo.data().photo;
+  if (latest) { portalHome.classId = latest.classId; portalHome.section = latest.sectionId ?? ''; portalHome.roll = latest.rollNo ?? ''; }
+  const today = localToday();
+  portalHome.upcoming = calendar.docs.map((record) => record.data()).filter((item) => item.date >= today)
+    .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 4).map(eventText);
+  if (latest) {
+    const [workDocs, slots] = await Promise.all([
+      safe(getDocsFromServer(query(collection(schoolRef, 'homework'), where('classId', '==', latest.classId))), { docs: [] }),
+      safe(readBySlot(schoolRef, 'timetable', [latest.classId]), [])]);
+    if (request !== schoolRequest) return;
+    const done = new Set(submitted.docs.map((record) => record.data().homeworkId));
+    const work = workDocs.docs.map((record) => ({ ...record.data(), id: record.id })).filter((item) => item.dueDate >= today);
+    portalHome.pending = work.filter((item) => !done.has(item.id)).length;
+    portalHome.homework = [...work].sort(dueFirst).slice(0, 3).map((item) => item.subject + ': ' + item.title + ' (due ' + item.dueDate + ')');
+    portalHome.today = slots.filter((slot) => slot.day === (new Date().getDay() || 7)).sort(slotOrder)
+      .map((slot) => slot.start + ' ' + slot.subject + (slot.teacher ? ' - ' + slot.teacher : ''));
+  }
+  renderPortalHome();
+}
+
+// My Profile (student) or My Child (parent).
+async function loadPortalProfile(tools, request, studentId) {
+  const { schoolRef, collection, doc, getDocsFromServer, getDocFromServer, query, where } = tools;
+  portalProfileSection.hidden = false;
+  portalProfileStatus.textContent = 'Loading.';
+  try {
+    const [student, placements, riders, photo, logo] = await Promise.all([
+      getDocFromServer(doc(schoolRef, 'students', studentId)),
+      getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId))),
+      getDocsFromServer(query(collection(schoolRef, 'transportRiders'), where('studentId', '==', studentId))).catch(() => ({ docs: [] })),
+      getDocFromServer(doc(schoolRef, 'studentPhotos', studentId)).catch(() => null),
+      getDocFromServer(doc(schoolRef, 'settings', 'branding')).catch(() => null)]);
+    if (request !== schoolRequest) return;
+    if (!student.exists()) { portalProfileStatus.textContent = 'No profile found.'; return; }
+    const data = student.data();
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    const rows = [['Name', data.name], ['Admission No', data.admissionNo], ['Class', latest ? prettyClass(latest.classId) + (latest.sectionId ? ' - Section ' + latest.sectionId.toUpperCase() : '') : ''],
+      ['Roll No', latest?.rollNo ?? ''], ['Date of birth', data.dob ?? ''], ['Gender', data.gender ?? ''], ['Parent / guardian', data.guardianName],
+      ['Mother', data.motherName ?? ''], ['Contact phone', data.guardianPhone], ['Emergency phone', data.emergencyPhone ?? ''], ['Address', data.address ?? ''],
+      ['Bus route', riders.docs.map((record) => record.data().routeId).join(', ')], ['Status', data.status === 'active' ? 'Active' : 'Inactive']];
+    portalProfileList.replaceChildren();
+    for (const [label, value] of rows) if (value !== '' && value !== undefined) listItem(portalProfileList, label + ': ' + value);
+    portalProfileStatus.textContent = '';
+    portalHome.photo = photo?.exists() ? photo.data().photo : portalHome.photo;
+    renderPortalHome();
+    if (portalRole === 'student') {
+      portalIdSection.hidden = false;
+      idCard.replaceChildren();
+      const school = document.querySelector('#portal-head p:not([id])')?.textContent || 'School';
+      if (logo?.exists()) { const mark = document.createElement('img'); mark.alt = 'School logo'; mark.src = logo.data().logo; idCard.append(mark); }
+      const title = document.createElement('p');
+      const strong = document.createElement('strong');
+      strong.textContent = school + ' - Student ID Card';
+      title.append(strong);
+      idCard.append(title);
+      if (photo?.exists()) { const img = document.createElement('img'); img.alt = 'Student photo'; img.src = photo.data().photo; idCard.append(img); }
+      for (const [label, value] of [['Name', data.name], ['Class', latest ? prettyClass(latest.classId) + (latest.sectionId ? ' ' + latest.sectionId.toUpperCase() : '') : ''],
+        ['Admission No', data.admissionNo], ['Guardian', data.guardianName], ['Phone', data.guardianPhone]]) {
+        if (!value) continue;
+        const p = document.createElement('p');
+        p.textContent = label + ': ' + value;
+        idCard.append(p);
+      }
+      portalIdStatus.textContent = '';
+    }
+  } catch (error) {
+    if (request === schoolRequest) portalProfileStatus.textContent = 'Could not load the profile (' + (error?.code ?? 'error') + ').';
+  }
+}
+document.querySelector('#idcard-print').addEventListener('click', () => window.print());
+
+// Study materials: the portal list, and the teacher's form. A material is a title and an https link.
+function materialLine(item, button) {
+  const entry = document.createElement('li');
+  entry.append(item.createdAt + ' - ' + item.subject + ': ');
+  const link = document.createElement('a');
+  link.href = item.link;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = item.title;
+  entry.append(link);
+  if (button) entry.append(' ', button);
+  return entry;
+}
+
+async function loadPortalMaterials(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalMaterialsSection.hidden = false;
+  portalMaterialsStatus.textContent = 'Loading study materials.';
+  try {
+    const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId)));
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    const items = latest ? await readBySlot(schoolRef, 'materials', [latest.classId]) : [];
+    if (request !== schoolRequest) return;
+    portalMaterialsList.replaceChildren();
+    for (const item of items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))) portalMaterialsList.append(materialLine(item));
+    portalMaterialsStatus.textContent = items.length ? '' : 'No study materials have been shared yet.';
+  } catch (error) {
+    if (request === schoolRequest) portalMaterialsStatus.textContent = 'Could not load study materials (' + (error?.code ?? 'error') + ').';
+  }
+}
+
+async function loadTeacherMaterials(request) {
+  const context = teacherHomework;
+  if (!context) return;
+  const { collection, query, where, getDocsFromServer, doc, deleteDoc } = firestoreTools;
+  teacherMaterialsSection.hidden = false;
+  teacherMaterialsStatus.textContent = 'Loading.';
+  try {
+    const saved = await getDocsFromServer(query(collection(context.schoolRef, 'materials'), where('classId', '==', context.classId)));
+    if (request !== schoolRequest || context !== teacherHomework) return;
+    teacherMaterialsList.replaceChildren();
+    for (const record of saved.docs.sort((a, b) => b.data().createdAt.localeCompare(a.data().createdAt))) {
+      let button;
+      if (record.data().createdBy === context.uid) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Remove';
+        button.addEventListener('click', async () => {
+          if (context.busy || !confirm('Remove this material? Students will no longer see it.')) return;
+          context.busy = true;
+          try { await deleteDoc(doc(context.schoolRef, 'materials', record.id)); } catch { teacherMaterialsStatus.textContent = 'Could not remove it. Try again.'; }
+          context.busy = false;
+          await loadTeacherMaterials(request);
+        });
+      }
+      teacherMaterialsList.append(materialLine(record.data(), button));
+    }
+    teacherMaterialsStatus.textContent = saved.docs.length ? '' : 'Nothing shared yet.';
+  } catch (error) {
+    if (request === schoolRequest) teacherMaterialsStatus.textContent = 'Could not load materials (' + (error?.code ?? 'error') + ').';
+  }
+}
+
+materialsForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = teacherHomework;
+  if (!context || context.busy) return;
+  const fields = new FormData(materialsForm);
+  const title = String(fields.get('title') ?? '').trim();
+  const link = String(fields.get('link') ?? '').trim();
+  if (!title || !/^https:\/\/[^ ]{4,400}$/.test(link)) {
+    teacherMaterialsStatus.textContent = 'Enter a title and a link that starts with https://';
+    return;
+  }
+  const createdAt = localToday();
+  const id = 'M-' + createdAt.replaceAll('-', '') + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  teacherMaterialsStatus.textContent = 'Sharing.';
+  try {
+    await setDoc(doc(context.schoolRef, 'materials', id), { classId: context.classId, subject: context.subject, title, link, createdAt, createdBy: context.uid });
+    context.busy = false;
+    materialsForm.reset();
+    await loadTeacherMaterials(request);
+    if (request === schoolRequest) teacherMaterialsStatus.textContent = 'Material shared with your class.';
+  } catch (error) {
+    if (request === schoolRequest) teacherMaterialsStatus.textContent = 'Could not share it (' + (error?.code ?? 'error') + '). Check the link and try again.';
   } finally {
     context.busy = false;
   }

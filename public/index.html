@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-50">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-51">
 </head>
 <body>
   <main>
@@ -1164,6 +1164,17 @@
         <p id="teacher-studentleave-status" role="status"></p>
         <ul id="teacher-studentleave-list"></ul>
       </section>
+      <section id="teacher-materials" aria-labelledby="teacher-materials-title" hidden>
+        <h3 id="teacher-materials-title">Study Materials</h3>
+        <p>Share notes or worksheets with your class. Put the file online (Google Drive, a website) and paste its https link here.</p>
+        <p id="teacher-materials-status" role="status"></p>
+        <form id="materials-form">
+          <p><label>Title <input name="title" required maxlength="100"></label></p>
+          <p><label>Link (https://...) <input name="link" type="url" required maxlength="400" placeholder="https://"></label></p>
+          <button type="submit">Share material</button>
+        </form>
+        <ul id="teacher-materials-list"></ul>
+      </section>
       <section id="teacher-submissions" aria-labelledby="teacher-submissions-title" hidden>
         <h3 id="teacher-submissions-title">Homework Submissions</h3>
         <p id="teacher-submissions-status" role="status"></p>
@@ -1200,12 +1211,24 @@
     </section>
     <section id="portal-dashboard" aria-labelledby="portal-title" hidden>
       <div id="portal-head">
-        <h2 id="portal-title">Student Portal</h2>
+        <h2 id="portal-title">Student Dashboard</h2>
+        <p id="portal-tagline"></p>
         <p id="portal-child-wrap" hidden><label>Child <select id="portal-child"></select></label></p>
         <p>ABCD School</p>
         <p id="portal-email"></p>
         <p id="portal-student"></p>
         <p id="portal-status" role="status"></p>
+      </div>
+      <div id="portal-home">
+        <div id="portal-welcome"><p id="portal-hello"></p><p id="portal-date"></p></div>
+        <div id="portal-childcard"></div>
+        <div id="portal-stats"></div>
+        <div id="portal-glance">
+          <div class="glance"><h4>Today's Timetable</h4><ul id="glance-timetable"></ul></div>
+          <div class="glance"><h4>Recent Homework</h4><ul id="glance-homework"></ul></div>
+          <div class="glance"><h4>Upcoming</h4><ul id="glance-upcoming"></ul></div>
+        </div>
+        <div id="portal-quick" role="group" aria-label="Quick links"></div>
       </div>
       <section id="portal-results" aria-labelledby="portal-results-title">
         <h3 id="portal-results-title">My Results</h3>
@@ -1290,6 +1313,22 @@
         <h3 id="portal-assessments-title">Class Test Scores</h3>
         <p id="portal-assessments-status" role="status"></p>
         <ul id="portal-assessments-list"></ul>
+      </section>
+      <section id="portal-profile" aria-labelledby="portal-profile-title" hidden>
+        <h3 id="portal-profile-title">My Profile</h3>
+        <p id="portal-profile-status" role="status"></p>
+        <ul id="portal-profile-list"></ul>
+      </section>
+      <section id="portal-idcard" aria-labelledby="portal-idcard-title" hidden>
+        <h3 id="portal-idcard-title">Digital ID Card</h3>
+        <p id="portal-idcard-status" role="status"></p>
+        <div id="idcard"></div>
+        <button type="button" id="idcard-print">Print ID card</button>
+      </section>
+      <section id="portal-materials" aria-labelledby="portal-materials-title" hidden>
+        <h3 id="portal-materials-title">Study Materials</h3>
+        <p id="portal-materials-status" role="status"></p>
+        <ul id="portal-materials-list"></ul>
       </section>
       <section id="portal-leave" aria-labelledby="portal-leave-title" hidden>
         <h3 id="portal-leave-title">Leave Request</h3>
@@ -1437,14 +1476,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-50');
-      await import('./i18n.mjs?v=batch-50');
+      await import('./ui.mjs?v=batch-51');
+      await import('./i18n.mjs?v=batch-51');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-50');
-      await import('./platform.mjs?v=batch-50');
+      await import('./sign-in.mjs?v=batch-51');
+      await import('./platform.mjs?v=batch-51');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

@@ -168,3 +168,32 @@ body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concession
 
 #portal-exam-pick button[aria-pressed="true"]{background:var(--gold,#b8913a);color:#1d1608;border-color:var(--gold,#b8913a)}
 #portal-head{margin-bottom:8px}
+
+/* Student and parent dashboards (batch 51). */
+#portal-home{margin:0 0 18px}
+#portal-tagline{margin:0 0 8px;color:var(--gold2,#d8b45a);letter-spacing:.04em}
+#portal-dashboard[data-open] #portal-home{display:none}
+#portal-welcome{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;margin-bottom:12px}
+#portal-welcome p{margin:0}
+#portal-hello{font:600 1.5rem "Cormorant Garamond",serif}
+#portal-date{color:var(--mut,#9aa5bd)}
+#portal-childcard{display:flex;gap:14px;align-items:center;padding:12px;margin-bottom:12px;border:1px solid var(--line,#2b3552);border-radius:16px;background:rgba(255,255,255,.04)}
+#portal-childcard img{width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--gold2,#d8b45a)}
+#portal-childcard p{margin:2px 0}
+#portal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+#portal-stats button{min-height:88px;text-align:left;padding:12px;border-radius:14px;border:1px solid var(--line,#2b3552);border-left-width:5px;background:rgba(255,255,255,.05);color:inherit;cursor:pointer}
+#portal-stats button:nth-child(1){border-left-color:#4f8cff}#portal-stats button:nth-child(2){border-left-color:#f59e0b}
+#portal-stats button:nth-child(3){border-left-color:#22c55e}#portal-stats button:nth-child(4){border-left-color:#a855f7}
+#portal-stats strong{display:block;font-size:1.6rem}
+#portal-stats span{display:block;color:var(--mut,#9aa5bd);font-size:.9rem}
+#portal-glance{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:12px}
+.glance{padding:12px;border:1px solid var(--line,#2b3552);border-radius:14px;background:rgba(255,255,255,.04)}
+.glance h4{margin:0 0 6px}
+.glance ul{margin:0;padding-left:18px}
+#portal-quick{display:flex;flex-wrap:wrap;gap:8px}
+#portal-quick button{padding:10px 14px;border-radius:999px;border:1px solid var(--gold2,#d8b45a);background:transparent;color:inherit;cursor:pointer;min-height:44px}
+#portal-dashboard[data-role="parent"] #portal-stats button:nth-child(2){border-left-color:#ef4444}
+#idcard{max-width:340px;margin:10px 0;padding:16px;border:2px solid var(--gold2,#d8b45a);border-radius:16px;background:rgba(255,255,255,.06)}
+#idcard img{width:96px;height:96px;object-fit:cover;border-radius:8px}
+#idcard p{margin:4px 0}
+@media print{#portal-home{display:none}#idcard-print{display:none}}

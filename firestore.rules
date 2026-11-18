@@ -493,6 +493,25 @@ service cloud.firestore {
           || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
       }
 
+      // Study materials. materials/{materialId}: classId, subject, title, link (an https web address to notes
+      // or a file the teacher keeps online), createdAt, createdBy. The owner, or the teacher of that class, posts
+      // them; a material is never edited. The owner or the teacher who posted it removes it. The same people
+      // who read homework read it: the owner, the class's teachers, and linked families of that class.
+      match /materials/{materialId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
+          || teachesClass(resource.data.classId) || classTeacherOf(resource.data.classId)
+          || familyInClass(resource.data.classId));
+        allow create: if request.auth != null
+          && materialId.matches('[A-Za-z0-9-]{1,30}')
+          && validMaterial(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt <= latestAttendanceDate()
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && (isSchoolOwner(schoolId) || teachesClass(request.resource.data.classId));
+        allow delete: if request.auth != null && (isSchoolOwner(schoolId)
+          || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
+      }
+
       // School calendar. calendar/{eventId}: title, date, kind (holiday, exam, event or meeting), optional
       // note. The owner manages it; every active teacher and linked family reads it.
       match /calendar/{eventId} {
@@ -1523,6 +1542,17 @@ service cloud.firestore {
         && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
         && item.details is string && item.details.size() <= 2000 && item.details.matches('.*[^[:space:]].*')
         && item.dueDate is string && item.dueDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && item.createdBy is string;
+    }
+
+    function validMaterial(item) {
+      return item.keys().hasOnly(['classId', 'subject', 'title', 'link', 'createdAt', 'createdBy'])
+        && item.keys().hasAll(['classId', 'subject', 'title', 'link', 'createdAt', 'createdBy'])
+        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
+        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
+        && item.link is string && item.link.matches('https://[^ ]{4,400}')
         && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
         && item.createdBy is string;
     }
