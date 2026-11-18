@@ -4699,12 +4699,16 @@ async function readFlags() {
     return found.exists() ? found.data() : {};
   } catch { return {}; }
 }
+// Gradual rollout: a flag may also carry pct_<flag> (0-99). The school is in the rollout when a number
+// worked out from its ID, between 0 and 99, is below that percentage. The same school always gets the same answer.
+const rolloutNumber = () => [...SCHOOL_ID].reduce((total, ch) => (total * 31 + ch.charCodeAt(0)) % 100, 7);
+const flagOff = (flags, flag) => flags[flag] === false || (Number.isInteger(flags['pct_' + flag]) && rolloutNumber() >= flags['pct_' + flag]);
 function applyFlags(flags) {
   for (const [flag, ids] of Object.entries(FLAG_MODULES)) {
     for (const id of ids) {
       const section = document.querySelector('#' + id);
       if (!section) continue;
-      if (flags[flag] === false) section.setAttribute('data-off', ''); else section.removeAttribute('data-off');
+      if (flagOff(flags, flag)) section.setAttribute('data-off', ''); else section.removeAttribute('data-off');
     }
   }
 }
@@ -6660,7 +6664,7 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: async (name, id, data) => {
         await setDoc(doc(schoolRef, name, id), data);
-        if (name === 'students') document.dispatchEvent(new Event('usage-changed'));
+        if (name === 'students' || name === 'storageRecords') document.dispatchEvent(new Event('usage-changed'));
         const voided = name === 'payments' && data.voided === true;
         await log(voided ? 'void' : 'save', name, id, name === 'payments' ? 'Rs ' + data.amount : '');
       },

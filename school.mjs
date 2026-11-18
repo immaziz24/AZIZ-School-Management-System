@@ -114,7 +114,7 @@ async function load() {
     show('vision', vision);
     show('leadership', fill(document.querySelector('#leadership-body'), data.leadership, true));
     show('programmes', fill(document.querySelector('#programmes-body'), data.programmes, true));
-    show('faculty', fill(document.querySelector('#faculty-body'), data.faculty, true));
+    show('faculty', fill(document.querySelector('#faculty-body'), (data.faculty ?? '').split('\n').map((row) => row.split('|').map((part) => part.trim()).filter(Boolean).join(' - ')).join('\n'), true));
     show('facilities', fill(document.querySelector('#facilities-body'), data.facilities, true));
     show('news', fill(document.querySelector('#news-body'), data.news, true));
     const galleryBody = document.querySelector('#gallery-body');

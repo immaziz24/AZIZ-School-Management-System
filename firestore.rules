@@ -34,6 +34,14 @@ service cloud.firestore {
         || get(usage).data[usageKey] < get(billing).data[limitKey];
     }
 
+    // Storage plan limit. Older usage records have no storageMb, which counts as nothing used.
+    function withinStorage(schoolId) {
+      let billing = /databases/$(database)/documents/schools/$(schoolId)/billing/main;
+      let usage = /databases/$(database)/documents/schools/$(schoolId)/usage/main;
+      return !exists(billing) || !get(billing).data.keys().hasAny(['storageMb']) || !exists(usage)
+        || get(usage).data.get('storageMb', 0) < get(billing).data.storageMb;
+    }
+
     function isOwnerRole(schoolId) {
       let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
       return exists(path) && get(path).data.active == true && get(path).data.role == 'owner';
@@ -1014,7 +1022,8 @@ service cloud.firestore {
       match /storageRecords/{recordId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
-          && recordId.matches('ST-[A-Za-z0-9-]{1,30}') && validStorageRecord(request.resource.data);
+          && recordId.matches('ST-[A-Za-z0-9-]{1,30}') && validStorageRecord(request.resource.data)
+          && (resource != null || withinStorage(schoolId));
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
@@ -1754,7 +1763,8 @@ service cloud.firestore {
     }
 
     function validUsage(item) {
-      return item.keys().hasOnly(['students', 'staff', 'classes', 'payments', 'updatedAt'])
+      return item.keys().hasOnly(['students', 'staff', 'classes', 'payments', 'storageMb', 'updatedAt'])
+        && (!item.keys().hasAny(['storageMb']) || (item.storageMb is int && item.storageMb >= 0 && item.storageMb <= 100000000))
         && item.keys().hasAll(['students', 'staff', 'updatedAt'])
         && item.students is int && item.students >= 0 && item.students <= 10000000
         && item.staff is int && item.staff >= 0 && item.staff <= 10000000

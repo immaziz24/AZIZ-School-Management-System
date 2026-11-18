@@ -87,3 +87,16 @@ test('backup log: the owner records the last backup; others read at most', async
   await denied(get('t1', `${A}/settings/backupLog`), 'teacher cannot read');
   await denied(get(null, `${A}/settings/backupLog`), 'anonymous cannot read');
 });
+
+test('storage quota: a new storage record is refused once the plan storage is used up', async () => {
+  const rec = (over = {}) => ({ name: 'Photos', kind: 'photo', sizeKb: 500, date: day(0), ...over });
+  await set(ADMIN, `${A}/billing/main`, { plan: 'basic', status: 'active', storageMb: 100 });
+  await set(ADMIN, `${A}/usage/main`, { students: 1, staff: 1, storageMb: 40 });
+  await allowed(set('owner-a', `${A}/storageRecords/ST-1`, rec()), 'under the limit');
+  await set(ADMIN, `${A}/usage/main`, { students: 1, staff: 1, storageMb: 100 });
+  await denied(set('owner-a', `${A}/storageRecords/ST-2`, rec()), 'at the limit');
+  await allowed(set('owner-a', `${A}/storageRecords/ST-1`, rec({ sizeKb: 400 })), 'editing an existing record is still allowed');
+  await allowed(remove('owner-a', `${A}/storageRecords/ST-1`), 'removing frees space');
+  await set(ADMIN, `${A}/billing/main`, { plan: 'basic', status: 'active' });
+  await allowed(set('owner-a', `${A}/storageRecords/ST-3`, rec()), 'no storage limit set');
+});

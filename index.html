@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-40">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-41">
 </head>
 <body>
   <main>
@@ -481,7 +481,7 @@
           <p><label>Mission <textarea name="mission" rows="2" maxlength="500"></textarea></label></p>
           <p><label>Leadership (one person per line) <textarea name="leadership" rows="3" maxlength="1000"></textarea></label></p>
           <p><label>Programmes and classes (one per line) <textarea name="programmes" rows="4" maxlength="2000"></textarea></label></p>
-          <p><label>Faculty and staff (one per line, approved details only) <textarea name="faculty" rows="4" maxlength="2000"></textarea></label></p>
+          <p><label>Faculty and staff (one per line, like: Name | qualification | subject - approved details only) <textarea name="faculty" rows="4" maxlength="2000"></textarea></label></p>
           <p><label>Facilities (one per line) <textarea name="facilities" rows="3" maxlength="1500"></textarea></label></p>
           <p><label>News and announcements (one per line) <textarea name="news" rows="3" maxlength="1500"></textarea></label></p>
           <p><label>Photo gallery (one per line: https image link | caption) <textarea name="gallery" rows="3" maxlength="1500"></textarea></label></p>
@@ -1331,14 +1331,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-40');
-      await import('./i18n.mjs?v=batch-40');
+      await import('./ui.mjs?v=batch-41');
+      await import('./i18n.mjs?v=batch-41');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-40');
-      await import('./platform.mjs?v=batch-40');
+      await import('./sign-in.mjs?v=batch-41');
+      await import('./platform.mjs?v=batch-41');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

@@ -3,7 +3,7 @@
 002,"School profile, history, vision, mission and leadership information",A,Built,
 003,"Academic programmes, classes and subject information",A,Built,
 004,Admissions information and enquiry form,A,Built,
-005,Faculty and staff profiles with approved qualifications,A,Partial,
+005,Faculty and staff profiles with approved qualifications,A,Built,Faculty lines shown as Name - qualification - subject on the public page
 006,"Facilities, campus information and photo gallery",A,Built,Facilities text and photo gallery from image links
 007,"Events, notices, news and public announcements",A,Built,
 008,"Contact details, map embed and enquiry routing",A,Built,
@@ -25,9 +25,9 @@
 024,School-wide academic settings and grading configuration,C,Built,Owner sets pass mark and grade bands
 025,Student admission and registration form,D,Partial,Owner adds students by form; no full admission form
 026,Unique admission number and roll-number management,D,Built,Unique admission and roll numbers
-027,"Student profile, photograph and guardian details",D,Partial,"Name, guardian, date of birth, address; no photograph"
+027,"Student profile, photograph and guardian details",D,Built,"Name, guardian, date of birth, address and a small photo"
 028,"Class, section and academic-year assignment",D,Built,Placement into class/section/year
-029,"Student search, filters, status and profile history",D,Partial,Student list with search and status; no profile history
+029,"Student search, filters, status and profile history",D,Built,"Search, status filter and a profile history of dated notes"
 030,Teacher and staff profiles with permitted record management,D,Partial,"Staff profiles, teacher accounts, staff directory, training log"
 031,"Bulk student/staff import with preview, validation and error report",D,Built,
 032,Parent/guardian records and multi-child relationship management,D,Built,A parent login can link up to 5 children (extra students/classes)
@@ -35,23 +35,23 @@
 034,"Present, absent, late and approved-leave statuses as per school policy",E,Built,"Present, absent, late and approved leave"
 035,Teacher/staff attendance as a separately permissioned extension,E,Built,Owner marks teachers; teacher sees own; monthly report
 036,Duplicate attendance prevention for the same class/date/session,E,Built,One record per student/class/date
-037,Authorized attendance correction with reason and audit log,E,Partial,Teacher attendance saves are logged; no reason field
+037,Authorized attendance correction with reason and audit log,E,Built,Attendance corrections ask for a reason; saves are logged
 038,"Daily, monthly and class-wise attendance reports",E,Built,"Daily review, class monthly student report, staff monthly report"
 039,Student and parent attendance views with privacy restrictions,E,Built,Parent/student sees own child only
 040,"Exam creation by academic year, class and exam type",F,Built,"Exams by year, class, subject"
-041,Subject-wise maximum marks and pass marks configuration,F,Partial,One pass mark for the school; not per subject
+041,Subject-wise maximum marks and pass marks configuration,F,Built,"Pass marks per exam, locked when the principal approves"
 042,Teacher marks entry restricted to assigned subjects/classes,F,Built,Teachers enter marks for their assigned class/subject
 043,"Marks validation and draft, save and submit states",F,Built,"Draft, submit, lock and approve states with pass marks"
 044,"Automatic total, percentage and grade calculation using approved rules",F,Built,"Total, percent and grade"
 045,"Principal/admin review, correction and approval workflow",F,Built,"Owner review, reopen and approve"
 046,Result publication control; families see published results only,F,Built,Published results only to families
 047,"Class, student and subject performance reports",F,Partial,"Class rank list, toppers, performance by exam; no trend over time per subject"
-048,Branded marksheets and report cards,G,Partial,Printable report card with school name and Pass/Fail; no logo or template
+048,Branded marksheets and report cards,G,Built,"Report card with school logo and name, grades and Pass/Fail; bulk printing"
 049,Admit-card template and eligibility checks,G,Built,Admit card with minimum-attendance eligibility check
 050,Individual and bulk PDF generation and downloads,G,Built,Single and whole-class report cards via print / Save as PDF
-051,Student ID cards and certificates using approved templates,G,Partial,ID card (no photo); certificates register with printable Bonafide/Transfer/Character
-052,"Fee heads, class-wise fee structures and due schedules",G,Partial,Fee amounts per class and year; no due schedules
-053,"Full/partial payments, concessions and outstanding balances",G,Partial,Partial payments and balance; concessions recorded in a register but not yet subtracted from balances
+051,Student ID cards and certificates using approved templates,G,Built,ID card with photo; certificates register with printable certificates
+052,"Fee heads, class-wise fee structures and due schedules",G,Built,Fee amounts per class and year with due dates and overdue flags
+053,"Full/partial payments, concessions and outstanding balances",G,Built,"Partial payments, concessions and outstanding balances; parent portal does not show concessions"
 054,Numbered receipts and payment history,G,Built,Numbered receipts and payment history; void supported
 055,Financial summaries and controlled exports,G,Built,"Monthly fees, expenses, salaries report with CSV; payment CSV export"
 056,"Student dashboard with own profile, timetable, attendance and published results",H,Built,"Student portal: results, attendance, fees, homework, timetable, calendar, events, messages"
@@ -82,13 +82,13 @@
 081,Digital homework submission,K,Built,Families submit homework once; teachers give feedback
 082,School transport GPS tracking integration,K,Not started,
 083,School-specific configurable reports,K,Partial,"Report builder over students, payments, expenses, salaries; fixed lists only"
-084,Per-school storage quotas,L,Partial,Storage records log and plan view; no enforced storage quota
+084,Per-school storage quotas,L,Partial,Storage records counted against the plan; new records stop at the limit; files themselves are not stored here
 085,Per-school usage monitoring,L,Built,Usage counts recounted automatically and shown to owner and platform
 086,Automated backups and tested restoration,L,Partial,Manual backup and data pack with reminder; no scheduled backups or tested restore
 087,Customer support ticket system,L,Built,"Support tickets from schools, answered by the platform administrator"
 088,Guided school onboarding checklist,L,Built,
 089,Subscription renewal grace periods,J,Built,Grace days after trial or renewal before read-only
-090,School data export on cancellation,J,Partial,
+090,School data export on cancellation,J,Built,"Data pack (ZIP of CSV files) works any time, including after cancellation"
 091,Audit logs and security monitoring,L,Partial,Activity log plus warnings for many voids/removals and old backups; no live monitoring
 092,Multi-school uptime and performance monitoring,L,Not started,
 093,AZIZ revenue and subscription analytics,J,Partial,Platform totals plus monthly plan and invoice breakdown (text bars); no chart library
@@ -101,9 +101,9 @@
 100,Domain ownership challenge and automatic TLS lifecycle,M,Not started,
 101,"School suspension, reactivation and safe read-only access",M,Built,Suspended or cancelled schools become read-only
 102,"Tenant-aware background jobs, queues and retries",M,Not started,
-103,"Subscription usage limits for students, staff and storage",M,Partial,Student and staff limits enforced softly; storage limit not enforced
+103,"Subscription usage limits for students, staff and storage",M,Built,"Student, staff and storage limits; counted from the last usage recount (soft)"
 104,School admin invitation and verified ownership transfer,M,Built,Email invitations and ownership transfer by invite
-105,SaaS-wide feature flags and gradual rollout,M,Partial,Platform switches hide modules in the app; no gradual rollout
+105,SaaS-wide feature flags and gradual rollout,M,Built,Switches per feature plus a rollout percentage per feature
 106,Central template versioning and safe theme upgrades,M,Built,Template versions with upgrade and rollback
 107,Automated onboarding health checks and launch checklist,M,Built,Launch checklist and onboarding checks
 108,Tenant-scoped API rate limits and abuse protection,M,Partial,Browser-side limits on public forms; real protection needs App Check
