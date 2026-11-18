@@ -1,6 +1,11 @@
 {
   "name": "AZIZ School Management System",
   "short_name": "AZIZ School",
+  "id": "./",
+  "description": "School attendance, fees, exams, homework and messages for teachers, students and parents.",
+  "lang": "en",
+  "orientation": "portrait-primary",
+  "categories": ["education", "productivity"],
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

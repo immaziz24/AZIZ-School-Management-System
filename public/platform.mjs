@@ -390,6 +390,7 @@ async function loadAdmin() {
       ['Churn: ' + (activeN + lostN ? Math.round(lostN / (activeN + lostN) * 100) + '% of paying-or-lost schools are cancelled or suspended.' : 'nothing yet.')],
       ['Trials ending within 14 days: ' + soon + '. Renewals overdue: ' + overdue + '. Unpaid invoices: ' + rupees(due) + '.'],
     ];
+    drawRevenueChart($('#platform-revenue-chart'), byMonth, { active: activeN, trial: trialN, lost: lostN });
     fillList($('#platform-revenue-breakdown'), [
       ...analytics,
       ...[...byPlan.entries()].sort().map(([key, r]) => ['Plan ' + key + ': ' + r.n + ' school(s), monthly ' + rupees(r.mrr)]),
@@ -401,6 +402,44 @@ async function loadAdmin() {
   } catch { admin.status.textContent = 'Could not load schools.'; }
   await Promise.all([loadAdminTickets(), loadFlags(), loadDrills(), loadTemplate()]);
 }
+// Revenue chart: one stacked bar per month (collected in navy, unpaid in gold) drawn as SVG, with a status line under it.
+// The text list below the chart carries the same numbers for screen readers.
+function drawRevenueChart(target, byMonth, counts) {
+  target.replaceChildren();
+  const SVG = 'http://www.w3.org/2000/svg';
+  const make = (name, attrs, text) => {
+    const node = document.createElementNS(SVG, name);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const months = [...byMonth.entries()].sort().slice(-12);
+  if (!months.length) { target.textContent = 'No invoices yet, so there is nothing to chart.'; return; }
+  const width = 640; const height = 260; const left = 56; const bottom = 30; const top = 16;
+  const peak = Math.max(1, ...months.map(([, r]) => r.paid + r.unpaid));
+  const plotH = height - top - bottom; const slot = (width - left - 10) / months.length;
+  const svg = make('svg', { viewBox: '0 0 ' + width + ' ' + height, role: 'img', width: '100%',
+    'aria-label': 'Invoices by month, collected and unpaid, for the last ' + months.length + ' month(s).' });
+  for (const fraction of [0, 0.5, 1]) {
+    const y = top + plotH * (1 - fraction);
+    svg.append(make('line', { x1: left, x2: width - 10, y1: y, y2: y, stroke: '#d9d2bd', 'stroke-width': 1 }));
+    svg.append(make('text', { x: left - 6, y: y + 4, 'text-anchor': 'end', 'font-size': 11, fill: '#14243d' }, rupees(Math.round(peak * fraction))));
+  }
+  months.forEach(([period, r], index) => {
+    const x = left + index * slot + slot * 0.15; const barW = slot * 0.7;
+    const paidH = plotH * r.paid / peak; const unpaidH = plotH * r.unpaid / peak;
+    const group = make('g', {});
+    group.append(make('title', {}, period + ': collected ' + rupees(r.paid) + ', unpaid ' + rupees(r.unpaid)));
+    group.append(make('rect', { x, y: top + plotH - paidH, width: barW, height: paidH, fill: '#14243d' }));
+    group.append(make('rect', { x, y: top + plotH - paidH - unpaidH, width: barW, height: unpaidH, fill: '#b8902f' }));
+    group.append(make('text', { x: x + barW / 2, y: height - 10, 'text-anchor': 'middle', 'font-size': 10, fill: '#14243d' }, period.slice(2)));
+    svg.append(group);
+  });
+  const legend = document.createElement('p');
+  legend.textContent = 'Navy: collected. Gold: unpaid. Schools: ' + counts.active + ' active, ' + counts.trial + ' on trial, ' + counts.lost + ' cancelled or suspended.';
+  target.append(svg, legend);
+}
+
 async function openSchool(id) {
   chosenSchool = id;
   const s = allSchools.find((x) => x.id === id);

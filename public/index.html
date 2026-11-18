@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AZIZ School Management System</title>
   <meta name="theme-color" content="#14243d">
+  <meta name="description" content="AZIZ School Management System: attendance, fees, exams, homework and parent communication for schools. Sign in for your school.">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon-192.png">
@@ -122,6 +123,17 @@
           <p><label>Previous school (optional) <input name="previousSchool" maxlength="120"></label></p>
           <p><label>Emergency phone (optional) <input name="emergencyPhone" type="tel" maxlength="20" pattern="[0-9+ \(\)\-]*"></label></p>
           <p><label>Guardian email (optional) <input name="guardianEmail" type="email" maxlength="100"></label></p>
+          <p><label>Transfer certificate number (optional) <input name="tcNo" maxlength="40"></label></p>
+          <fieldset><legend>Documents received (optional)</legend>
+            <label><input type="checkbox" name="docs" value="birth"> Birth certificate</label>
+            <label><input type="checkbox" name="docs" value="tc"> Transfer certificate</label>
+            <label><input type="checkbox" name="docs" value="marksheet"> Last marksheet</label>
+            <label><input type="checkbox" name="docs" value="aadhaar"> Aadhaar / ID copy</label>
+            <label><input type="checkbox" name="docs" value="photos"> Photographs</label>
+            <label><input type="checkbox" name="docs" value="address"> Address proof</label>
+            <label><input type="checkbox" name="docs" value="medical"> Medical record</label>
+            <label><input type="checkbox" name="docs" value="other"> Other</label>
+          </fieldset>
           <p><label>Photo (optional, shrunk automatically) <input id="student-photo" type="file" accept="image/*"></label>
             <img id="student-photo-preview" class="thumb" alt="Student photo preview" hidden>
             <label><input id="student-photo-remove" type="checkbox"> Remove the saved photo</label></p>
@@ -474,6 +486,7 @@
           <p><label>Deductions (Rs) <input name="deductions" type="number" min="0" step="1" value="0" required></label></p>
           <p><label>Provident fund % of basic (helper) <input name="pfPercent" type="number" min="0" max="30" step="0.5" value="12"></label>
             <label>Professional tax (Rs, helper) <input name="ptax" type="number" min="0" step="1" value="0"></label>
+            <label><input type="checkbox" name="withTax"> Also add an income tax estimate (new regime)</label>
             <button type="button" id="payroll-calc">Work out deductions</button></p>
           <p><label>Paid on (optional) <input name="paidOn" type="date"></label></p>
           <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
@@ -666,6 +679,17 @@
         <p>Downloads every list as its own spreadsheet (CSV) file, packed in one ZIP file you can open in Excel. Use it when you leave AZIZ or want your own copy. It also works after a school is cancelled.</p>
         <button type="button" id="backup-zip">Download data pack (ZIP)</button>
       </section>
+      <section id="principal-access" aria-labelledby="principal-access-title" hidden>
+        <h3 id="principal-access-title">Principal Access</h3>
+        <p>Choose which areas the principal login may open. Payroll is off until you switch it on. Fees and admissions are on, as before. A principal can only view; they never change these records.</p>
+        <p id="principal-access-status" role="status"></p>
+        <form id="principal-access-form">
+          <p><label><input type="checkbox" name="payroll"> Staff payroll</label></p>
+          <p><label><input type="checkbox" name="fees"> Fees and payments</label></p>
+          <p><label><input type="checkbox" name="admissions"> Admission enquiries</label></p>
+          <button type="submit">Save principal access</button>
+        </form>
+      </section>
       <section id="routes" aria-labelledby="routes-title" hidden>
         <h3 id="routes-title">Transport Routes</h3>
         <p id="routes-status" role="status"></p>
@@ -687,6 +711,7 @@
           <p><label>Student <select name="studentId"></select></label></p>
           <p><label>Route <select name="routeId"></select></label></p>
           <p><label>Stop (optional) <input name="stop" type="text" maxlength="60"></label></p>
+          <p><label>Months of transport fee to charge this year (0 to 12; agree this with the parent, for example when the student joins late) <input name="months" type="number" min="0" max="12" step="1" value="0"></label></p>
           <button type="submit">Assign student to route</button>
         </form>
         <ul id="riders-list"></ul>
@@ -1416,6 +1441,7 @@
       <p id="platform-status" role="status"></p>
       <h3>Revenue</h3>
       <p id="platform-revenue"></p>
+      <div id="platform-revenue-chart" class="chart-box"></div>
       <ul id="platform-revenue-breakdown"></ul>
       <h3>Schools</h3>
       <ul id="platform-schools"></ul>

@@ -197,3 +197,8 @@ body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concession
 #idcard img{width:96px;height:96px;object-fit:cover;border-radius:8px}
 #idcard p{margin:4px 0}
 @media print{#portal-home{display:none}#idcard-print{display:none}}
+
+/* Revenue chart on the platform admin screen: always on ivory so the navy and gold bars stay readable. */
+.chart-box { background: #faf6ea; color: #14243d; border: 1px solid #d9d2bd; border-radius: 8px; padding: 12px; margin: 12px 0; }
+.chart-box svg { display: block; max-width: 100%; height: auto; }
+.chart-box p { margin: 8px 0 0; }

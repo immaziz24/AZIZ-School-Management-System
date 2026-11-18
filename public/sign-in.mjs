@@ -366,7 +366,8 @@ const studentCount = document.querySelector('#student-count');
 const studentForm = document.querySelector('#student-form');
 const studentSave = studentForm.querySelector('[type="submit"]');
 const studentCancel = studentForm.querySelector('[type="reset"]');
-const studentFields = ['admissionNo', 'name', 'guardianName', 'guardianPhone', 'dob', 'address', 'gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail'];
+const studentFields = ['admissionNo', 'name', 'guardianName', 'guardianPhone', 'dob', 'address', 'gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail', 'tcNo'];
+const DOC_KEYS = ['birth', 'tc', 'marksheet', 'aadhaar', 'photos', 'address', 'medical', 'other'];
 let studentRecords = [];
 let studentEditingId;
 
@@ -502,6 +503,7 @@ function renderStudents() {
     edit.addEventListener('click', () => {
       studentEditingId = record.id;
       for (const field of studentFields) studentForm.elements.namedItem(field).value = student[field] ?? '';
+      for (const box of studentForm.querySelectorAll('input[name="docs"]')) box.checked = (student.docsReceived ?? []).includes(box.value);
       studentForm.elements.namedItem('admissionNo').readOnly = true;
       studentSave.textContent = 'Save changes';
       studentCancel.hidden = false;
@@ -594,7 +596,8 @@ studentForm.addEventListener('submit', (event) => {
       admissionNo, name: value('name'), guardianName: value('guardianName'),
       guardianPhone: value('guardianPhone'), status: existing?.data().status ?? 'active',
       ...(value('dob') ? { dob: value('dob') } : {}), ...(value('address') ? { address: value('address') } : {}),
-      ...Object.fromEntries(['gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail'].filter((key) => value(key)).map((key) => [key, value(key)])),
+      ...Object.fromEntries(['gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail', 'tcNo'].filter((key) => value(key)).map((key) => [key, value(key)])),
+      ...(fields.getAll('docs').length ? { docsReceived: DOC_KEYS.filter((key) => fields.getAll('docs').includes(key)) } : {}),
     };
     await academic.save('students', id, saved);
     if (!existing && admissionEnquiry) {
@@ -2233,9 +2236,18 @@ const feeKey = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 
 // Fees for one student in one year. Concessions given in the year are taken off the total, latest instalments first.
 // Payments count against the earliest instalments first, so "overdue" is what has fallen due by today and is still unpaid.
+// Transport: the route's monthly fee times the months the owner agreed with the parent (0 to 12 on the rider record).
+// It is added to the fees of the active year only. A student who joins late simply has fewer months.
+let transportData = { routes: [], riders: [] };
+function transportChargeFor(studentId) {
+  const rider = transportData.riders.find((record) => record.id === studentId)?.data();
+  if (!rider?.months) return 0;
+  return (transportData.routes.find((record) => record.id === rider.routeId)?.data().monthlyFee ?? 0) * rider.months;
+}
 function feeSummaryFor(studentId, yearId, classId) {
   const heads = feeData.structures.filter((item) => item.data().yearId === yearId && item.data().classId === classId).map((item) => item.data());
-  const gross = heads.reduce((sum, item) => sum + item.amount, 0);
+  const transport = activeYearRecord()?.id === yearId ? transportChargeFor(studentId) : 0;
+  const gross = heads.reduce((sum, item) => sum + item.amount, 0) + transport;
   const year = examData.years.find((record) => record.id === yearId)?.data();
   const concession = (lists.concessions?.items ?? []).map((record) => record.data())
     .filter((item) => item.studentId === studentId && (!year || (item.givenOn >= year.startDate && item.givenOn <= year.endDate)))
@@ -2244,10 +2256,10 @@ function feeSummaryFor(studentId, yearId, classId) {
   const paid = feeData.payments.filter((item) => item.data().studentId === studentId && item.data().yearId === yearId
     && item.data().voided !== true).reduce((sum, item) => sum + item.data().amount, 0);
   const today = localToday();
-  const dueByToday = heads.filter((item) => !item.dueOn || item.dueOn <= today).reduce((sum, item) => sum + item.amount, 0);
+  const dueByToday = heads.filter((item) => !item.dueOn || item.dueOn <= today).reduce((sum, item) => sum + item.amount, 0) + transport;
   const concessionOnPast = Math.max(0, concession - (gross - dueByToday));
   const overdue = Math.max(0, dueByToday - concessionOnPast - paid);
-  return { gross, concession, due, paid, balance: due - paid, overdue };
+  return { gross, concession, due, paid, balance: due - paid, overdue, transport };
 }
 
 function renderFees() {
@@ -2292,8 +2304,8 @@ function renderFeeBalance() {
     feeBalanceSummary.textContent = 'This student is not placed in a class this year.';
     return;
   }
-  const { gross, concession, due, paid, balance, overdue } = feeSummaryFor(studentId, year.id, placement.data().classId);
-  feeBalanceSummary.textContent = 'Fees ' + rupees(gross) + (concession ? ', concession -' + rupees(concession) : '') + ', due ' + rupees(due) + ', paid ' + rupees(paid) + ', balance ' + rupees(balance)
+  const { gross, concession, due, paid, balance, overdue, transport } = feeSummaryFor(studentId, year.id, placement.data().classId);
+  feeBalanceSummary.textContent = 'Fees ' + rupees(gross) + (transport ? ' (includes transport ' + rupees(transport) + ')' : '') + (concession ? ', concession -' + rupees(concession) : '') + ', due ' + rupees(due) + ', paid ' + rupees(paid) + ', balance ' + rupees(balance)
     + (overdue ? ', overdue ' + rupees(overdue) : '');
   const mine = feeData.payments.filter((item) => item.data().studentId === studentId && item.data().yearId === year.id)
     .sort((a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id));
@@ -2351,6 +2363,9 @@ async function loadFeeOffice(request) {
     studentRecords = students.docs;
     placementData = { years: years.docs, classes: classes.docs, sections: [], enrollments: enrollments.docs };
     examData = { years: years.docs, classes: classes.docs, subjects: [], mappings: [], exams: [] };
+    const [routeDocs, riderDocs] = await Promise.all([tools.list('routes').catch(() => ({ docs: [] })), tools.list('transportRiders').catch(() => ({ docs: [] }))]);
+    if (request !== schoolRequest) return;
+    transportData = { routes: routeDocs.docs, riders: riderDocs.docs };
     await loadFees(request);
     if (request === schoolRequest) await lists.concessions.load(request);
   } catch {
@@ -2455,12 +2470,25 @@ async function loadPortalFees(tools, request, studentId) {
   portalFeesSection.hidden = false;
   portalFeesStatus.textContent = 'Loading fees.';
   try {
-    const [placements, structures, payments, concessionDocs] = await Promise.all([
+    const { doc, getDocFromServer } = tools;
+    const [placements, structures, payments, concessionDocs, riderDoc] = await Promise.all([
       getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId))),
       getDocsFromServer(collection(schoolRef, 'feeStructures')),
       getDocsFromServer(query(collection(schoolRef, 'payments'), where('studentId', '==', studentId))),
       getDocsFromServer(query(collection(schoolRef, 'concessions'), where('studentId', '==', studentId))).catch(() => ({ docs: [] })),
+      getDocFromServer(doc(schoolRef, 'transportRiders', studentId)).catch(() => null),
     ]);
+    // Transport: monthly route fee times the months the school agreed with the parent. Like concessions, it goes on the latest year.
+    let transportCharge = 0;
+    let transportNote = '';
+    const rider = riderDoc?.exists() ? riderDoc.data() : null;
+    if (rider?.months) {
+      const route = await getDocFromServer(doc(schoolRef, 'routes', rider.routeId)).catch(() => null);
+      const monthly = route?.exists() ? route.data().monthlyFee ?? 0 : 0;
+      transportCharge = monthly * rider.months;
+      transportNote = monthly ? 'transport ' + rupees(monthly) + ' x ' + rider.months + ' month(s)' : '';
+    }
+    let transportUsed = false;
     // The family cannot read academic years, so concessions are applied to the latest year only.
     const concessionTotal = concessionDocs.docs.reduce((sum, record) => sum + record.data().amount, 0);
     let concessionUsed = false;
@@ -2472,7 +2500,9 @@ async function loadPortalFees(tools, request, studentId) {
     for (const placement of placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))) {
       const heads = structures.docs.map((record) => record.data())
         .filter((item) => item.yearId === placement.yearId && item.classId === placement.classId);
-      const gross = heads.reduce((sum, item) => sum + item.amount, 0);
+      const transport = transportUsed ? 0 : transportCharge;
+      transportUsed = true;
+      const gross = heads.reduce((sum, item) => sum + item.amount, 0) + transport;
       const concession = concessionUsed ? 0 : Math.min(concessionTotal, gross);
       concessionUsed = true;
       const due = gross - concession;
@@ -2481,7 +2511,7 @@ async function loadPortalFees(tools, request, studentId) {
       balanceTotal += due - paid;
       listItem(portalFeesSummary, placement.yearId + ': due ' + rupees(due) + (concession ? ' (after concession ' + rupees(concession) + ')' : '') + ', paid ' + rupees(paid)
         + ', balance ' + rupees(due - paid)
-        + (heads.length ? ' (' + heads.map((item) => item.name + ' ' + rupees(item.amount)).join(', ') + ')' : ''));
+        + (heads.length || transport ? ' (' + [...heads.map((item) => item.name + ' ' + rupees(item.amount)), ...(transport ? [transportNote] : [])].join(', ') + ')' : ''));
     }
     for (const payment of paidList.sort((a, b) => b.date.localeCompare(a.date) || b.receiptNo.localeCompare(a.receiptNo))) {
       addRow(portalFeesBody, [payment.receiptNo, payment.date, METHOD_LABEL[payment.method], rupees(payment.amount),
@@ -4063,11 +4093,12 @@ function ownerList(cfg) {
       section.hidden = false;
       status.textContent = '';
       api.draw();
-    } catch {
-      if (request === schoolRequest) {
-        section.hidden = false;
-        status.textContent = 'Could not load this list. Try again.';
-      }
+    } catch (error) {
+      if (request !== schoolRequest) return;
+      // A principal whose access to this area is switched off simply does not see the tile.
+      if (viewOnly && error?.code === 'permission-denied') { section.hidden = true; return; }
+      section.hidden = false;
+      status.textContent = 'Could not load this list. Try again.';
     }
   };
 
@@ -4168,11 +4199,25 @@ lists.riders = ownerList({
   },
   build: (fields) => {
     if (!text(fields, 'studentId') || !text(fields, 'routeId')) return { error: 'Choose a student and a route. Add a route first if there is none.' };
-    return { id: text(fields, 'studentId'), data: { studentId: text(fields, 'studentId'), routeId: text(fields, 'routeId'), ...optional(fields, 'stop') } };
+    const months = text(fields, 'months') ? wholeNumber(fields, 'months') : 0;
+    if (!(months >= 0 && months <= 12)) return { error: 'Months of transport fee must be a whole number from 0 to 12.' };
+    return { id: text(fields, 'studentId'), data: { studentId: text(fields, 'studentId'), routeId: text(fields, 'routeId'), ...optional(fields, 'stop'),
+      ...(months ? { months } : {}) } };
   },
   line: (item) => nameOfStudent(item.studentId) + ' - ' + routeName(item.routeId) + (item.stop ? ' - stop ' + item.stop : '')
-    + (routeFee(item.routeId) ? ' - fee ' + rupees(routeFee(item.routeId)) + '/month' : ''),
+    + (routeFee(item.routeId) ? ' - fee ' + rupees(routeFee(item.routeId)) + '/month' : '')
+    + (item.months && routeFee(item.routeId) ? ' x ' + item.months + ' month(s) = ' + rupees(routeFee(item.routeId) * item.months) + ' on the fee balance' : ' - no transport fee on the fee balance yet'),
 });
+
+for (const [name, key] of [['routes', 'routes'], ['riders', 'riders']]) {
+  const original = lists[name].load;
+  lists[name].load = async (request) => {
+    await original(request);
+    if (request !== schoolRequest) return;
+    transportData[key] = lists[name].items;
+    renderFeeBalance();
+  };
+}
 
 const SOON_DAYS = 30;
 const daysUntil = (dateText) => Math.round((Date.parse(dateText) - Date.parse(localToday())) / 86400000);
@@ -4648,6 +4693,11 @@ function securityNotes() {
   const removals = recent.filter((item) => item.action === 'remove').length;
   if (voids >= 3) notes.push(voids + ' payments were voided in the last 7 days. Check the activity log.');
   if (removals >= 10) notes.push(removals + ' records were removed in the last 7 days. Check the activity log.');
+  const studentRemovals = recent.filter((item) => item.action === 'remove' && item.target === 'students').length;
+  if (studentRemovals >= 3) notes.push(studentRemovals + ' student records were removed in the last 7 days. Check the activity log.');
+  const night = recent.filter((item) => { const hour = new Date(item.at).getHours(); return hour >= 23 || hour < 5; }).length;
+  if (night >= 5) notes.push(night + ' changes were made between 11 pm and 5 am in the last 7 days. Check the activity log.');
+  if (principalAccess.payroll) notes.push('The principal login can open staff payroll. Switch it off in Principal Access if that is not intended.');
   return notes;
 }
 
@@ -4917,6 +4967,22 @@ lists.payroll = ownerList({
   },
 });
 
+// Income tax estimate (new regime, 4% cess). Taxable yearly pay = (basic + allowances) x 12 minus the Rs 75,000 standard deduction.
+// Slabs: up to 4 lakh nil, then 5%, 10%, 15%, 20%, 25% each 4 lakh, and 30% above 24 lakh. Tax is nil up to 12 lakh taxable,
+// and just above 12 lakh it never takes more than the amount above 12 lakh. Check the slabs each year.
+const NEW_REGIME_BANDS = [[400000, 0], [800000, 0.05], [1200000, 0.10], [1600000, 0.15], [2000000, 0.20], [2400000, 0.25], [Infinity, 0.30]];
+function annualIncomeTax(taxable) {
+  let tax = 0;
+  let from = 0;
+  for (const [limit, rate] of NEW_REGIME_BANDS) {
+    if (taxable > from) tax += (Math.min(taxable, limit) - from) * rate;
+    from = limit;
+  }
+  tax = taxable <= 1200000 ? 0 : Math.min(tax, taxable - 1200000);
+  return Math.round(tax * 1.04);
+}
+const monthlyIncomeTax = (monthlyPay) => Math.round(annualIncomeTax(Math.max(0, monthlyPay * 12 - 75000)) / 12);
+
 // Payroll helper: provident fund as a percentage of basic pay plus professional tax fill the deductions box.
 document.querySelector('#payroll-calc').addEventListener('click', () => {
   const form = document.querySelector('#payroll-form');
@@ -4924,8 +4990,14 @@ document.querySelector('#payroll-calc').addEventListener('click', () => {
   const percent = Number(form.elements.namedItem('pfPercent').value);
   const ptax = Number(form.elements.namedItem('ptax').value);
   if (!(basic >= 0) || !(percent >= 0) || !(ptax >= 0)) { document.querySelector('#payroll-status').textContent = 'Enter the basic pay first.'; return; }
-  form.elements.namedItem('deductions').value = String(Math.round(basic * percent / 100) + Math.round(ptax));
-  document.querySelector('#payroll-status').textContent = 'Deductions filled in as provident fund plus professional tax. Check them before saving. Income tax is not worked out here.';
+  const withTax = form.elements.namedItem('withTax').checked;
+  const allowances = Number(form.elements.namedItem('allowances').value) || 0;
+  const tax = withTax ? monthlyIncomeTax(basic + allowances) : 0;
+  form.elements.namedItem('deductions').value = String(Math.round(basic * percent / 100) + Math.round(ptax) + tax);
+  document.querySelector('#payroll-status').textContent = 'Deductions filled in as provident fund plus professional tax'
+    + (withTax ? ' plus an income tax estimate of ' + rupees(tax) + ' a month' : '')
+    + '. Check them before saving.'
+    + (withTax ? ' The tax estimate uses the new regime, treats basic plus allowances as the whole yearly salary, and allows the standard deduction. It is not a tax filing: confirm it with your accountant.' : '');
 });
 
 lists.inbox = ownerList({
@@ -5823,6 +5895,47 @@ function printPayslip(item) {
   printCard('#payslip-print-head', 'Payslip - ' + staffLabel(item.staffUid) + ' - ' + item.month, () => { section.hidden = true; body.replaceChildren(); });
 }
 
+// Principal access switches: the owner decides whether the principal login may open payroll, fees and admissions.
+const principalAccessSection = document.querySelector('#principal-access');
+const principalAccessForm = document.querySelector('#principal-access-form');
+const principalAccessStatus = document.querySelector('#principal-access-status');
+const PRINCIPAL_DEFAULTS = { payroll: false, fees: true, admissions: true };
+let principalAccess = { ...PRINCIPAL_DEFAULTS };
+function drawPrincipalAccess() {
+  for (const key of Object.keys(PRINCIPAL_DEFAULTS)) principalAccessForm.elements.namedItem(key).checked = principalAccess[key] === true;
+}
+async function loadPrincipalAccess(request) {
+  principalAccessSection.hidden = viewOnly || document.body.dataset.role === 'accountant';
+  if (principalAccessSection.hidden) return;
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const found = await getDocFromServer(doc(academic.schoolRef, 'settings', 'principalAccess'));
+    if (request !== schoolRequest) return;
+    principalAccess = found.exists() ? { ...PRINCIPAL_DEFAULTS, ...found.data() } : { ...PRINCIPAL_DEFAULTS };
+    drawPrincipalAccess();
+    principalAccessStatus.textContent = '';
+    refreshAttention();
+  } catch {
+    if (request === schoolRequest) principalAccessStatus.textContent = 'Could not load the principal access settings. Refresh to try again.';
+  }
+}
+principalAccessForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy || viewOnly) return;
+  const next = Object.fromEntries(Object.keys(PRINCIPAL_DEFAULTS).map((key) => [key, principalAccessForm.elements.namedItem(key).checked]));
+  academic.busy = true;
+  try {
+    await academic.save('settings', 'principalAccess', next);
+    principalAccess = next;
+    principalAccessStatus.textContent = 'Saved. The principal sees the change the next time they open the app.';
+    refreshAttention();
+  } catch {
+    principalAccessStatus.textContent = 'That did not save. Try again.';
+  } finally {
+    academic.busy = false;
+  }
+});
+
 const backupSection = document.querySelector('#backup');
 const backupStatus = document.querySelector('#backup-status');
 const backupRun = document.querySelector('#backup-run');
@@ -6085,9 +6198,11 @@ function renderInsights() {
   renderDefaulterClasses();
   renderWorkload();
   backupSection.hidden = false;
+  loadPrincipalAccess(schoolRequest);
 }
 const resetInsights = () => {
-  for (const section of [checklistSection, defaultersSection, workloadSection, backupSection]) section.hidden = true;
+  principalAccess = { ...PRINCIPAL_DEFAULTS };
+  for (const section of [checklistSection, defaultersSection, workloadSection, backupSection, principalAccessSection]) section.hidden = true;
   for (const list of [checklistList, defaultersList, workloadList]) list.replaceChildren();
   for (const status of [checklistStatus, defaultersStatus, workloadStatus, backupStatus]) status.textContent = '';
   defaultersRows = [];
@@ -6959,6 +7074,7 @@ onAuthStateChanged(auth, async (user) => {
   feeBalanceSummary.textContent = '';
   feeBalanceBody.replaceChildren();
   feeData = { structures: [], payments: [] };
+  transportData = { routes: [], riders: [] };
   portalFeesSection.hidden = true;
   portalFeesStatus.textContent = '';
   portalFeesSummary.replaceChildren();
