@@ -597,6 +597,12 @@ studentForm.addEventListener('submit', (event) => {
       ...Object.fromEntries(['gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail'].filter((key) => value(key)).map((key) => [key, value(key)])),
     };
     await academic.save('students', id, saved);
+    if (!existing && admissionEnquiry) {
+      const fromEnquiry = admissionEnquiry;
+      await academic.save('enquiries', fromEnquiry.id, { ...fromEnquiry.data, status: 'admitted', note: ('Admission no ' + admissionNo).slice(0, 300) });
+      pendingPlacement = { studentId: id, classApplying: fromEnquiry.data.classApplying };
+      admissionEnquiry = null;
+    }
     if (existing) {
       const before = existing.data();
       const changes = studentFields.filter((field) => (before[field] ?? '') !== (saved[field] ?? '')).map((field) => field + ': ' + (before[field] || '-') + ' -> ' + (saved[field] || '-'));
@@ -612,8 +618,38 @@ studentForm.addEventListener('submit', (event) => {
       await addStudentHistory(id, 'photo removed');
     }
     studentForm.reset();
-  }, 'Student saved.', studentStatus);
+  }, 'Student saved.', studentStatus).then(() => {
+    if (!pendingPlacement) return;
+    const wanted = pendingPlacement;
+    pendingPlacement = null;
+    prepareAdmissionPlacement(wanted);
+    lists.enquiries.load(schoolRequest);
+  });
 });
+
+// Admission hand-off. "Create student record" on an enquiry remembers which enquiry it came from. When the new student
+// is saved the enquiry is marked admitted, and the placement form below is filled in with the active year, the section
+// that matches the class applied for, and the next free roll number. The owner still presses Place student.
+let admissionEnquiry = null;
+let pendingPlacement = null;
+function prepareAdmissionPlacement({ studentId, classApplying }) {
+  const year = [...placementData.years].find((record) => record.data().status === 'active');
+  const wanted = String(classApplying ?? '').trim().toLowerCase();
+  const section = placementData.sections.find((record) => {
+    const klass = placementData.classes.find((candidate) => candidate.id === record.data().classId)?.data().name.toLowerCase() ?? '';
+    return wanted && (klass === wanted || wanted.includes(klass) || klass.includes(wanted));
+  });
+  if (year) placementForm.elements.namedItem('yearId').value = year.id;
+  placementForm.elements.namedItem('studentId').value = studentId;
+  if (section) {
+    placementForm.elements.namedItem('sectionId').value = section.id;
+    const rolls = placementData.enrollments.filter((record) => record.data().sectionId === section.id && (!year || record.data().yearId === year.id)).map((record) => record.data().rollNo);
+    placementForm.elements.namedItem('rollNo').value = Math.min(999, Math.max(0, ...rolls) + 1);
+  }
+  placementStatus.textContent = 'Student saved and the enquiry is marked admitted. ' + (section ? 'The class, section and roll number are filled in from the enquiry. Check them, then press Place student.'
+    : 'Choose the class, section and roll number, then press Place student.');
+  placementForm.scrollIntoView({ block: 'center' });
+}
 
 const placementStatus = document.querySelector('#placement-status');
 const placementList = document.querySelector('#placement-list');
@@ -4909,10 +4945,26 @@ lists.enquiries = ownerList({
         studentForm.elements.namedItem('guardianName').value = item.guardianName;
         studentForm.elements.namedItem('guardianPhone').value = item.phone;
         if (item.email) studentForm.elements.namedItem('guardianEmail').value = item.email;
-        studentStatus.textContent = 'Started from the enquiry for ' + item.classApplying + '. Give an admission number, save, then place the student in a class. Mark the enquiry admitted when done.';
+        admissionEnquiry = { id: record.id, data: item };
+        studentStatus.textContent = 'Started from the enquiry for ' + item.classApplying + '. Give an admission number and save. The enquiry is then marked admitted and the class is filled in for you.';
         studentForm.elements.namedItem('admissionNo').focus();
       });
       buttons.push(button);
+    }
+    if (['offered', 'admitted'].includes(record.data().status)) {
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.textContent = 'Copy message to parent';
+      copy.addEventListener('click', async () => {
+        const item = record.data();
+        const school = document.querySelector('#school-name')?.textContent.trim() || 'our school';
+        const message = item.status === 'admitted'
+          ? 'Dear ' + item.guardianName + ', welcome to ' + school + '. ' + item.studentName + ' is admitted to ' + item.classApplying + '. Please visit the school office with the documents asked for to complete the formalities.'
+          : 'Dear ' + item.guardianName + ', we are pleased to offer ' + item.studentName + ' a place in ' + item.classApplying + ' at ' + school + '. Please contact the school office to confirm the admission.';
+        const where = document.querySelector('#enquiries-status');
+        try { await navigator.clipboard.writeText(message); where.textContent = 'Message copied. Paste it into WhatsApp, SMS or email.'; } catch { where.textContent = message; }
+      });
+      buttons.push(copy);
     }
     return buttons;
   },
@@ -4951,6 +5003,13 @@ document.querySelector('#website-generate').addEventListener('click', () => {
     seoTitle: name + ' - admissions, classes and contact',
     seoDesc: name + ' offers ' + classNames.length + ' classes. See our programmes, faculty, facilities and how to apply.',
   };
+  // Extra sections from other screens: leadership from principal/head roles, facilities from clubs and transport, contact from the school profile.
+  const heads = staff.filter((item) => /principal|head ?master|head ?mistress|vice|director/i.test(item.role)).map((item) => item.name + ' - ' + item.role);
+  if (heads.length) draft.leadership = heads.join('\n');
+  const facilityRows = [];
+  if (lists.activities.items.length) facilityRows.push('Clubs and activities: ' + lists.activities.items.map((record) => record.data().name).slice(0, 8).join(', '));
+  if (lists.routes.items.length) facilityRows.push('School transport on ' + lists.routes.items.length + ' route(s)');
+  if (facilityRows.length) draft.facilities = facilityRows.join('\n');
   let filled = 0;
   for (const [key, value] of Object.entries(draft)) {
     const box = field(key);
@@ -4958,7 +5017,24 @@ document.querySelector('#website-generate').addEventListener('click', () => {
   }
   websiteStatus.textContent = filled ? 'Filled ' + filled + ' empty box(es) with starter text. Read it, change it to your own words, then press Save.'
     : 'Every box already has text, so nothing was changed.';
+  showReadiness();
 });
+
+// Website readiness: which public sections have text, a percentage, and a link to the live page.
+const READY_PARTS = [['about', 'About us'], ['vision', 'Vision'], ['mission', 'Mission'], ['leadership', 'Leadership'], ['programmes', 'Programmes'],
+  ['faculty', 'Faculty'], ['facilities', 'Facilities'], ['news', 'News'], ['gallery', 'Gallery'], ['phone', 'Phone'], ['email', 'Email'], ['address', 'Address'],
+  ['mapUrl', 'Map'], ['seoTitle', 'Search title'], ['seoDesc', 'Search description']];
+function showReadiness() {
+  const target = document.querySelector('#website-ready');
+  if (!target) return;
+  const filled = READY_PARTS.filter(([key]) => websiteForm.elements.namedItem(key).value.trim());
+  const missing = READY_PARTS.filter(([key]) => !websiteForm.elements.namedItem(key).value.trim()).map(([, label]) => label);
+  target.textContent = 'Website ready: ' + Math.round(filled.length / READY_PARTS.length * 100) + '% (' + filled.length + ' of ' + READY_PARTS.length + ' parts).'
+    + (missing.length ? ' Still empty: ' + missing.join(', ') + '.' : ' Everything is filled in.');
+  const link = document.querySelector('#website-open');
+  if (link && academic?.schoolRef) { link.href = './school?school=' + encodeURIComponent(academic.schoolRef.id); link.hidden = false; }
+}
+websiteForm.addEventListener('input', showReadiness);
 
 async function loadWebsite(request) {
   const { doc, getDocFromServer } = firestoreTools;
@@ -4969,6 +5045,7 @@ async function loadWebsite(request) {
     const data = saved.exists() ? saved.data() : {};
     for (const key of WEBSITE_FIELDS) websiteForm.elements.namedItem(key).value = data[key] ?? '';
     websiteStatus.textContent = saved.exists() ? '' : 'Nothing is published yet. Fill this in and save.';
+    showReadiness();
   } catch {
     if (request === schoolRequest) websiteStatus.textContent = 'Could not load the website content. Try again.';
   }
@@ -5162,6 +5239,7 @@ async function loadSettings(request) {
     const extra = extras.exists() ? extras.data() : {};
     siteExtrasCurrent = extra;
     siteExtrasForm.elements.namedItem('theme').value = extra.theme ?? 'classic';
+    markTheme();
     extraLabels = [];
     for (let slot = 1; slot <= 6; slot += 1) {
       const parsed = extra['f' + slot] ? parseSlot(extra['f' + slot]) : { label: '', type: 'text', required: false, options: '' };
@@ -5229,6 +5307,59 @@ function renderLaunch() {
   });
   launchStatus.textContent = done + ' of ' + LAUNCH_ITEMS.length + ' go-live steps ticked.';
 }
+
+// Theme gallery: every palette as a card with its colours. Clicking one selects it in the list and previews it here;
+// nothing is published until the owner presses Save.
+const THEME_CARDS = [
+  ['classic', 'Classic navy and gold', '#14243d', '#faf6ec', '#b8913a'], ['royal', 'Royal purple', '#2e1a4d', '#f7f3fb', '#c29b3f'],
+  ['emerald', 'Emerald green', '#0f3d2e', '#f3f8f4', '#c0a040'], ['crimson', 'Crimson red', '#5a1020', '#fbf4f2', '#c79a3a'],
+  ['midnight', 'Midnight dark', '#0b1020', '#e8ecf5', '#d4af37'], ['saffron', 'Saffron', '#7a2e0e', '#fdf6ee', '#d19a2a'],
+  ['ocean', 'Ocean blue', '#0b3550', '#f1f7fa', '#c9a23c'], ['slate', 'Slate grey', '#2b2f38', '#f4f5f7', '#b8913a'],
+  ['teal', 'Teal', '#0d4a52', '#f1f8f8', '#d0a23c'], ['maroon', 'Maroon', '#4a0f1f', '#fbf5f4', '#c9a24a'],
+  ['indigo', 'Indigo', '#1f2a6b', '#f4f5fc', '#d1a53c'], ['forest', 'Forest green', '#1f4d2b', '#f5f8f1', '#bf9b3a'],
+  ['sunrise', 'Sunrise orange', '#9a3412', '#fff7ed', '#eab308'], ['rose', 'Rose', '#8a1e4a', '#fdf3f6', '#c9a24a'],
+  ['charcoal', 'Charcoal', '#222222', '#f5f5f3', '#c8a24a'], ['sky', 'Sky blue', '#0f5c8a', '#f2f9fd', '#e0b43c'],
+];
+const themeGallery = document.querySelector('#theme-gallery');
+const themePreview = document.querySelector('#theme-preview');
+const themeSelect = siteExtrasForm.elements.namedItem('theme');
+function markTheme() {
+  for (const card of themeGallery.children) card.setAttribute('aria-pressed', String(card.dataset.theme === themeSelect.value));
+  const found = THEME_CARDS.find((card) => card[0] === themeSelect.value);
+  themePreview.replaceChildren();
+  if (!found) return;
+  const [, label, navy, ivory, gold] = found;
+  const bar = document.createElement('div');
+  bar.className = 'theme-sample';
+  bar.style.cssText = 'background:' + navy + ';color:' + ivory + ';border-bottom:4px solid ' + gold + ';padding:12px;border-radius:8px;margin:8px 0';
+  bar.textContent = 'Preview: ' + label + ' - your school name and tagline look like this on the public page.';
+  themePreview.append(bar);
+}
+for (const [key, label, navy, ivory, gold] of THEME_CARDS) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.dataset.theme = key;
+  card.setAttribute('aria-pressed', 'false');
+  card.setAttribute('aria-label', label);
+  card.title = label;
+  card.className = 'theme-card';
+  card.style.cssText = 'display:inline-flex;flex-direction:column;align-items:stretch;gap:4px;margin:4px;padding:6px;min-width:96px;border:2px solid #b9ad88;border-radius:10px;background:#fff;cursor:pointer';
+  const swatch = document.createElement('span');
+  swatch.style.cssText = 'display:flex;height:26px;border-radius:6px;overflow:hidden';
+  for (const color of [navy, ivory, gold]) {
+    const part = document.createElement('span');
+    part.style.cssText = 'flex:1;background:' + color;
+    swatch.append(part);
+  }
+  const name = document.createElement('span');
+  name.textContent = label;
+  name.style.fontSize = '.8rem';
+  card.append(swatch, name);
+  card.addEventListener('click', () => { themeSelect.value = key; markTheme(); });
+  themeGallery.append(card);
+}
+themeSelect.addEventListener('change', markTheme);
+markTheme();
 
 siteExtrasForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -7153,4 +7284,32 @@ signOutButton.addEventListener('click', async () => {
 // Installable app: the service worker keeps the page shell for offline opening.
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+
+// Parent and student portal: a jump bar. It lists only the sections that are showing for this child, and sticks to the
+// bottom of a phone screen (see sign-in.css), so a parent reaches fees, attendance or notices with one tap.
+{
+  const nav = document.querySelector('#portal-nav');
+  const PARTS = [['portal-title', 'Results'], ['portal-attendance', 'Attendance'], ['portal-fees', 'Fees'], ['portal-homework', 'Homework'],
+    ['portal-timetable', 'Timetable'], ['portal-calendar', 'Calendar'], ['portal-notices', 'Notices'], ['portal-messages', 'Messages'], ['portal-ptm', 'Meetings']];
+  let queued = false;
+  const rebuild = () => {
+    queued = false;
+    nav.replaceChildren();
+    if (portalDashboard.hidden) return;
+    for (const [id, label] of PARTS) {
+      const target = document.querySelector('#' + id);
+      if (!target || target.hidden) continue;
+      const link = document.createElement('a');
+      link.href = '#' + id;
+      link.textContent = label;
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        target.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+      });
+      nav.append(link);
+    }
+  };
+  new MutationObserver(() => { if (!queued) { queued = true; setTimeout(rebuild, 50); } })
+    .observe(portalDashboard, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
 }

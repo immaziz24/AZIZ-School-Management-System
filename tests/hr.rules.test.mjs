@@ -158,3 +158,24 @@ test('principal can decide leave, post notices and write the log; nothing else',
   await denied(set('prin', P('students', 'a9'), student({ admissionNo: 'A9' })), 'students');
   await denied(set('prin', P('members', 'prin'), { role: 'owner', active: true }), 'promote self');
 });
+
+test('website themes: all sixteen palettes are accepted, unknown ones refused, only the owner saves', async () => {
+  const path = P('site', 'extras');
+  for (const theme of ['classic', 'royal', 'emerald', 'crimson', 'midnight', 'saffron', 'ocean', 'slate', 'teal', 'maroon', 'indigo', 'forest', 'sunrise', 'rose', 'charcoal', 'sky']) {
+    await allowed(set('owner-a', path, { theme }), 'theme ' + theme);
+  }
+  for (const theme of ['neon', 'Teal', '', 'sky ']) await denied(set('owner-a', path, { theme }), 'bad theme ' + JSON.stringify(theme));
+  await allowed(get(null, path), 'public reads the look');
+  for (const who of ['prin', 't1', 'parent-1', 'owner-b', null]) await denied(set(who, path, { theme: 'teal' }), 'write by ' + who);
+});
+
+test('admission hand-off: an enquiry can be marked admitted with a note, only by the owner', async () => {
+  const enquiry = { studentName: 'Riya', classApplying: 'Class 5', guardianName: 'Mr Das', phone: '98300 44444', createdAt: D, status: 'offered' };
+  await allowed(set(null, P('enquiries', 'EQ-1'), { ...enquiry, status: 'new' }), 'visitor sends an enquiry as new');
+  await denied(set(null, P('enquiries', 'EQ-2'), enquiry), 'visitor cannot start as offered');
+  await allowed(set('owner-a', P('enquiries', 'EQ-1'), enquiry), 'owner moves it to offered');
+  await allowed(set('owner-a', P('enquiries', 'EQ-1'), { ...enquiry, status: 'admitted', note: 'Admission no A77' }), 'mark admitted with note');
+  await denied(set('owner-a', P('enquiries', 'EQ-1'), { ...enquiry, status: 'admitted', note: 'n'.repeat(301) }), 'note too long');
+  await denied(set('owner-a', P('enquiries', 'EQ-1'), { ...enquiry, status: 'enrolled' }), 'unknown status');
+  for (const who of ['prin', 't1', 'parent-1', 'owner-b']) await denied(set(who, P('enquiries', 'EQ-1'), { ...enquiry, status: 'rejected' }), 'update by ' + who);
+});

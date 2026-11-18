@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-46">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-47">
 </head>
 <body>
   <main>
@@ -485,6 +485,8 @@
         <p>This text appears on the public school page. Only write what you are happy for anyone to read.</p>
         <p id="website-status" role="status"></p>
         <p><button id="website-generate" type="button">Generate starter text from my school records</button></p>
+        <p id="website-ready" role="status"></p>
+        <p><a id="website-open" href="./school" target="_blank" rel="noopener" hidden>Open my public school page</a></p>
         <form id="website-form">
           <p><label>School name <input name="name" type="text" maxlength="80" required></label></p>
           <p><label>Tagline <input name="tagline" type="text" maxlength="120"></label></p>
@@ -521,7 +523,17 @@
               <option value="saffron">Saffron</option>
               <option value="ocean">Ocean blue</option>
               <option value="slate">Slate grey</option>
+              <option value="teal">Teal</option>
+              <option value="maroon">Maroon</option>
+              <option value="indigo">Indigo</option>
+              <option value="forest">Forest green</option>
+              <option value="sunrise">Sunrise orange</option>
+              <option value="rose">Rose</option>
+              <option value="charcoal">Charcoal</option>
+              <option value="sky">Sky blue</option>
             </select></label></p>
+          <div id="theme-gallery" role="group" aria-label="Theme gallery"></div>
+          <div id="theme-preview" aria-live="polite"></div>
           <h4>Extra admission questions</h4>
           <div id="siteextras-slots"></div>
           <button type="submit">Save look and form</button>
@@ -1175,6 +1187,7 @@
       </form>
     </section>
     <section id="portal-dashboard" aria-labelledby="portal-title" hidden>
+      <nav id="portal-nav" aria-label="Jump to a section"></nav>
       <div id="portal-card" class="print-target">
       <p id="portal-print-head" class="print-only"></p>
       <h2 id="portal-title">My Results</h2>
@@ -1393,14 +1406,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-46');
-      await import('./i18n.mjs?v=batch-46');
+      await import('./ui.mjs?v=batch-47');
+      await import('./i18n.mjs?v=batch-47');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-46');
-      await import('./platform.mjs?v=batch-46');
+      await import('./sign-in.mjs?v=batch-47');
+      await import('./platform.mjs?v=batch-47');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

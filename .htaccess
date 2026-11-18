@@ -10,3 +10,4 @@ RewriteRule ^(features|pricing|about|contact|security|privacy|terms)/?$ public/s
 RewriteRule ^(site\.css|site\.js)$ public/site/$1 [L]
 RewriteRule ^(sign-in\.css|sign-in\.mjs|firebase-client\.mjs|school\.mjs|platform\.mjs|ui\.mjs|i18n\.mjs|sw\.js|manifest\.webmanifest|icon-192\.png|icon-512\.png)$ public/$1 [L]
 RewriteRule ^(school)(\.html)?$ public/school.html [L]
+RewriteRule ^(robots\.txt|sitemap\.xml)$ public/$1 [L]

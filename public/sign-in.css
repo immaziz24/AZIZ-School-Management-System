@@ -161,3 +161,15 @@ body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concession
   #portal-dashboard form p{margin:8px 0}
   #portal-dashboard img{max-width:100%;height:auto}
 }
+
+/* Portal jump bar and theme gallery (batch 47). */
+#portal-nav{display:flex;gap:6px;overflow-x:auto;padding:6px 0;margin:0 0 8px;position:sticky;top:0;z-index:5;background:var(--ivory,#faf6ec)}
+#portal-nav:empty{display:none}
+#portal-nav a{flex:0 0 auto;padding:10px 14px;border:2px solid var(--gold,#b8913a);border-radius:999px;background:var(--navy,#14243d);color:var(--ivory,#faf6ec);text-decoration:none;font-size:.95rem;min-height:44px;box-sizing:border-box;display:inline-flex;align-items:center}
+#portal-nav a:focus-visible{outline:3px solid #fff;outline-offset:2px}
+@media(max-width:600px){
+  #portal-nav{position:fixed;top:auto;bottom:0;left:0;right:0;margin:0;padding:8px;border-top:3px solid var(--gold,#b8913a);box-shadow:0 -4px 12px rgba(0,0,0,.2)}
+  #portal-dashboard{padding-bottom:84px}
+}
+.theme-card[aria-pressed="true"]{border-color:#14243d!important;box-shadow:0 0 0 3px #b8913a}
+.theme-card:focus-visible{outline:3px solid #14243d;outline-offset:2px}

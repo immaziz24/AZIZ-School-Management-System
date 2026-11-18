@@ -44,6 +44,10 @@ const THEMES = {
   classic: ['#14243d', '#faf6ec', '#b8913a', '#0f1b2f'], royal: ['#2e1a4d', '#f7f3fb', '#c29b3f', '#22123a'],
   emerald: ['#0f3d2e', '#f3f8f4', '#c0a040', '#0a2d22'], crimson: ['#5a1020', '#fbf4f2', '#c79a3a', '#430b17'],
   midnight: ['#0b1020', '#e8ecf5', '#d4af37', '#070a14'],
+  teal: ['#0d4a52', '#f1f8f8', '#d0a23c', '#093a41'], maroon: ['#4a0f1f', '#fbf5f4', '#c9a24a', '#380a17'],
+  indigo: ['#1f2a6b', '#f4f5fc', '#d1a53c', '#161f52'], forest: ['#1f4d2b', '#f5f8f1', '#bf9b3a', '#173a20'],
+  sunrise: ['#9a3412', '#fff7ed', '#eab308', '#7c2d12'], rose: ['#8a1e4a', '#fdf3f6', '#c9a24a', '#6b1738'],
+  charcoal: ['#222222', '#f5f5f3', '#c8a24a', '#161616'], sky: ['#0f5c8a', '#f2f9fd', '#e0b43c', '#0b4568'],
   saffron: ['#7a2e0e', '#fdf6ee', '#d19a2a', '#5a2009'], ocean: ['#0b3550', '#f1f7fa', '#c9a23c', '#082a40'],
   slate: ['#2b2f38', '#f4f5f7', '#b8913a', '#1f2229'],
 };
@@ -81,6 +85,64 @@ async function loadExtras() {
       host.append(p);
     }
   } catch { /* The standard form still works. */ }
+}
+
+// Search and sharing data, built from the saved page text. Everything goes in as text or JSON, never as HTML.
+function setMeta(selector, attribute, value) {
+  let tag = document.querySelector(selector);
+  if (!tag) { tag = document.createElement('meta'); tag.setAttribute(attribute.name, attribute.key); document.head.append(tag); }
+  tag.setAttribute('content', value);
+}
+function addSearchData(data, description) {
+  const pageUrl = location.origin + location.pathname.replace(/\.html$/, '') + (wanted ? '?school=' + encodeURIComponent(SCHOOL_ID) : '');
+  document.querySelector('link[rel="canonical"]')?.setAttribute('href', pageUrl);
+  setMeta('meta[property="og:title"]', { name: 'property', key: 'og:title' }, document.title);
+  setMeta('meta[property="og:description"]', { name: 'property', key: 'og:description' }, description);
+  setMeta('meta[property="og:url"]', { name: 'property', key: 'og:url' }, pageUrl);
+  const ld = { '@context': 'https://schema.org', '@type': 'School', name: data.name, url: pageUrl, description };
+  if (data.phone) ld.telephone = data.phone;
+  if (data.email) ld.email = data.email;
+  if (data.address) ld.address = { '@type': 'PostalAddress', streetAddress: data.address };
+  document.querySelector('#ld-school').textContent = JSON.stringify(ld);
+}
+// Big buttons under the school name: apply, call, email, find us. Phone and email are cleaned before they become links.
+function addHeroButtons(data) {
+  const host = document.querySelector('#hero-cta');
+  host.replaceChildren();
+  const add = (label, href, primary) => {
+    const link = document.createElement('a');
+    link.href = href;
+    link.textContent = label;
+    if (primary) link.className = 'primary';
+    host.append(link);
+  };
+  add('Apply now', '#admissions', true);
+  const phone = String(data.phone ?? '').replace(/[^0-9+]/g, '');
+  if (phone.length >= 6) add('Call us', 'tel:' + phone, false);
+  if (/^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(String(data.email ?? ''))) add('Email us', 'mailto:' + data.email, false);
+  if (data.address || data.mapUrl) add('Find us', '#contact', false);
+  host.hidden = false;
+}
+// Mobile menu, current-section highlight and the back-to-top button.
+const navBar = document.querySelector('#site-nav');
+const navToggle = document.querySelector('#nav-toggle');
+navToggle.addEventListener('click', () => {
+  const open = navBar.classList.toggle('open');
+  navToggle.setAttribute('aria-expanded', String(open));
+});
+navBar.addEventListener('click', (event) => {
+  if (event.target.closest('a')) { navBar.classList.remove('open'); navToggle.setAttribute('aria-expanded', 'false'); }
+});
+const toTop = document.querySelector('#to-top');
+addEventListener('scroll', () => { toTop.hidden = scrollY < 600; }, { passive: true });
+if ('IntersectionObserver' in window) {
+  const watcher = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      for (const link of document.querySelectorAll('#site-nav-links a')) link.classList.toggle('current', link.getAttribute('href') === '#' + entry.target.id);
+    }
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  for (const [id] of SECTIONS) { const target = document.querySelector('#' + id); if (target) watcher.observe(target); }
 }
 
 async function load() {
@@ -128,6 +190,7 @@ async function load() {
       image.alt = caption.join(' ') || 'School photo';
       image.loading = 'lazy';
       image.referrerPolicy = 'no-referrer';
+      image.decoding = 'async';
       image.style.maxWidth = '100%';
       figure.append(image);
       if (caption.length) {
@@ -139,7 +202,10 @@ async function load() {
     }
     show('gallery', galleryBody.children.length);
     if (data.seoTitle) document.title = data.seoTitle;
-    if (data.seoDesc) document.querySelector('meta[name="description"]')?.setAttribute('content', data.seoDesc);
+    const description = data.seoDesc || data.tagline || (data.name + ' - programmes, facilities, contact details and admission enquiries.');
+    document.querySelector('meta[name="description"]')?.setAttribute('content', description);
+    addSearchData(data, description);
+    addHeroButtons(data);
     const contact = document.querySelector('#contact-body');
     contact.replaceChildren();
     for (const [label, value] of [['Phone', data.phone], ['Email', data.email], ['Address', data.address]]) {
@@ -157,7 +223,7 @@ async function load() {
     }
     show('contact', contact.children.length + (map.hidden ? 0 : 1));
     document.querySelector('#footer-line').textContent = data.name + (data.address ? ' - ' + data.address : '');
-    const nav = document.querySelector('#site-nav');
+    const nav = document.querySelector('#site-nav-links');
     nav.replaceChildren();
     for (const [id, label] of SECTIONS) {
       if (document.querySelector('#' + id).hidden) continue;
