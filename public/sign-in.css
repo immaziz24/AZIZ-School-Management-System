@@ -173,3 +173,6 @@ body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concession
 }
 .theme-card[aria-pressed="true"]{border-color:#14243d!important;box-shadow:0 0 0 3px #b8913a}
 .theme-card:focus-visible{outline:3px solid #14243d;outline-offset:2px}
+
+#portal-exam-pick button[aria-pressed="true"]{background:var(--gold,#b8913a);color:#1d1608;border-color:var(--gold,#b8913a)}
+#portal-head{margin-bottom:8px}

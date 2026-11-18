@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-48">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-49">
 </head>
 <body>
   <main>
@@ -1188,21 +1188,29 @@
     </section>
     <section id="portal-dashboard" aria-labelledby="portal-title" hidden>
       <nav id="portal-nav" aria-label="Jump to a section"></nav>
-      <div id="portal-card" class="print-target">
-      <p id="portal-print-head" class="print-only"></p>
-      <h2 id="portal-title">My Results</h2>
-      <p id="portal-child-wrap" hidden><label>Child <select id="portal-child"></select></label></p>
-      <p>ABCD School</p>
-      <p id="portal-email"></p>
-      <p id="portal-student"></p>
-      <p id="portal-status" role="status"></p>
-      <table>
-        <thead><tr><th>Year</th><th>Subject</th><th>Exam</th><th>Marks</th><th>Percent</th><th>Grade</th></tr></thead>
-        <tbody id="portal-body"></tbody>
-      </table>
-      <p id="portal-total" role="status"></p>
-      <button id="portal-print" class="no-print" type="button">Print or save as PDF</button>
+      <div id="portal-head">
+        <h2 id="portal-title">Student Portal</h2>
+        <p id="portal-child-wrap" hidden><label>Child <select id="portal-child"></select></label></p>
+        <p>ABCD School</p>
+        <p id="portal-email"></p>
+        <p id="portal-student"></p>
+        <p id="portal-status" role="status"></p>
       </div>
+      <section id="portal-results" aria-labelledby="portal-results-title">
+        <h3 id="portal-results-title">My Results</h3>
+        <p>Choose an exam to see its marks, subject by subject.</p>
+        <div id="portal-exam-pick" role="group" aria-label="Choose an exam"></div>
+        <div id="portal-card" class="print-target">
+          <p id="portal-print-head" class="print-only"></p>
+          <p id="portal-exam-title" role="status"></p>
+          <table>
+            <thead><tr><th>Subject</th><th>Exam</th><th>Marks</th><th>Percent</th><th>Grade</th></tr></thead>
+            <tbody id="portal-body"></tbody>
+          </table>
+          <p id="portal-total" role="status"></p>
+        </div>
+        <button id="portal-print" class="no-print" type="button">Print or save as PDF</button>
+      </section>
       <section id="portal-attendance" aria-labelledby="portal-attendance-title" hidden>
         <h3 id="portal-attendance-title">Attendance</h3>
         <p id="portal-attendance-status" role="status"></p>
@@ -1406,14 +1414,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-48');
-      await import('./i18n.mjs?v=batch-48');
+      await import('./ui.mjs?v=batch-49');
+      await import('./i18n.mjs?v=batch-49');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-48');
-      await import('./platform.mjs?v=batch-48');
+      await import('./sign-in.mjs?v=batch-49');
+      await import('./platform.mjs?v=batch-49');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

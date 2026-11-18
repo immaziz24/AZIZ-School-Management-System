@@ -1055,6 +1055,64 @@ const portalTotal = document.querySelector('#portal-total');
 
 // Student and parent page (feature 048). Marks are read one by one by ID: the rules allow only
 // the linked student's marks in published exams, so an exam from another class is skipped.
+// Results are tucked behind the My Results tile. The student picks one exam (term) at a time; "All exams" adds them up.
+let portalLines = [];
+let portalChosenExam = '';
+const portalExamPick = document.querySelector('#portal-exam-pick');
+const portalExamTitle = document.querySelector('#portal-exam-title');
+const examKeyOf = (line) => line.exam.yearId + '|' + line.exam.name;
+function buildPortalExamPicker() {
+  portalExamPick.replaceChildren();
+  portalBody.replaceChildren();
+  portalTotal.textContent = '';
+  portalExamTitle.textContent = '';
+  if (!portalLines.length) return;
+  const years = new Set(portalLines.map((line) => line.exam.yearId));
+  const keys = [...new Map(portalLines.map((line) => [examKeyOf(line), line])).entries()]
+    .sort((a, b) => b[1].exam.yearId.localeCompare(a[1].exam.yearId) || (a[1].exam.examKey ?? a[1].exam.name).localeCompare(b[1].exam.examKey ?? b[1].exam.name));
+  const choices = [...keys.map(([key, line]) => [key, line.exam.name + (years.size > 1 ? ' (' + line.exam.yearId + ')' : '')]), ['all', 'All exams together']];
+  for (const [key, label] of choices) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.exam = key;
+    button.textContent = label;
+    button.style.cssText = 'margin:4px 6px 4px 0;min-height:44px';
+    button.addEventListener('click', () => { portalChosenExam = key; showPortalExam(); });
+    portalExamPick.append(button);
+  }
+  portalChosenExam = choices[0][0];
+  showPortalExam();
+}
+function showPortalExam() {
+  for (const button of portalExamPick.children) button.setAttribute('aria-pressed', String(button.dataset.exam === portalChosenExam));
+  const shown = portalLines.filter((line) => portalChosenExam === 'all' || examKeyOf(line) === portalChosenExam);
+  portalBody.replaceChildren();
+  let got = 0;
+  let max = 0;
+  let failed = 0;
+  for (const { exam, mark, subject } of shown) {
+    const percent = Math.round(mark.score / exam.maxMarks * 1000) / 10;
+    got += mark.score;
+    max += exam.maxMarks;
+    if (!passedExam(exam, mark.score)) failed += 1;
+    const tr = document.createElement('tr');
+    for (const text of [subject, exam.name + (portalChosenExam === 'all' ? ' (' + exam.yearId + ')' : ''), mark.score + ' / ' + exam.maxMarks, percent + '%', gradeTextFor(exam, mark.score)]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.append(td);
+    }
+    portalBody.append(tr);
+  }
+  const label = [...portalExamPick.children].find((button) => button.dataset.exam === portalChosenExam)?.textContent ?? '';
+  portalExamTitle.textContent = shown.length ? label : '';
+  if (shown.length) {
+    const overall = Math.round(got / max * 1000) / 10;
+    portalTotal.textContent = 'Total ' + got + ' / ' + max + ' - ' + overall + '% - Grade ' + gradeFor(overall) + ' - ' + resultText(failed);
+  } else {
+    portalTotal.textContent = '';
+  }
+}
+
 async function loadPortal(tools, request) {
   const { schoolRef, user, doc, collection, getDocFromServer, getDocsFromServer, query, where } = tools;
   portalEmail.textContent = user.email;
@@ -1118,30 +1176,13 @@ async function loadPortal(tools, request) {
     const subjectName = new Map(subjectIds.map((id, index) => [id, subjectDocs[index]?.data()?.name ?? id]));
     const lines = exams.docs.map((record, index) => ({ exam: record.data(), mark: marks[index]?.exists() ? marks[index].data() : null }))
       .filter((line) => line.mark)
-      .sort((a, b) => a.exam.yearId.localeCompare(b.exam.yearId) || subjectName.get(a.exam.subjectId).localeCompare(subjectName.get(b.exam.subjectId)));
+      .map((line) => ({ ...line, subject: subjectName.get(line.exam.subjectId) }))
+      .sort((a, b) => a.exam.yearId.localeCompare(b.exam.yearId) || a.subject.localeCompare(b.subject));
     portalStudent.textContent = student.exists() ? student.data().name + ' (' + student.data().admissionNo + ')' : '';
-    let got = 0;
-    let max = 0;
-    let failed = 0;
-    for (const { exam, mark } of lines) {
-      const percent = Math.round(mark.score / exam.maxMarks * 1000) / 10;
-      got += mark.score;
-      max += exam.maxMarks;
-      if (!passedExam(exam, mark.score)) failed += 1;
-      const tr = document.createElement('tr');
-      for (const text of [exam.yearId, subjectName.get(exam.subjectId), exam.name,
-        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeTextFor(exam, mark.score)]) {
-        const td = document.createElement('td');
-        td.textContent = text;
-        tr.append(td);
-      }
-      portalBody.append(tr);
-    }
+    portalLines = lines;
+    portalChosenExam = '';
+    buildPortalExamPicker();
     portalStatus.textContent = lines.length ? '' : 'No results have been published yet.';
-    if (lines.length) {
-      const overall = Math.round(got / max * 1000) / 10;
-      portalTotal.textContent = 'Total ' + got + ' / ' + max + ' - ' + overall + '% - Grade ' + gradeFor(overall) + ' - ' + resultText(failed);
-    }
   } catch {
     if (request === schoolRequest) portalStatus.textContent = 'Could not load results. Try again.';
   }
@@ -6985,6 +7026,9 @@ onAuthStateChanged(auth, async (user) => {
   portalStudent.textContent = '';
   portalBody.replaceChildren();
   portalTotal.textContent = '';
+  portalLines = [];
+  portalExamPick.replaceChildren();
+  portalExamTitle.textContent = '';
   reportStatus.textContent = '';
   reportTotal.textContent = '';
   reportBody.replaceChildren();
@@ -7304,7 +7348,7 @@ if ('serviceWorker' in navigator) {
 // bottom of a phone screen (see sign-in.css), so a parent reaches fees, attendance or notices with one tap.
 {
   const nav = document.querySelector('#portal-nav');
-  const PARTS = [['portal-title', 'Results'], ['portal-attendance', 'Attendance'], ['portal-fees', 'Fees'], ['portal-homework', 'Homework'],
+  const PARTS = [['portal-results', 'Results'], ['portal-attendance', 'Attendance'], ['portal-fees', 'Fees'], ['portal-homework', 'Homework'],
     ['portal-timetable', 'Timetable'], ['portal-calendar', 'Calendar'], ['portal-notices', 'Notices'], ['portal-messages', 'Messages'], ['portal-ptm', 'Meetings']];
   let queued = false;
   const rebuild = () => {
