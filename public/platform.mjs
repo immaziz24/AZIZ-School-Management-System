@@ -75,10 +75,10 @@ const run = async (statusEl, action, done) => {
   busy = true;
   statusEl.textContent = 'Working.';
   try {
-    await action();
-    statusEl.textContent = done;
+    const out = await action();
+    statusEl.textContent = out?.message ?? done;
   } catch (error) {
-    statusEl.textContent = error?.code === 'permission-denied'
+    statusEl.textContent = error?.userMessage ? error.userMessage : error?.code === 'permission-denied'
       ? 'That is not allowed. If the school is suspended it is read-only.'
       : 'That did not work. Check the details and try again.';
   } finally {
@@ -311,12 +311,26 @@ async function loadMembers() {
       }, 'Updated.'))] : [])]), 'No members.');
   } catch { fillList(plan.members, [], 'Members could not be loaded.'); }
 }
+// Domain check, run from the platform administrator's browser: the DNS records through Google's public DNS lookup, and whether
+// https:// answers (it only does when the secure certificate is working for that address).
+async function checkDomain(domain) {
+  const result = { dns: [], https: false };
+  for (const type of ['CNAME', 'A']) {
+    try {
+      const answer = await (await fetch('https://dns.google/resolve?name=' + encodeURIComponent(domain) + '&type=' + type)).json();
+      for (const record of answer.Answer ?? []) if (record.type === (type === 'A' ? 1 : 5)) result.dns.push(type + ' ' + String(record.data).replace(/\.$/, ''));
+    } catch { /* This lookup failed; the other one may still work. */ }
+  }
+  try { await fetch('https://' + domain + '/robots.txt', { mode: 'no-cors', cache: 'no-store' }); result.https = true; } catch { /* No secure page yet. */ }
+  return result;
+}
 async function loadDomains() {
   try {
     const found = await getDocs(collection(schoolRef, 'domainRequests'));
     fillList(plan.domains, found.docs.map((d) => [d.data().domain + ' - ' + d.data().status + (d.data().note ? ' (' + d.data().note + ')' : '')
       + (d.data().dnsTarget ? '. Set this at your domain provider: ' + d.data().dnsTarget : '')
-      + (d.data().ssl ? '. Secure certificate: ' + d.data().ssl : '') + (d.data().checkedOn ? '. Last checked ' + d.data().checkedOn : '')]), 'No domain requests.');
+      + (d.data().ssl ? '. Secure certificate: ' + d.data().ssl : '') + (d.data().checkedOn ? '. Last checked ' + d.data().checkedOn : '')
+      + (d.data().status === 'verified' ? '. Your school page now opens at https://' + d.data().domain : '')]), 'No domain requests.');
   } catch { fillList(plan.domains, [], 'Requests could not be loaded.'); }
 }
 $('#domain-form').addEventListener('submit', (event) => {
@@ -468,6 +482,14 @@ async function openSchool(id) {
     const [dm, dr] = await Promise.all([getDocs(collection(ref, 'domainRequests')), getDocs(collection(ref, 'dataRequests'))]);
     const rows = [];
     for (const d of dm.docs) rows.push(['Domain ' + d.data().domain + ' - ' + d.data().status,
+      button('Check domain', () => run(admin.status, async () => {
+        const result = await checkDomain(d.data().domain);
+        await setDoc(d.ref, { ...d.data(), checkedOn: today(), ssl: result.https ? 'active' : 'pending' });
+        await openSchool(id);
+        return { message: d.data().domain + ' - DNS: ' + (result.dns.length ? result.dns.join(', ') : 'no record found yet')
+          + '. Secure page (HTTPS): ' + (result.https ? 'works, the padlock is ready.' : 'not working yet.')
+          + (result.https && result.dns.length ? ' You can mark it verified.' : '') };
+      }, 'Checked.')),
       ...['dns-pending', 'verified', 'rejected'].map((st) => button(st, () => run(admin.status, async () => {
         const next = { ...d.data(), status: st, checkedOn: today() };
         if (st === 'dns-pending') {
@@ -477,7 +499,16 @@ async function openSchool(id) {
           next.ssl = 'pending';
         }
         if (st === 'verified') next.ssl = 'active';
-        await setDoc(d.ref, next);
+        // A verified domain is also written to domainMap, so the public school page can find the school from the address.
+        // Any other status removes the link, unless the address belongs to another school.
+        const mapRef = doc(db, 'domainMap', d.data().domain);
+        const linked = await getDoc(mapRef);
+        if (linked.exists() && linked.data().schoolId !== id) throw Object.assign(new Error('Address in use'), { userMessage: 'This address is already linked to another school.' });
+        const batch = writeBatch(db);
+        batch.set(d.ref, next);
+        if (st === 'verified') batch.set(mapRef, { schoolId: id, verifiedOn: today() });
+        else if (linked.exists()) batch.delete(mapRef);
+        await batch.commit();
         await openSchool(id);
       }, 'Updated.')))]);
     for (const d of dr.docs) rows.push(['Data ' + d.data().kind + ' - ' + d.data().status,

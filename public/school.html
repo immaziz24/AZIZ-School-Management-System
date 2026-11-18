@@ -37,6 +37,9 @@
     button:disabled { opacity: .6; cursor: wait; }
     footer { text-align: center; padding: 1.25rem; color: #5a6270; font-size: .9rem; }
     footer a { color: var(--navy); }
+    .lang-bar { background: #0f1b2f; color: var(--ivory); text-align: right; padding: .35rem 1rem; font-size: .85rem; }
+    .lang-bar label { display: inline-block; font-weight: normal; }
+    .lang-bar select { width: auto; padding: .2rem .4rem; }
     [hidden] { display: none; }
     html { scroll-behavior: smooth; }
     @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
@@ -70,6 +73,7 @@
 </head>
 <body>
   <a class="skip" href="#main">Skip to the content</a>
+  <div class="lang-bar"><label>Language <select id="lang-select"><option value="en">English</option><option value="hi">हिन्दी</option><option value="bn">বাংলা</option></select></label></div>
   <header class="site">
     <h1 id="site-name">Loading</h1>
     <p id="site-tagline"></p>
@@ -116,6 +120,7 @@
     <p><a href="#admissions">Admissions</a> &middot; <a href="#contact">Contact</a> &middot; <a href="./index.html">School staff and family sign-in</a></p>
   </footer>
   <a id="to-top" href="#main" aria-label="Back to the top" hidden>Top</a>
-  <script type="module" src="./school.mjs?v=batch-47"></script>
+  <script type="module" src="./school.mjs?v=batch-53"></script>
+  <script type="module" src="./i18n.mjs?v=batch-53"></script>
 </body>
 </html>

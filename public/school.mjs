@@ -5,9 +5,29 @@ import { app } from './firebase-client.mjs';
 
 const db = getFirestore(app);
 const wanted = new URLSearchParams(location.search).get('school') ?? '';
-const SCHOOL_ID = /^[a-z][a-z0-9-]{2,29}$/.test(wanted) ? wanted : 'abcd-school';
-const schoolRef = doc(db, 'schools', SCHOOL_ID);
 const status = document.querySelector('#site-status');
+// Which school is this? ?school=<id> wins. On AZIZ's own address the demo school opens. On any other address the
+// verified-domain lookup (domainMap/<hostname>, written when the platform administrator marks the domain verified) says.
+const OWN_HOSTS = ['azizschoolmanagement.plateria.in', 'www.azizschoolmanagement.plateria.in', 'localhost', '127.0.0.1'];
+async function findSchoolId() {
+  if (/^[a-z][a-z0-9-]{2,29}$/.test(wanted)) return wanted;
+  const host = location.hostname.toLowerCase();
+  if (OWN_HOSTS.includes(host)) return 'abcd-school';
+  for (const name of [...new Set([host, host.replace(/^www\./, '')])]) {
+    try {
+      const found = await getDoc(doc(db, 'domainMap', name));
+      if (found.exists() && /^[a-z][a-z0-9-]{2,29}$/.test(found.data().schoolId)) return found.data().schoolId;
+    } catch { /* No link for this name. */ }
+  }
+  return '';
+}
+const SCHOOL_ID = await findSchoolId();
+if (!SCHOOL_ID) {
+  status.hidden = false;
+  status.textContent = 'This address is not linked to a school yet. If this is your school, ask your school owner or AZIZ support to finish the domain setup.';
+  throw new Error('No school for this address');
+}
+const schoolRef = doc(db, 'schools', SCHOOL_ID);
 const MAP = /^https:\/\/www\.google\.com\/maps\/embed\?[^ ]*$/;
 const SECTIONS = [['about', 'About'], ['vision', 'Vision'], ['leadership', 'Leadership'], ['programmes', 'Programmes'],
   ['faculty', 'Faculty'], ['facilities', 'Facilities'], ['news', 'News'], ['gallery', 'Gallery'], ['contact', 'Contact'], ['admissions', 'Admissions']];

@@ -85,6 +85,18 @@ service cloud.firestore {
       allow get: if request.auth != null && request.auth.uid == uid;
     }
 
+    // Custom domains (067). domainMap/{hostname}: schoolId, verifiedOn. Written only by the platform administrator
+    // when a school's domain is marked verified. Anyone may look up one hostname (the public school page does this
+    // to find out which school a custom address belongs to); nobody may list them all.
+    match /domainMap/{host} {
+      allow get: if host.matches('[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?[.][a-z]{2,20}');
+      allow create: if isPlatformAdmin() && host.matches('[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?[.][a-z]{2,20}') && validDomainMap(request.resource.data)
+        && exists(/databases/$(database)/documents/schools/$(request.resource.data.schoolId));
+      allow update: if isPlatformAdmin() && host.matches('[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?[.][a-z]{2,20}') && validDomainMap(request.resource.data)
+        && request.resource.data.schoolId == resource.data.schoolId;
+      allow delete: if isPlatformAdmin();
+    }
+
     // platformConfig/flags: feature switches the platform administrator controls. Any signed-in user reads.
     match /platformConfig/{docId} {
       allow get: if request.auth != null && docId in ['flags', 'templates'];
@@ -1877,6 +1889,13 @@ service cloud.firestore {
         && item.status in ['due', 'paid', 'overdue']
         && (!item.keys().hasAny(['paidOn']) || dateText(item.paidOn))
         && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+    }
+
+    function validDomainMap(item) {
+      return item.keys().hasOnly(['schoolId', 'verifiedOn'])
+        && item.keys().hasAll(['schoolId', 'verifiedOn'])
+        && item.schoolId is string && item.schoolId.matches('[a-z][a-z0-9-]{2,29}')
+        && dateText(item.verifiedOn);
     }
 
     function validDomainRequest(item) {
