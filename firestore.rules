@@ -820,13 +820,15 @@ service cloud.firestore {
           || (resource.data.createdBy == request.auth.uid && familyActive()));
         allow create: if request.auth != null && messageId.matches('[A-Za-z0-9-]{1,30}')
           && validMessage(request.resource.data)
-          && !request.resource.data.keys().hasAny(['reply', 'repliedAt'])
+          && !request.resource.data.keys().hasAny(['reply', 'repliedAt', 'mod', 'modNote'])
           && request.resource.data.createdBy == request.auth.uid
           && familyOwns(request.resource.data.studentId);
         allow update: if request.auth != null && isSchoolOwner(schoolId)
           && validMessage(request.resource.data)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reply', 'repliedAt'])
-          && request.resource.data.keys().hasAll(['reply', 'repliedAt']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reply', 'repliedAt', 'mod', 'modNote'])
+          && request.resource.data.diff(resource.data).affectedKeys().size() > 0
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['reply', 'repliedAt'])
+            || request.resource.data.keys().hasAll(['reply', 'repliedAt']));
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
@@ -1844,8 +1846,10 @@ service cloud.firestore {
     }
 
     function validMessage(item) {
-      return item.keys().hasOnly(['studentId', 'subject', 'body', 'createdAt', 'createdBy', 'reply', 'repliedAt'])
+      return item.keys().hasOnly(['studentId', 'subject', 'body', 'createdAt', 'createdBy', 'reply', 'repliedAt', 'mod', 'modNote'])
         && item.keys().hasAll(['studentId', 'subject', 'body', 'createdAt', 'createdBy'])
+        && (!item.keys().hasAny(['mod']) || item.mod in ['flagged', 'hidden'])
+        && optionalText(item, 'modNote', 200)
         && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
         && item.subject is string && item.subject.size() <= 100 && item.subject.matches('.*[^[:space:]].*')
         && item.body is string && item.body.size() <= 1000 && item.body.matches('.*[^[:space:]].*')
