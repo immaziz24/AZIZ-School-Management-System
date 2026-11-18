@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-51">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-54">
 </head>
 <body>
   <main>
@@ -22,6 +22,7 @@
     <form id="sign-in" hidden>
       <p><label>Email <input name="email" type="email" autocomplete="username" required></label></p>
       <p><label>Password <input name="password" type="password" autocomplete="current-password" required></label></p>
+      <p><label><input type="checkbox" data-show-password> Show password</label></p>
       <button type="submit">Sign in</button>
     </form>
     <section id="owner-dashboard" aria-labelledby="school-name" hidden>
@@ -1382,7 +1383,8 @@
         <p><label>Phone <input name="phone" type="tel" maxlength="40"></label></p>
         <p><label>Address <input name="address" maxlength="500"></label></p>
         <p id="signup-account"><label>Your email <input name="email" type="email" autocomplete="username"></label>
-          <label>Choose a password <input name="password" type="password" minlength="8" autocomplete="new-password"></label></p>
+          <label>Choose a password <input name="password" type="password" minlength="8" autocomplete="new-password"></label>
+          <label><input type="checkbox" data-show-password> Show password</label></p>
         <button type="submit">Create school</button>
         <p id="signup-status" role="status"></p>
       </form>
@@ -1501,15 +1503,21 @@
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
+    // "Show password" tick-boxes: show or hide what is typed in the password box of the same form.
+    document.addEventListener('change', (event) => {
+      if (!event.target.matches?.('[data-show-password]')) return;
+      const box = event.target.closest('form')?.querySelector('input[name="password"]');
+      if (box) box.type = event.target.checked ? 'text' : 'password';
+    });
     try {
       await import('./ui.mjs?v=batch-51');
-      await import('./i18n.mjs?v=batch-53');
+      await import('./i18n.mjs?v=batch-54');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-51');
-      await import('./platform.mjs?v=batch-51');
+      await import('./sign-in.mjs?v=batch-54');
+      await import('./platform.mjs?v=batch-54');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

@@ -43,6 +43,7 @@ const BN = {
 // More screens (batch 53): headings, labels, buttons and help text of the owner, teacher and portal screens and the public school page.
 // Text that the app builds while it runs (counts, dates, names, messages) stays in English.
 Object.assign(HI, {
+  "Show password": "पासवर्ड दिखाएँ",
   "AZIZ School Management System": "AZIZ स्कूल प्रबंधन प्रणाली",
   "View the public school website": "विद्यालय की सार्वजनिक वेबसाइट देखें",
   "Language": "भाषा",
@@ -586,6 +587,7 @@ Object.assign(HI, {
   "Vendors": "विक्रेता",
 });
 Object.assign(BN, {
+  "Show password": "পাসওয়ার্ড দেখান",
   "AZIZ School Management System": "AZIZ স্কুল ম্যানেজমেন্ট সিস্টেম",
   "View the public school website": "স্কুলের পাবলিক ওয়েবসাইট দেখুন",
   "Language": "ভাষা",
