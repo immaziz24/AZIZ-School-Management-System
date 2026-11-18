@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-36">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-37">
 </head>
 <body>
   <main>
@@ -484,6 +484,9 @@
           <p><label>Faculty and staff (one per line, approved details only) <textarea name="faculty" rows="4" maxlength="2000"></textarea></label></p>
           <p><label>Facilities (one per line) <textarea name="facilities" rows="3" maxlength="1500"></textarea></label></p>
           <p><label>News and announcements (one per line) <textarea name="news" rows="3" maxlength="1500"></textarea></label></p>
+          <p><label>Photo gallery (one per line: https image link | caption) <textarea name="gallery" rows="3" maxlength="1500"></textarea></label></p>
+          <p><label>Search engine title (optional, up to 70 letters) <input name="seoTitle" type="text" maxlength="70"></label></p>
+          <p><label>Search engine description (optional, up to 160 letters) <input name="seoDesc" type="text" maxlength="160"></label></p>
           <p><label>Phone <input name="phone" type="text" maxlength="30"></label></p>
           <p><label>Email <input name="email" type="email" maxlength="100"></label></p>
           <p><label>Address <input name="address" type="text" maxlength="200"></label></p>
@@ -629,6 +632,7 @@
           <p><label>Driver <input name="driver" type="text" maxlength="60"></label></p>
           <p><label>Driver phone <input name="driverPhone" type="text" maxlength="20"></label></p>
           <p><label>Stops (in order) <input name="stops" type="text" maxlength="300"></label></p>
+          <p><label>Monthly transport fee per student (Rs, optional) <input name="monthlyFee" type="number" min="0" max="100000" step="1"></label></p>
           <button type="submit">Add route</button>
         </form>
         <ul id="routes-list"></ul>
@@ -1320,14 +1324,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-36');
-      await import('./i18n.mjs?v=batch-36');
+      await import('./ui.mjs?v=batch-37');
+      await import('./i18n.mjs?v=batch-37');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-36');
-      await import('./platform.mjs?v=batch-36');
+      await import('./sign-in.mjs?v=batch-37');
+      await import('./platform.mjs?v=batch-37');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

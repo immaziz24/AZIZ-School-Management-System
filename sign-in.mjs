@@ -3827,6 +3827,7 @@ const phoneOk = (value) => /^[0-9+() -]{0,20}$/.test(value);
 const byStudentName = (a, b) => a.data().name.localeCompare(b.data().name);
 const studentOption = (item) => item.name + ' (' + item.admissionNo + ')';
 const teacherRecords = () => staffRoster.map((uid) => ({ id: uid, data: () => ({ label: staffLabel(uid) }) }));
+const routeFee = (id) => lists.routes.items.find((record) => record.id === id)?.data().monthlyFee ?? 0;
 const routeName = (id) => lists.routes.items.find((record) => record.id === id)?.data().name ?? id;
 const activityName = (id) => lists.activities.items.find((record) => record.id === id)?.data().name ?? id;
 
@@ -3859,10 +3860,16 @@ lists.routes = ownerList({
   build: (fields) => {
     if (!text(fields, 'name')) return { error: 'Enter the route name.' };
     if (!phoneOk(text(fields, 'driverPhone'))) return { error: 'Phone may use digits, +, spaces, hyphens and brackets only.' };
-    return { id: newId('RT'), data: { name: text(fields, 'name'), ...optional(fields, 'vehicle', 'driver', 'driverPhone', 'stops') } };
+    const fee = text(fields, 'monthlyFee') ? wholeNumber(fields, 'monthlyFee') : 0;
+    if (Number.isNaN(fee) || fee > 100000) return { error: 'The transport fee must be whole rupees, up to 100000.' };
+    return { id: newId('RT'), data: { name: text(fields, 'name'), ...optional(fields, 'vehicle', 'driver', 'driverPhone', 'stops'),
+      ...(fee ? { monthlyFee: fee } : {}) } };
   },
-  line: (item) => item.name + (item.vehicle ? ' - ' + item.vehicle : '') + (item.driver ? ' - driver ' + item.driver : '')
-    + (item.driverPhone ? ' (' + item.driverPhone + ')' : '') + (item.stops ? ' - stops: ' + item.stops : ''),
+  line: (item, record) => item.name + (item.vehicle ? ' - ' + item.vehicle : '') + (item.driver ? ' - driver ' + item.driver : '')
+    + (item.driverPhone ? ' (' + item.driverPhone + ')' : '') + (item.stops ? ' - stops: ' + item.stops : '')
+    + (item.monthlyFee ? ' - fee ' + rupees(item.monthlyFee) + '/student/month, '
+      + lists.riders.items.filter((rider) => rider.data().routeId === record.id).length + ' rider(s) = '
+      + rupees(item.monthlyFee * lists.riders.items.filter((rider) => rider.data().routeId === record.id).length) + '/month' : ''),
 });
 
 lists.riders = ownerList({
@@ -3877,7 +3884,8 @@ lists.riders = ownerList({
     if (!text(fields, 'studentId') || !text(fields, 'routeId')) return { error: 'Choose a student and a route. Add a route first if there is none.' };
     return { id: text(fields, 'studentId'), data: { studentId: text(fields, 'studentId'), routeId: text(fields, 'routeId'), ...optional(fields, 'stop') } };
   },
-  line: (item) => nameOfStudent(item.studentId) + ' - ' + routeName(item.routeId) + (item.stop ? ' - stop ' + item.stop : ''),
+  line: (item) => nameOfStudent(item.studentId) + ' - ' + routeName(item.routeId) + (item.stop ? ' - stop ' + item.stop : '')
+    + (routeFee(item.routeId) ? ' - fee ' + rupees(routeFee(item.routeId)) + '/month' : ''),
 });
 
 lists.activities = ownerList({
@@ -4577,7 +4585,7 @@ const websiteSection = document.querySelector('#website');
 const websiteStatus = document.querySelector('#website-status');
 const websiteForm = document.querySelector('#website-form');
 const WEBSITE_FIELDS = ['name', 'tagline', 'about', 'vision', 'mission', 'leadership', 'programmes', 'faculty', 'facilities', 'news',
-  'phone', 'email', 'address', 'mapUrl'];
+  'phone', 'email', 'address', 'mapUrl', 'seoTitle', 'seoDesc', 'gallery'];
 const MAP_PREFIX = /^https:\/\/www\.google\.com\/maps\/embed\?[^ ]*$/;
 
 async function loadWebsite(request) {

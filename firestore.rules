@@ -826,7 +826,7 @@ service cloud.firestore {
         allow update: if request.auth != null && isSchoolOwner(schoolId)
           && validMessage(request.resource.data)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reply', 'repliedAt', 'mod', 'modNote'])
-          && request.resource.data.diff(resource.data).affectedKeys().size() > 0
+          && request.resource.data.diff(resource.data).affectedKeys().hasAny(['reply', 'repliedAt', 'mod', 'modNote'])
           && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['reply', 'repliedAt'])
             || request.resource.data.keys().hasAll(['reply', 'repliedAt']));
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
@@ -1503,7 +1503,8 @@ service cloud.firestore {
     }
 
     function validRoute(item) {
-      return item.keys().hasOnly(['name', 'vehicle', 'driver', 'driverPhone', 'stops'])
+      return item.keys().hasOnly(['name', 'vehicle', 'driver', 'driverPhone', 'stops', 'monthlyFee'])
+        && (!item.keys().hasAny(['monthlyFee']) || (item.monthlyFee is int && item.monthlyFee >= 0 && item.monthlyFee <= 100000))
         && item.keys().hasAll(['name'])
         && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
         && (!item.keys().hasAny(['vehicle']) || (item.vehicle is string && item.vehicle.size() <= 30))
@@ -1865,7 +1866,8 @@ service cloud.firestore {
 
     function validSite(item) {
       return item.keys().hasOnly(['name', 'tagline', 'about', 'vision', 'mission', 'leadership', 'programmes', 'faculty',
-          'facilities', 'news', 'phone', 'email', 'address', 'mapUrl'])
+          'facilities', 'news', 'phone', 'email', 'address', 'mapUrl', 'seoTitle', 'seoDesc', 'gallery'])
+        && optionalText(item, 'seoTitle', 70) && optionalText(item, 'seoDesc', 160) && optionalText(item, 'gallery', 1500)
         && item.keys().hasAll(['name'])
         && item.name is string && item.name.size() >= 1 && item.name.size() <= 80
         && optionalText(item, 'tagline', 120) && optionalText(item, 'about', 2000) && optionalText(item, 'vision', 500)
