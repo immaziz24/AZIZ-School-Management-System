@@ -43,8 +43,10 @@ service cloud.firestore {
 
     // platformConfig/flags: feature switches the platform administrator controls. Any signed-in user reads.
     match /platformConfig/{docId} {
-      allow get: if request.auth != null && docId == 'flags';
+      allow get: if request.auth != null && docId in ['flags', 'templates'];
       allow create, update: if isPlatformAdmin() && docId == 'flags';
+      // platformConfig/templates: the newest school-page template version and what changed in it.
+      allow create, update: if isPlatformAdmin() && docId == 'templates' && validTemplateConfig(request.resource.data);
     }
 
     // platformDrills/{id}: disaster-recovery drill log. Platform administrators only.
@@ -813,7 +815,7 @@ service cloud.firestore {
         allow get: if docId in ['main', 'extras'];
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && ((docId == 'main' && validSite(request.resource.data))
-            || (docId == 'extras' && validSiteExtras(request.resource.data)));
+            || (docId == 'extras' && validSiteExtras(request.resource.data) && templateAllowed(request.resource.data)));
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
@@ -967,6 +969,15 @@ service cloud.firestore {
           && (!request.resource.data.keys().hasAny(['m6']) || request.resource.data.m6 is bool)
           && (!request.resource.data.keys().hasAny(['m7']) || request.resource.data.m7 is bool)
           && (!request.resource.data.keys().hasAny(['m8']) || request.resource.data.m8 is bool);
+      }
+
+      // Storage records. storageRecords/{ST-...}: a log of the files the school keeps (name, kind, size in KB).
+      // The owner keeps the log; the platform administrator reads it to compare with the storage plan.
+      match /storageRecords/{recordId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && recordId.matches('ST-[A-Za-z0-9-]{1,30}') && validStorageRecord(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
       match /settings/grading {
@@ -1812,10 +1823,35 @@ service cloud.firestore {
     }
 
     function validSiteExtras(item) {
-      return item.keys().hasOnly(['theme', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'])
+      return item.keys().hasOnly(['theme', 'tv', 'tvPrev', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'])
+        && (!item.keys().hasAny(['tv']) || (item.tv is int && item.tv >= 1 && item.tv <= 20))
+        && (!item.keys().hasAny(['tvPrev']) || (item.keys().hasAny(['tv']) && item.tvPrev is int && item.tvPrev >= 1 && item.tvPrev <= 20))
         && (!item.keys().hasAny(['theme']) || item.theme in ['classic', 'royal', 'emerald', 'crimson', 'midnight'])
         && fieldSlot(item, 'f1') && fieldSlot(item, 'f2') && fieldSlot(item, 'f3')
         && fieldSlot(item, 'f4') && fieldSlot(item, 'f5') && fieldSlot(item, 'f6');
+    }
+
+    // A school may move to any template version up to the newest one the platform has published.
+    function templateAllowed(item) {
+      return !item.keys().hasAny(['tv'])
+        || item.tv <= (exists(/databases/$(database)/documents/platformConfig/templates)
+          ? get(/databases/$(database)/documents/platformConfig/templates).data.latest : 1);
+    }
+
+    function validTemplateConfig(item) {
+      return item.keys().hasOnly(['latest', 'notes']) && item.keys().hasAll(['latest'])
+        && item.latest is int && item.latest >= 1 && item.latest <= 20
+        && optionalText(item, 'notes', 300);
+    }
+
+    function validStorageRecord(item) {
+      return item.keys().hasOnly(['name', 'kind', 'sizeKb', 'date', 'note'])
+        && item.keys().hasAll(['name', 'kind', 'sizeKb', 'date'])
+        && item.name is string && item.name.size() <= 100 && item.name.matches('.*[^[:space:]].*')
+        && item.kind in ['document', 'photo', 'report', 'backup', 'other']
+        && item.sizeKb is int && item.sizeKb >= 0 && item.sizeKb <= 5000000
+        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && optionalText(item, 'note', 200);
     }
 
     function validPreferences(item) {

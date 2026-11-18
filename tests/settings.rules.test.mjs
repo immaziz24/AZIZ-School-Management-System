@@ -138,3 +138,45 @@ test('launch checklist ticks are kept by the owner', async () => {
   await denied(set('owner-a', path, { m1: 'yes' }), 'not a boolean');
   for (const who of ['prin', 't1', 'owner-b', null]) await denied(set(who, path, { m1: true }), 'write by ' + who);
 });
+
+test('template versions: the platform publishes, schools upgrade only up to the newest and can roll back', async () => {
+  await assert.equal(await set(ADMIN, 'platformAdmins/pa', { createdAt: 'x' }), 200);
+  const config = 'platformConfig/templates';
+  await denied(set('owner-a', config, { latest: 2 }), 'owner cannot publish');
+  await denied(set('pa2', config, { latest: 2 }), 'stranger cannot publish');
+  for (const bad of [{ latest: 0 }, { latest: 21 }, { latest: 'two' }, { latest: 2, extra: 1 }, { notes: 'x' }, { latest: 2, notes: 'x'.repeat(301) }]) {
+    await denied(set('pa', config, bad), JSON.stringify(bad).slice(0, 30));
+  }
+  const extras = P('site', 'extras');
+  await allowed(set('owner-a', extras, { theme: 'royal', tv: 1 }), 'v1 allowed with no config');
+  await denied(set('owner-a', extras, { theme: 'royal', tv: 2 }), 'v2 not published yet');
+  await allowed(set('pa', config, { latest: 2, notes: 'Rounded cards and larger headings' }), 'platform publishes v2');
+  await allowed(get('owner-a', config), 'signed-in reads');
+  await denied(get(null, config), 'public cannot read the config');
+  await allowed(set('owner-a', extras, { theme: 'royal', tv: 2, tvPrev: 1 }), 'owner upgrades');
+  await denied(set('owner-a', extras, { theme: 'royal', tv: 3, tvPrev: 2 }), 'cannot pass newest');
+  await allowed(set('owner-a', extras, { theme: 'royal', tv: 1, tvPrev: 2 }), 'owner rolls back');
+  await denied(set('owner-a', extras, { theme: 'royal', tvPrev: 1 }), 'tvPrev needs tv');
+  await denied(set('owner-a', extras, { theme: 'royal', tv: 0 }), 'tv from 1');
+  await denied(set('t1', extras, { theme: 'royal', tv: 1 }), 'teacher cannot');
+});
+
+test('storage records: the owner keeps the log, the platform administrator reads it', async () => {
+  assert.equal(await set(ADMIN, 'platformAdmins/pa', { createdAt: 'x' }), 200);
+  const record = { name: 'Annual report 2026.pdf', kind: 'report', sizeKb: 2048, date: '2026-11-18' };
+  await allowed(set('owner-a', P('storageRecords', 'ST-1'), { ...record, note: 'Scanned copy' }), 'owner adds');
+  await allowed(get('prin', P('storageRecords', 'ST-1')), 'principal reads');
+  await allowed(get('pa', P('storageRecords', 'ST-1')), 'platform admin reads');
+  await allowed(query('owner-a', A, 'storageRecords', []), 'owner lists');
+  await denied(get('t1', P('storageRecords', 'ST-1')), 'teacher cannot');
+  await denied(get('owner-b', P('storageRecords', 'ST-1')), 'other school cannot');
+  await denied(get(null, P('storageRecords', 'ST-1')), 'public cannot');
+  for (const bad of [{ ...record, kind: 'video' }, { ...record, sizeKb: -1 }, { ...record, sizeKb: 5000001 }, { ...record, sizeKb: 1.5 },
+    { ...record, name: '   ' }, { ...record, name: 'x'.repeat(101) }, { ...record, date: '18-11-2026' }, { ...record, extra: 1 }, { name: 'a' }]) {
+    await denied(set('owner-a', P('storageRecords', 'ST-2'), bad), JSON.stringify(bad).slice(0, 40));
+  }
+  await denied(set('owner-a', P('storageRecords', 'bad id'), record), 'bad id');
+  await denied(set('prin', P('storageRecords', 'ST-3'), record), 'principal cannot write');
+  await denied(set('pa', P('storageRecords', 'ST-3'), record), 'platform admin cannot write');
+  await allowed(remove('owner-a', P('storageRecords', 'ST-1')), 'owner deletes');
+});

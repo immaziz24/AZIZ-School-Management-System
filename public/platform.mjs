@@ -39,13 +39,14 @@ const admin = {
   panel: $('#platform-school'), title: $('#platform-school-title'), usage: $('#platform-usage'),
   billing: $('#billing-form'), invoiceForm: $('#invoice-form'), invoices: $('#platform-invoices'),
   requests: $('#platform-requests'), tickets: $('#platform-tickets'), flagsForm: $('#flags-form'),
-  flagBoxes: $('#flags-boxes'), drillForm: $('#drill-form'), drills: $('#drill-list'),
+  templateForm: $('#template-form'), templateInfo: $('#template-info'), flagBoxes: $('#flags-boxes'), drillForm: $('#drill-form'), drills: $('#drill-list'),
 };
 let me = null;
 let myRole = '';
 let billing = null;
 let chosenSchool = '';
 let busy = false;
+const pageOpenedAt = Date.now();
 
 const button = (label, onClick) => {
   const b = document.createElement('button');
@@ -98,6 +99,13 @@ signup.form.addEventListener('submit', async (event) => {
     return;
   }
   if (!name) { signup.status.textContent = 'Enter the school name.'; return; }
+  // Browser-side abuse guard: a short wait after the page opens, 30 seconds between tries, three new schools a day.
+  // It slows careless spam only; real protection needs Firebase App Check, switched on in the console.
+  let times = [];
+  try { times = JSON.parse(localStorage.getItem('aziz-signup-times') ?? '[]').filter((t) => Number.isFinite(t) && Date.now() - t < 86400000); } catch { /* none */ }
+  if (Date.now() - pageOpenedAt < 4000) { signup.status.textContent = 'Please take a moment to fill in the form, then try again.'; return; }
+  if (times.length >= 3) { signup.status.textContent = 'Too many schools were created from this browser today. Please try again tomorrow or contact us.'; return; }
+  if (times.length && Date.now() - times[times.length - 1] < 30000) { signup.status.textContent = 'Please wait half a minute before trying again.'; return; }
   if (busy) return;
   busy = true;
   signup.status.textContent = 'Creating your school.';
@@ -118,6 +126,7 @@ signup.form.addEventListener('submit', async (event) => {
       plan: 'trial', status: 'trial', trialEnds: Timestamp.fromDate(new Date(Date.now() + 30 * 86400000)), studentLimit: 50, staffLimit: 10,
     });
     await batch.commit();
+    try { localStorage.setItem("aziz-signup-times", JSON.stringify([...times, Date.now()])); } catch { /* Storage may be off. */ }
     signup.status.textContent = 'School created. Opening it now.';
     location.search = '?school=' + slug;
   } catch (error) {
@@ -328,7 +337,7 @@ async function loadAdmin() {
       + (s.usage ? ' - ' + s.usage.students + ' students, ' + s.usage.staff + ' staff' : ''), button('Manage', () => openSchool(s.id))]), 'No schools.');
     admin.status.textContent = '';
   } catch { admin.status.textContent = 'Could not load schools.'; }
-  await Promise.all([loadAdminTickets(), loadFlags(), loadDrills()]);
+  await Promise.all([loadAdminTickets(), loadFlags(), loadDrills(), loadTemplate()]);
 }
 async function openSchool(id) {
   chosenSchool = id;
@@ -337,6 +346,11 @@ async function openSchool(id) {
   admin.panel.hidden = false;
   admin.title.textContent = s.name + ' (' + id + ')';
   admin.usage.textContent = s.usage ? 'Counted: ' + s.usage.students + ' students, ' + s.usage.staff + ' staff, on ' + (dayText(s.usage.updatedAt) || '-') : 'No usage counted yet.';
+  try {
+    const records = await getDocs(collection(ref, 'storageRecords'));
+    const kb = records.docs.reduce((sum, d) => sum + (d.data().sizeKb ?? 0), 0);
+    admin.usage.textContent += ' Storage recorded: ' + Math.round(kb / 1024 * 10) / 10 + ' MB in ' + records.size + ' file record(s).';
+  } catch { /* Storage records could not be read. */ }
   const f = admin.billing.elements;
   const b = s.billing ?? { plan: 'trial', status: 'trial' };
   f.plan.value = b.plan; f.status.value = b.status; f.trialEnds.value = dayText(b.trialEnds); f.renewsOn.value = b.renewsOn ?? '';
@@ -393,6 +407,22 @@ async function loadAdminTickets() {
       })]), 'No open tickets.');
   } catch { fillList(admin.tickets, [], 'Tickets could not be loaded.'); }
 }
+async function loadTemplate() {
+  try {
+    const d = await getDoc(doc(db, 'platformConfig', 'templates'));
+    const t = d.exists() ? d.data() : { latest: 1 };
+    admin.templateInfo.textContent = 'Newest published version: ' + t.latest + (t.notes ? ' - ' + t.notes : '') + '. Schools upgrade themselves from their own settings and can go back.';
+    admin.templateForm.elements.namedItem('latest').value = t.latest;
+    admin.templateForm.elements.namedItem('notes').value = t.notes ?? '';
+  } catch { admin.templateInfo.textContent = 'Could not load the template version.'; }
+}
+admin.templateForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const latest = Number(admin.templateForm.elements.namedItem('latest').value);
+  const notes = admin.templateForm.elements.namedItem('notes').value.trim();
+  if (!Number.isInteger(latest) || latest < 1 || latest > 20) { admin.status.textContent = 'Version must be a whole number from 1 to 20.'; return; }
+  run(admin.status, async () => { await setDoc(doc(db, 'platformConfig', 'templates'), { latest, ...(notes ? { notes } : {}) }); await loadTemplate(); }, 'Template version published.');
+});
 async function loadFlags() {
   let flags = {};
   try { const d = await getDoc(doc(db, 'platformConfig', 'flags')); flags = d.exists() ? d.data() : {}; } catch { /* none yet */ }

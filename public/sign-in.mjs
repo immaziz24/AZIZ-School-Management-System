@@ -3157,39 +3157,85 @@ document.querySelector('#import-file').addEventListener('change', async (event) 
   importStatus.textContent = 'File loaded. Click Check rows.';
 });
 
+const importKind = document.querySelector('#import-kind');
+const IMPORT_KINDS = {
+  students: { help: 'Columns, in this order: admission number, student name, guardian name, guardian phone, and optionally date of birth (YYYY-MM-DD) and address. Copy the rows from Excel and paste them here, or choose a CSV file. A header row is fine.',
+    header: 'Admission no', sample: [['admissionNo', 'name', 'guardianName', 'guardianPhone', 'dob', 'address'], ['A-1001', 'Sample Student', 'Sample Guardian', '98300 00000', '2015-06-30', 'Sample Road']] },
+  subjects: { help: 'Columns, in this order: subject name, and optionally a short code (up to 12 characters). A header row is fine.',
+    header: 'Subject', sample: [['name', 'code'], ['Mathematics', 'MATH'], ['English', 'ENG']] },
+  classes: { help: 'Columns, in this order: class name, and the order number from 1 to 100 (lowest class first). A header row is fine.',
+    header: 'Class', sample: [['name', 'order'], ['Class 1', '1'], ['Class 2', '2']] },
+};
+function showImportKind() {
+  const kind = IMPORT_KINDS[importKind.value];
+  document.querySelector('#import-help').textContent = kind.help;
+  document.querySelector('#import-col1').textContent = kind.header;
+  importBody.replaceChildren();
+  importReady = [];
+  importRun.disabled = true;
+}
+importKind.addEventListener('change', showImportKind);
+showImportKind();
+document.querySelector('#import-sample').addEventListener('click', () => downloadCsv('sample-' + importKind.value, IMPORT_KINDS[importKind.value].sample));
+
+// Checks one row for the chosen kind. Returns { problem } or { id, collection, data, label, name }.
+function checkImportRow(kind, cells) {
+  const [c1 = '', c2 = '', c3 = '', c4 = '', c5 = '', c6 = ''] = cells.map((value) => value.trim());
+  if (kind === 'subjects') {
+    const id = slug(c1, 30);
+    if (!c1 || c1.length > 80 || !id) return { problem: 'Subject name is missing or too long.' };
+    if (c2.length > 12) return { problem: 'Code is up to 12 characters.' };
+    return { id, collection: 'subjects', data: { name: c1, code: c2 }, label: c1, name: c2 };
+  }
+  if (kind === 'classes') {
+    const id = slug(c1, 20);
+    const order = Number(c2);
+    if (!c1 || c1.length > 40 || !id) return { problem: 'Class name is missing or too long.' };
+    if (!Number.isInteger(order) || order < 1 || order > 100) return { problem: 'Order must be a whole number from 1 to 100.' };
+    return { id, collection: 'classes', data: { name: c1, order }, label: c1, name: String(order) };
+  }
+  const id = c1.toLowerCase();
+  if (!/^[A-Za-z0-9-]{1,20}$/.test(c1)) return { problem: 'Admission number: letters, numbers and hyphens only (up to 20).' };
+  if (!c2 || c2.length > 120) return { problem: 'Student name is missing or too long.' };
+  if (!c3 || c3.length > 120) return { problem: 'Guardian name is missing or too long.' };
+  if (!/^[0-9+() -]{0,20}$/.test(c4)) return { problem: 'Phone: digits, +, spaces, hyphens and brackets only.' };
+  if (c5 && (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(c5) || Number.isNaN(Date.parse(c5)))) return { problem: 'Date of birth must look like 2015-06-30.' };
+  if (c6.length > 200) return { problem: 'Address is up to 200 characters.' };
+  const data = { admissionNo: c1, name: c2, guardianName: c3, guardianPhone: c4, status: 'active' };
+  if (c5) data.dob = c5;
+  if (c6) data.address = c6;
+  return { id, collection: 'students', data, label: c1, name: c2 };
+}
+
 document.querySelector('#import-check').addEventListener('click', () => {
   importBody.replaceChildren();
   importReady = [];
   importRun.disabled = true;
+  const kind = importKind.value;
   let rows = parseDelimited(importText.value);
-  if (rows.length && /admission/i.test(rows[0][0] ?? '')) rows = rows.slice(1);
+  if (rows.length && /^(admission|name)/i.test((rows[0][0] ?? '').trim())) rows = rows.slice(1);
   if (!rows.length) {
     importStatus.textContent = 'Paste some rows first.';
     return;
   }
   if (rows.length > IMPORT_MAX_ROWS) {
-    importStatus.textContent = 'Too many rows. Import up to ' + IMPORT_MAX_ROWS + ' students at a time.';
+    importStatus.textContent = 'Too many rows. Import up to ' + IMPORT_MAX_ROWS + ' rows at a time.';
     return;
   }
   const seen = new Set();
-  const existing = new Set(studentRecords.map((record) => record.id));
+  const existing = new Set((kind === 'students' ? studentRecords : kind === 'subjects' ? examData.subjects : placementData.classes).map((record) => record.id));
   let bad = 0;
   let skipped = 0;
   rows.forEach((cells, index) => {
-    const [admissionNo = '', name = '', guardianName = '', guardianPhone = ''] = cells.map((value) => value.trim());
-    const id = admissionNo.toLowerCase();
-    let problem = '';
-    if (!/^[A-Za-z0-9-]{1,20}$/.test(admissionNo)) problem = 'Admission number: letters, numbers and hyphens only (up to 20).';
-    else if (!name || name.length > 120) problem = 'Student name is missing or too long.';
-    else if (!guardianName || guardianName.length > 120) problem = 'Guardian name is missing or too long.';
-    else if (!/^[0-9+() -]{0,20}$/.test(guardianPhone)) problem = 'Phone: digits, +, spaces, hyphens and brackets only.';
-    else if (seen.has(id)) problem = 'Repeated admission number in this list.';
+    const checked = checkImportRow(kind, cells);
+    let problem = checked.problem ?? '';
+    if (!problem && seen.has(checked.id)) problem = 'Repeated in this list.';
     let result = 'OK - will be added';
     if (problem) { result = 'Problem: ' + problem; bad += 1; }
-    else if (existing.has(id)) { result = 'Skipped - this admission number already exists.'; skipped += 1; }
-    else importReady.push({ path: ['students', id], data: { admissionNo, name, guardianName, guardianPhone, status: 'active' } });
-    seen.add(id);
-    addRow(importBody, [String(index + 1), admissionNo, name, result]);
+    else if (existing.has(checked.id)) { result = 'Skipped - already exists.'; skipped += 1; }
+    else importReady.push({ path: [checked.collection, checked.id], data: checked.data });
+    if (checked.id) seen.add(checked.id);
+    addRow(importBody, [String(index + 1), checked.label ?? (cells[0] ?? ''), checked.name ?? (cells[1] ?? ''), result]);
   });
   importRun.disabled = !importReady.length;
   importStatus.textContent = importReady.length + ' ready to import, ' + skipped + ' skipped, ' + bad + ' with problems.'
@@ -3215,7 +3261,7 @@ importRun.addEventListener('click', async () => {
     importText.value = '';
     importBody.replaceChildren();
     await loadAcademic(request);
-    if (request === schoolRequest) importStatus.textContent = 'Imported ' + done + ' student' + (done === 1 ? '' : 's') + '.';
+    if (request === schoolRequest) importStatus.textContent = 'Imported ' + done + ' row' + (done === 1 ? '' : 's') + '.';
   } catch {
     tools.busy = false;
     if (request === schoolRequest) {
@@ -3763,6 +3809,24 @@ document.querySelector('#expenses-csv').addEventListener('click', () => {
   downloadCsv('expenses.csv', [['Date', 'Category', 'Amount', 'Note'],
     ...[...lists.expenses.items].sort((a, b) => a.data().date.localeCompare(b.data().date))
       .map((record) => [record.data().date, record.data().category, record.data().amount, record.data().note ?? ''])]);
+});
+
+let storagePlanMb = null;
+lists.storage = ownerList({
+  id: 'storage', collection: 'storageRecords', empty: 'No storage records yet.', saved: 'Record added.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  prepare: (form, items) => {
+    const kb = items.reduce((sum, record) => sum + record.data().sizeKb, 0);
+    const mb = Math.round(kb / 1024 * 10) / 10;
+    document.querySelector('#storage-total').textContent = 'Recorded: ' + mb + ' MB' + (storagePlanMb ? ' of ' + storagePlanMb + ' MB in your plan ('
+      + Math.round(mb / storagePlanMb * 1000) / 10 + '% used).' : '. Your plan has no storage limit set yet.');
+  },
+  build: (fields) => {
+    const sizeKb = Number(text(fields, 'sizeKb'));
+    if (!Number.isInteger(sizeKb) || sizeKb < 0 || sizeKb > 5000000) return { error: 'Size must be a whole number of KB, from 0 to 5,000,000.' };
+    return { id: newId('ST'), data: { name: text(fields, 'name'), kind: text(fields, 'kind'), sizeKb, date: localToday(), ...optional(fields, 'note') } };
+  },
+  line: (item) => item.date + ' - ' + item.name + ' - ' + item.kind + ' - ' + item.sizeKb + ' KB' + (item.note ? ' (' + item.note + ')' : ''),
 });
 
 lists.certificates = ownerList({
@@ -4381,6 +4445,47 @@ const LAUNCH_ITEMS = ['Parents and staff have been told about the new system', '
   'The privacy policy has been shared with parents', 'Parent logins have been created and tested', 'A date for going live has been decided'];
 let launchTicks = {};
 let schoolPrefs = null;
+let siteExtrasCurrent = {};
+const tvInfo = document.querySelector('#tv-info');
+const tvUpgrade = document.querySelector('#tv-upgrade');
+const tvRollback = document.querySelector('#tv-rollback');
+let tvLatest = 1;
+
+// Template versions: the platform publishes the newest page template. A school stays on its version until
+// the owner upgrades, and can go back to the one before.
+async function loadTemplateInfo(request) {
+  const { doc, getDocFromServer } = firestoreTools;
+  let notes = '';
+  tvLatest = 1;
+  try {
+    const config = await getDocFromServer(doc(academic.schoolRef.firestore, 'platformConfig', 'templates'));
+    if (config.exists()) { tvLatest = config.data().latest; notes = config.data().notes ?? ''; }
+  } catch { /* No newer template has been published. */ }
+  if (request !== schoolRequest) return;
+  const current = siteExtrasCurrent.tv ?? 1;
+  tvInfo.textContent = 'Your public page uses template version ' + current + '. The newest is version ' + tvLatest + '.'
+    + (current < tvLatest && notes ? ' What is new: ' + notes : '');
+  tvUpgrade.hidden = current >= tvLatest;
+  tvRollback.hidden = !siteExtrasCurrent.tvPrev || siteExtrasCurrent.tvPrev === current;
+}
+async function setTemplate(version, previous) {
+  const tools = academic;
+  if (!tools || tools.busy) return;
+  const request = schoolRequest;
+  tools.busy = true;
+  try {
+    await tools.save('site', 'extras', { ...siteExtrasCurrent, tv: version, tvPrev: previous });
+    tools.busy = false;
+    await loadSettings(request);
+    if (request === schoolRequest) siteExtrasStatus.textContent = 'Template changed to version ' + version + '.';
+  } catch {
+    if (request === schoolRequest) siteExtrasStatus.textContent = 'Could not change the template. Try again.';
+  } finally {
+    tools.busy = false;
+  }
+}
+tvUpgrade.addEventListener('click', () => setTemplate(tvLatest, siteExtrasCurrent.tv ?? 1));
+tvRollback.addEventListener('click', () => setTemplate(siteExtrasCurrent.tvPrev, siteExtrasCurrent.tv ?? 1));
 
 for (let slot = 1; slot <= 6; slot += 1) {
   const row = document.createElement('p');
@@ -4414,6 +4519,7 @@ async function loadSettings(request) {
     }));
     if (request !== schoolRequest) return;
     const extra = extras.exists() ? extras.data() : {};
+    siteExtrasCurrent = extra;
     siteExtrasForm.elements.namedItem('theme').value = extra.theme ?? 'classic';
     extraLabels = [];
     for (let slot = 1; slot <= 6; slot += 1) {
@@ -4435,6 +4541,12 @@ async function loadSettings(request) {
     }
     launchTicks = launch.exists() ? launch.data() : {};
     renderLaunch();
+    await loadTemplateInfo(request);
+    try {
+      const plan = await getDocFromServer(doc(academic.schoolRef, 'billing', 'main'));
+      storagePlanMb = plan.exists() && plan.data().storageMb ? plan.data().storageMb : null;
+      if (lists.storage.items.length || !document.querySelector('#storage').hidden) lists.storage.render();
+    } catch { storagePlanMb = null; }
     if (lists.enquiries.items.length) lists.enquiries.render();
   } catch {
     if (request === schoolRequest) siteExtrasStatus.textContent = 'Could not load these settings. Try again.';
@@ -4476,6 +4588,8 @@ siteExtrasForm.addEventListener('submit', async (event) => {
   const tools = academic;
   if (!tools || tools.busy) return;
   const data = { theme: siteExtrasForm.elements.namedItem('theme').value };
+  if (siteExtrasCurrent.tv) data.tv = siteExtrasCurrent.tv;
+  if (siteExtrasCurrent.tvPrev) data.tvPrev = siteExtrasCurrent.tvPrev;
   for (let slot = 1; slot <= 6; slot += 1) {
     const label = siteExtrasForm.elements.namedItem('label' + slot).value.trim().replaceAll('|', '/');
     if (!label) continue;
@@ -4530,7 +4644,7 @@ function resetSettings() {
   for (const section of [siteExtrasSection, prefsSection]) section.hidden = true;
   siteExtrasStatus.textContent = ''; prefsStatus.textContent = ''; launchStatus.textContent = '';
   siteExtrasForm.reset(); prefsForm.reset(); launchList.replaceChildren();
-  launchTicks = {}; schoolPrefs = null; extraLabels = [];
+  launchTicks = {}; schoolPrefs = null; extraLabels = []; siteExtrasCurrent = {}; storagePlanMb = null; tvInfo.textContent = '';
 }
 
 // Parent page: register the student for upcoming calendar events, or cancel.
@@ -4767,7 +4881,7 @@ const resetInsights = () => {
 };
 
 async function loadOwnerLists(request) {
-  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs']) {
+  for (const name of ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage']) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }

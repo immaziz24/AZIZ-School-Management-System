@@ -50,6 +50,7 @@ async function loadExtras() {
     const extras = await getDoc(doc(schoolRef, 'site', 'extras'));
     if (!extras.exists()) return;
     const data = extras.data();
+    if (data.tv === 2) document.body.classList.add('tv2'); // Template version chosen by the school.
     const theme = THEMES[data.theme];
     if (theme) {
       const root = document.documentElement.style;
@@ -145,6 +146,27 @@ async function load() {
   }
 }
 
+// Abuse protection for the public form. These checks run in the visitor's browser: a short wait after the page
+// opens, at least a minute between enquiries and three a day. They slow down careless spam; they cannot stop
+// a determined attacker (that needs Firebase App Check, switched on in the console).
+const loadedAt = Date.now();
+const GAP_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAILY_MAX = 3;
+function recentSends() {
+  try { return JSON.parse(localStorage.getItem('aziz-enquiry-times') ?? '[]').filter((time) => Number.isFinite(time) && Date.now() - time < DAY_MS); } catch { return []; }
+}
+function rememberSend() {
+  try { localStorage.setItem('aziz-enquiry-times', JSON.stringify([...recentSends(), Date.now()])); } catch { /* Storage may be off. */ }
+}
+function tooFast() {
+  if (Date.now() - loadedAt < 4000) return 'Please take a moment to fill in the form, then send it again.';
+  const sends = recentSends();
+  if (sends.length >= DAILY_MAX) return 'You have sent several enquiries today. Please phone the school office instead.';
+  if (sends.length && Date.now() - sends[sends.length - 1] < GAP_MS) return 'Please wait a minute before sending another enquiry.';
+  return '';
+}
+
 const form = document.querySelector('#enquiry-form');
 const enquiryStatus = document.querySelector('#enquiry-status');
 const today = () => {
@@ -157,6 +179,8 @@ form.addEventListener('submit', async (event) => {
   const fields = new FormData(form);
   const value = (key) => String(fields.get(key) ?? '').trim();
   if (value('website')) return; // A hidden field only automatic form-fillers complete.
+  const slow = tooFast();
+  if (slow) { enquiryStatus.textContent = slow; return; }
   const data = {
     studentName: value('studentName'), classApplying: value('classApplying'), guardianName: value('guardianName'),
     phone: value('phone'), createdAt: today(), status: 'new',
@@ -175,6 +199,7 @@ form.addEventListener('submit', async (event) => {
   try {
     await setDoc(doc(schoolRef, 'enquiries', id), data);
     form.reset();
+    rememberSend();
     enquiryStatus.textContent = 'Thank you. Your enquiry has been sent and the school office will contact you.';
   } catch {
     enquiryStatus.textContent = 'Sorry, your enquiry could not be sent. Please try again or phone the school.';

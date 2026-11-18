@@ -10,12 +10,13 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-31">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-32">
 </head>
 <body>
   <main>
     <h1>AZIZ School Management System</h1>
     <p><a href="./school.html">View the public school website</a></p>
+    <p><label>Language <select id="lang-select"><option value="en">English</option><option value="hi">हिन्दी</option><option value="bn">বাংলা</option></select></label></p>
     <p id="firebase-status" role="status">Loading sign-in.</p>
     <form id="sign-in" hidden>
       <p><label>Email <input name="email" type="email" autocomplete="username" required></label></p>
@@ -339,15 +340,22 @@
         </table>
       </section>
       <section id="bulk-import" aria-labelledby="import-title" hidden>
-        <h3 id="import-title">Import Students from a Spreadsheet</h3>
+        <h3 id="import-title">Import from a Spreadsheet</h3>
         <p id="import-status" role="status"></p>
-        <p>Columns, in this order: admission number, student name, guardian name, guardian phone. Copy the rows from Excel and paste them here, or choose a CSV file. A header row is fine.</p>
+        <p><label>What are you importing?
+          <select id="import-kind">
+            <option value="students">Students</option>
+            <option value="subjects">Subjects</option>
+            <option value="classes">Classes</option>
+          </select></label></p>
+        <p id="import-help"></p>
         <p><label>CSV file <input id="import-file" type="file" accept=".csv,.txt,text/csv"></label></p>
         <p><label>Rows <textarea id="import-text" rows="8"></textarea></label></p>
         <button id="import-check" type="button">Check rows</button>
         <button id="import-run" type="button" disabled>Import the good rows</button>
+        <button id="import-sample" type="button">Download a sample file</button>
         <table>
-          <thead><tr><th>Row</th><th>Admission no</th><th>Name</th><th>Result</th></tr></thead>
+          <thead><tr><th>Row</th><th id="import-col1">Admission no</th><th>Name</th><th>Result</th></tr></thead>
           <tbody id="import-body"></tbody>
         </table>
       </section>
@@ -492,6 +500,10 @@
           <div id="siteextras-slots"></div>
           <button type="submit">Save look and form</button>
         </form>
+        <h4>Page template version</h4>
+        <p id="tv-info" role="status"></p>
+        <button id="tv-upgrade" type="button" hidden>Upgrade to the newest template</button>
+        <button id="tv-rollback" type="button" hidden>Go back to the previous version</button>
       </section>
       <section id="prefs" aria-labelledby="prefs-title" hidden>
         <h3 id="prefs-title">School Settings</h3>
@@ -622,6 +634,20 @@
         <p id="expenses-total" role="status"></p>
         <button id="expenses-csv" type="button">Download expenses (CSV)</button>
         <ul id="expenses-list"></ul>
+      </section>
+      <section id="storage" aria-labelledby="storage-title" hidden>
+        <h3 id="storage-title">Storage Records</h3>
+        <p>A log of the files your school keeps (reports, photos, backups). It shows how much of your storage plan is used. This is a record only; it does not upload files.</p>
+        <p id="storage-status" role="status"></p>
+        <p id="storage-total" role="status"></p>
+        <form id="storage-form">
+          <p><label>File name <input name="name" type="text" maxlength="100" required></label></p>
+          <p><label>Kind <select name="kind"><option value="document">Document</option><option value="photo">Photo</option><option value="report">Report</option><option value="backup">Backup</option><option value="other">Other</option></select></label></p>
+          <p><label>Size in KB <input name="sizeKb" type="number" min="0" max="5000000" step="1" required></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <button type="submit">Add record</button>
+        </form>
+        <ul id="storage-list"></ul>
       </section>
       <section id="certificates" aria-labelledby="certificates-title" hidden>
         <h3 id="certificates-title">Certificates Issued</h3>
@@ -1213,6 +1239,13 @@
         <p id="flags-boxes"></p>
         <button type="submit">Save switches</button>
       </form>
+      <h3>School page template</h3>
+      <p id="template-info" role="status"></p>
+      <form id="template-form">
+        <p><label>Newest template version (1 to 20) <input name="latest" type="number" min="1" max="20" required></label></p>
+        <p><label>What is new (shown to school owners) <input name="notes" maxlength="300"></label></p>
+        <button type="submit">Publish template version</button>
+      </form>
       <h3>Disaster-recovery drills</h3>
       <form id="drill-form">
         <p><label>Date <input name="date" type="date" required></label>
@@ -1228,13 +1261,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-31');
+      await import('./ui.mjs?v=batch-32');
+      await import('./i18n.mjs?v=batch-32');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-31');
-      await import('./platform.mjs?v=batch-31');
+      await import('./sign-in.mjs?v=batch-32');
+      await import('./platform.mjs?v=batch-32');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
