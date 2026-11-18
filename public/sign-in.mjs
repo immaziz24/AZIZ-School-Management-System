@@ -645,6 +645,9 @@ const gradeFor = (percent) => {
 };
 const isPass = (percent) => percent >= grading.passPercent;
 const gradeText = (percent) => gradeFor(percent) + ' - ' + (isPass(percent) ? 'Pass' : 'Fail');
+// A subject can have its own pass marks (exam.passMarks); otherwise the school's pass percentage applies.
+const passedExam = (exam, score) => (typeof exam.passMarks === 'number' ? score >= exam.passMarks : isPass(Math.round(score / exam.maxMarks * 1000) / 10));
+const gradeTextFor = (exam, score) => gradeFor(Math.round(score / exam.maxMarks * 1000) / 10) + ' - ' + (passedExam(exam, score) ? 'Pass' : 'Fail');
 const resultText = (failed) => (failed ? 'Fail in ' + failed + ' subject' + (failed === 1 ? '' : 's') : 'Pass');
 
 async function loadGrading(schoolRef) {
@@ -677,6 +680,7 @@ async function renderMarksReview() {
     const saved = await tools.marksFor(examRecord.id);
     if (request !== schoolRequest || token !== reviewRequest) return;
     const scores = new Map(saved.docs.map((record) => [record.data().studentId, record.data().score]));
+    const draftIds = new Set(saved.docs.filter((record) => record.data().draft === true).map((record) => record.data().studentId));
     const sectionName = (id) => placementData.sections.find((record) => record.id === id)?.data().name ?? id;
     const students = new Map(studentRecords.map((record) => [record.id, record.data()]));
     const rows = placementData.enrollments.map((record) => record.data())
@@ -686,11 +690,11 @@ async function renderMarksReview() {
       const student = students.get(row.studentId);
       const tr = document.createElement('tr');
       const has = scores.has(row.studentId);
-      const marks = has ? scores.get(row.studentId) + ' / ' + exam.maxMarks : 'Missing';
+      const marks = has ? scores.get(row.studentId) + ' / ' + exam.maxMarks + (draftIds.has(row.studentId) ? ' (draft)' : '') : 'Missing';
       const percent = has ? Math.round(scores.get(row.studentId) / exam.maxMarks * 1000) / 10 : null;
       for (const text of [sectionName(row.sectionId), String(row.rollNo),
         student ? student.name + ' (' + student.admissionNo + ')' : row.studentId, marks,
-        has ? percent + '%' : '-', has ? gradeText(percent) : '-']) {
+        has ? percent + '%' : '-', has ? gradeTextFor(exam, scores.get(row.studentId)) : '-']) {
         const td = document.createElement('td');
         td.textContent = text;
         tr.append(td);
@@ -706,7 +710,9 @@ async function renderMarksReview() {
           + ' of ' + entered.length + ' at or above 40%.' : '.')
       : 'No students are placed in this class for ' + exam.yearId + '.';
     const missing = rows.length - entered.length;
-    reviewStatus.textContent = {
+    const drafts = rows.filter((row) => draftIds.has(row.studentId)).length;
+    const draftNote = drafts ? drafts + ' mark' + (drafts === 1 ? ' is' : 's are') + ' still draft (not submitted by the teacher). ' : '';
+    reviewStatus.textContent = draftNote + {
       open: 'This exam is open for marks entry. Lock it when entry is finished.',
       locked: 'This exam is locked. Check the marks, then approve the results.',
       approved: exam.published
@@ -728,10 +734,10 @@ async function renderMarksReview() {
       reviewActions.append(button);
     };
     if (exam.status === 'open') {
-      action('Lock exam', 'Lock ' + exam.name + '? Teachers can no longer enter or change marks. You can unlock it later.', 'locked', 'Exam locked.');
+      action('Lock exam', () => (drafts ? drafts + ' mark(s) are still drafts and will be locked as they are. ' : '') + 'Lock ' + exam.name + '? Teachers can no longer enter or change marks. You can unlock it later.', 'locked', 'Exam locked.');
     } else if (exam.status === 'locked') {
       if (!viewOnly) action('Unlock exam', 'Unlock ' + exam.name + '? Teachers can then enter and change marks again.', 'open', 'Exam unlocked.');
-      action('Approve results', () => (missing
+      action('Approve results', () => (drafts ? drafts + ' mark(s) are still drafts. ' : '') + (missing
         ? missing + ' student' + (missing === 1 ? ' has' : 's have') + ' no marks yet. Approve the results anyway?'
         : 'Approve the results for ' + exam.name + '? Marks become final.'), 'approved', 'Results approved.');
     } else if (exam.published) {
@@ -789,10 +795,10 @@ async function renderReportCard() {
       const percent = Math.round(mark.score / exam.maxMarks * 1000) / 10;
       got += mark.score;
       max += exam.maxMarks;
-      if (!isPass(percent)) failed += 1;
+      if (!passedExam(exam, mark.score)) failed += 1;
       const tr = document.createElement('tr');
       for (const text of [exam.yearId, nameOf(examData.subjects, exam.subjectId), exam.name,
-        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeText(percent)]) {
+        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeTextFor(exam, mark.score)]) {
         const td = document.createElement('td');
         td.textContent = text;
         tr.append(td);
@@ -1007,10 +1013,10 @@ async function loadPortal(tools, request) {
       const percent = Math.round(mark.score / exam.maxMarks * 1000) / 10;
       got += mark.score;
       max += exam.maxMarks;
-      if (!isPass(percent)) failed += 1;
+      if (!passedExam(exam, mark.score)) failed += 1;
       const tr = document.createElement('tr');
       for (const text of [exam.yearId, subjectName.get(exam.subjectId), exam.name,
-        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeText(percent)]) {
+        mark.score + ' / ' + exam.maxMarks, percent + '%', gradeTextFor(exam, mark.score)]) {
         const td = document.createElement('td');
         td.textContent = text;
         tr.append(td);
@@ -1059,7 +1065,7 @@ function renderExams() {
       }, isOpen ? 'Exam locked.' : 'Exam unlocked.', examStatus));
     }
     listItem(examList, exam.name + ' - ' + nameOf(classes, exam.classId) + ' - ' + nameOf(subjects, exam.subjectId)
-      + ' - max ' + exam.maxMarks + ' - ' + exam.yearId + ' - ' + exam.status, button);
+      + ' - max ' + exam.maxMarks + (typeof exam.passMarks === 'number' ? ' - pass ' + exam.passMarks : '') + ' - ' + exam.yearId + ' - ' + exam.status, button);
   }
   fillSelect(examForm.elements.namedItem('yearId'),
     years.filter((record) => record.data().status !== 'closed'), (item) => item.label + ' (' + item.status + ')');
@@ -1092,6 +1098,12 @@ examForm.addEventListener('submit', (event) => {
     examStatus.textContent = 'Maximum marks must be a whole number from 1 to 1000.';
     return;
   }
+  const passText = String(fields.get('passMarks') ?? '').trim();
+  const passMarks = passText === '' ? null : Number(passText);
+  if (passMarks !== null && (!Number.isInteger(passMarks) || passMarks < 0 || passMarks > maxMarks)) {
+    examStatus.textContent = 'Pass marks must be a whole number from 0 up to the maximum marks.';
+    return;
+  }
   const { classId, subjectId } = mapping.data();
   const id = yearId + '_' + classId + '_' + subjectId + '_' + examKey;
   const existing = examData.exams.find((record) => record.id === id)?.data();
@@ -1100,8 +1112,9 @@ examForm.addEventListener('submit', (event) => {
     return;
   }
   runSetupAction(async () => {
-    await academic.save('exams', id, { yearId, classId, subjectId, examKey, name, maxMarks, status: 'open' });
+    await academic.save('exams', id, { yearId, classId, subjectId, examKey, name, maxMarks, ...(passMarks !== null ? { passMarks } : {}), status: 'open' });
     examForm.elements.namedItem('name').value = '';
+    examForm.elements.namedItem('passMarks').value = '';
     examForm.elements.namedItem('maxMarks').value = '';
   }, existing ? 'Exam updated.' : 'Exam saved.', examStatus);
 });
@@ -1139,7 +1152,7 @@ async function renderTeacherMarks(request) {
     return;
   }
   const exam = examRecord.data();
-  examMarksHeading.textContent = 'Marks (out of ' + exam.maxMarks + ')';
+  examMarksHeading.textContent = 'Marks (out of ' + exam.maxMarks + (typeof exam.passMarks === 'number' ? ', pass ' + exam.passMarks : '') + ')';
   examMarksStatus.textContent = 'Loading students.';
   try {
     const [placements, sections, saved] = await Promise.all([
@@ -1151,6 +1164,7 @@ async function renderTeacherMarks(request) {
     ]);
     if (request !== schoolRequest || context !== teacherMarks || examRecord.id !== examMarksSelect.value) return;
     const scores = new Map(saved.docs.map((record) => [record.data().studentId, record.data().score]));
+    const drafts = new Set(saved.docs.filter((record) => record.data().draft === true).map((record) => record.data().studentId));
     const sectionName = (id) => sections.docs.find((record) => record.id === id)?.data().name ?? id;
     const rows = placements.docs.map((record) => record.data())
       .sort((a, b) => sectionName(a.sectionId).localeCompare(sectionName(b.sectionId)) || a.rollNo - b.rollNo);
@@ -1164,16 +1178,17 @@ async function renderTeacherMarks(request) {
       input.disabled = exam.status !== 'open';
       input.dataset.student = row.studentId;
       input.dataset.original = scores.has(row.studentId) ? String(scores.get(row.studentId)) : '';
+      input.dataset.draft = drafts.has(row.studentId) ? '1' : '';
       input.value = input.dataset.original;
       input.setAttribute('aria-label', 'Marks for ' + sectionName(row.sectionId) + ' roll ' + row.rollNo);
-      for (const content of [sectionName(row.sectionId), String(row.rollNo), input]) {
+      for (const content of [sectionName(row.sectionId), String(row.rollNo), input, scores.has(row.studentId) ? (drafts.has(row.studentId) ? 'Draft' : 'Submitted') : 'Not entered']) {
         const td = document.createElement('td');
         td.append(content);
         tr.append(td);
       }
       examMarksBody.append(tr);
     }
-    examMarksForm.querySelector('button[type="submit"]').disabled = exam.status !== 'open' || !rows.length;
+    for (const button of examMarksForm.querySelectorAll('button[type="submit"]')) button.disabled = exam.status !== 'open' || !rows.length;
     examMarksStatus.textContent = exam.status === 'approved'
       ? 'These marks are approved and final.'
       : exam.status === 'locked'
@@ -1195,9 +1210,11 @@ examMarksForm.addEventListener('submit', async (event) => {
   const examRecord = context.exams.find((record) => record.id === examMarksSelect.value);
   if (!examRecord) return;
   const exam = examRecord.data();
+  const asDraft = event.submitter?.dataset.draft === '1';
   const writes = [];
   for (const input of examMarksBody.querySelectorAll('input')) {
-    if (input.value === '' || input.value === input.dataset.original) continue;
+    if (input.value === '') continue;
+    if (input.value === input.dataset.original && (asDraft || input.dataset.draft !== '1')) continue;
     const score = Number(input.value);
     if (!Number.isInteger(score) || score < 0 || score > exam.maxMarks) {
       examMarksStatus.textContent = 'Marks must be whole numbers from 0 to ' + exam.maxMarks + '.';
@@ -1207,7 +1224,7 @@ examMarksForm.addEventListener('submit', async (event) => {
     writes.push({ studentId: input.dataset.student, score });
   }
   if (!writes.length) {
-    examMarksStatus.textContent = 'No new or changed marks to save.';
+    examMarksStatus.textContent = asDraft ? 'No new or changed marks to save as a draft.' : 'No new or changed marks to submit.';
     return;
   }
   const { doc, setDoc } = firestoreTools;
@@ -1222,7 +1239,7 @@ examMarksForm.addEventListener('submit', async (event) => {
       const results = await Promise.allSettled(writes.slice(start, start + MARKS_PER_BATCH).map(({ studentId, score }) => setDoc(
         doc(context.schoolRef, 'marks', examRecord.id + '_' + studentId), {
           examId: examRecord.id, yearId: exam.yearId, classId: exam.classId, subjectId: exam.subjectId,
-          studentId, score, maxMarks: exam.maxMarks, enteredBy: context.uid,
+          studentId, score, maxMarks: exam.maxMarks, enteredBy: context.uid, ...(asDraft ? { draft: true } : {}),
         })));
       done += results.filter((result) => result.status === 'fulfilled').length;
       const failed = results.find((result) => result.status === 'rejected');
@@ -1230,7 +1247,7 @@ examMarksForm.addEventListener('submit', async (event) => {
     }
     if (request !== schoolRequest || context !== teacherMarks) return;
     await renderTeacherMarks(request);
-    if (request === schoolRequest) examMarksStatus.textContent = 'Saved ' + done + ' mark' + (done === 1 ? '' : 's') + '.';
+    if (request === schoolRequest) examMarksStatus.textContent = (asDraft ? 'Saved ' + done + ' draft mark' + (done === 1 ? '' : 's') + '. Submit them when they are final.' : 'Submitted ' + done + ' mark' + (done === 1 ? '' : 's') + '.');
   } catch (error) {
     if (request !== schoolRequest || context !== teacherMarks) return;
     await renderTeacherMarks(request);
@@ -2042,12 +2059,23 @@ let schoolUid = '';
 const activeYearRecord = () => placementData.years.find((record) => record.data().status === 'active');
 const feeKey = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 20).replace(/-+$/g, '');
 
+// Fees for one student in one year. Concessions given in the year are taken off the total, latest instalments first.
+// Payments count against the earliest instalments first, so "overdue" is what has fallen due by today and is still unpaid.
 function feeSummaryFor(studentId, yearId, classId) {
-  const due = feeData.structures.filter((item) => item.data().yearId === yearId && item.data().classId === classId)
-    .reduce((sum, item) => sum + item.data().amount, 0);
+  const heads = feeData.structures.filter((item) => item.data().yearId === yearId && item.data().classId === classId).map((item) => item.data());
+  const gross = heads.reduce((sum, item) => sum + item.amount, 0);
+  const year = examData.years.find((record) => record.id === yearId)?.data();
+  const concession = (lists.concessions?.items ?? []).map((record) => record.data())
+    .filter((item) => item.studentId === studentId && (!year || (item.givenOn >= year.startDate && item.givenOn <= year.endDate)))
+    .reduce((sum, item) => sum + item.amount, 0);
+  const due = Math.max(0, gross - concession);
   const paid = feeData.payments.filter((item) => item.data().studentId === studentId && item.data().yearId === yearId
     && item.data().voided !== true).reduce((sum, item) => sum + item.data().amount, 0);
-  return { due, paid, balance: due - paid };
+  const today = localToday();
+  const dueByToday = heads.filter((item) => !item.dueOn || item.dueOn <= today).reduce((sum, item) => sum + item.amount, 0);
+  const concessionOnPast = Math.max(0, concession - (gross - dueByToday));
+  const overdue = Math.max(0, dueByToday - concessionOnPast - paid);
+  return { gross, concession, due, paid, balance: due - paid, overdue };
 }
 
 function renderFees() {
@@ -2074,7 +2102,7 @@ function renderFees() {
         if (!confirm('Remove ' + item.data().name + ' for ' + className(item.data().classId) + '?')) return false;
         await academic.remove('feeStructures', item.id);
       }, 'Fee amount removed.'));
-      listItem(feeStructureList, className(item.data().classId) + ' - ' + item.data().name + ': ' + rupees(item.data().amount), button);
+      listItem(feeStructureList, className(item.data().classId) + ' - ' + item.data().name + ': ' + rupees(item.data().amount) + (item.data().dueOn ? ' (due ' + item.data().dueOn + ')' : ''), button);
     }
     if (!mine.length) feesStatus.textContent = 'No fee amounts set for ' + year.data().label + ' yet.';
   }
@@ -2092,8 +2120,9 @@ function renderFeeBalance() {
     feeBalanceSummary.textContent = 'This student is not placed in a class this year.';
     return;
   }
-  const { due, paid, balance } = feeSummaryFor(studentId, year.id, placement.data().classId);
-  feeBalanceSummary.textContent = 'Due ' + rupees(due) + ', paid ' + rupees(paid) + ', balance ' + rupees(balance);
+  const { gross, concession, due, paid, balance, overdue } = feeSummaryFor(studentId, year.id, placement.data().classId);
+  feeBalanceSummary.textContent = 'Fees ' + rupees(gross) + (concession ? ', concession -' + rupees(concession) : '') + ', due ' + rupees(due) + ', paid ' + rupees(paid) + ', balance ' + rupees(balance)
+    + (overdue ? ', overdue ' + rupees(overdue) : '');
   const mine = feeData.payments.filter((item) => item.data().studentId === studentId && item.data().yearId === year.id)
     .sort((a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id));
   for (const item of mine) {
@@ -2170,6 +2199,11 @@ feeStructureForm.addEventListener('submit', (event) => {
   const classId = String(fields.get('classId') ?? '');
   const name = String(fields.get('feeName') ?? '').trim();
   const amount = Number(fields.get('amount'));
+  const dueOn = String(fields.get('dueOn') ?? '');
+  if (dueOn && !DATE_TEXT.test(dueOn)) {
+    feesStatus.textContent = 'Enter the due date as a date.';
+    return;
+  }
   if (!year) {
     feesStatus.textContent = 'Activate an academic year first.';
     return;
@@ -2184,7 +2218,7 @@ feeStructureForm.addEventListener('submit', (event) => {
   }
   const head = feeKey(name);
   runFeeAction(async () => {
-    await academic.save('feeStructures', year.id + '_' + classId + '_' + head, { yearId: year.id, classId, head, name, amount });
+    await academic.save('feeStructures', year.id + '_' + classId + '_' + head, { yearId: year.id, classId, head, name, amount, ...(dueOn ? { dueOn } : {}) });
     feeStructureForm.elements.namedItem('feeName').value = '';
     feeStructureForm.elements.namedItem('amount').value = '';
   }, 'Fee amount saved.');
@@ -2662,7 +2696,7 @@ document.querySelector('#performance-load').addEventListener('click', async () =
       if (!percents.length) return;
       const subject = examData.subjects.find((item) => item.id === exam.subjectId)?.data().name ?? exam.subjectId;
       const average = percents.reduce((total, value) => total + value, 0) / percents.length;
-      const passed = percents.filter((value) => isPass(value)).length;
+      const passed = results[index].docs.filter((mark) => passedExam(exam, mark.data().score)).length;
       const round = (value) => Math.round(value * 10) / 10 + '%';
       addRow(performanceBody, [exam.name + ' (' + exam.yearId + ')', nameOfClass(exam.classId), subject,
         String(percents.length), round(average), round(Math.max(...percents)), round(Math.min(...percents)),
@@ -4106,6 +4140,11 @@ lists.concessions = ownerList({
   line: (item) => item.givenOn + ' - ' + item.studentName + ' - ' + item.kind + ' - ' + rupees(item.amount) + (item.note ? ' (' + item.note + ')' : ''),
 });
 
+{
+  const renderConcessions = lists.concessions.render;
+  lists.concessions.render = () => { renderConcessions(); renderFeeBalance(); };
+}
+
 lists.achievements = ownerList({
   id: 'achievements', collection: 'achievements', empty: 'No achievements recorded yet.', saved: 'Achievement added.',
   sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
@@ -4976,7 +5015,7 @@ document.querySelector('#defaulters-run').addEventListener('click', () => {
   defaultersRows = rows;
   for (const row of rows) {
     listItem(defaultersList, row.student.name + ' (' + row.student.admissionNo + ') - ' + nameOfClass(row.classId)
-      + ' - due ' + rupees(row.due) + ', paid ' + rupees(row.paid) + ', balance ' + rupees(row.balance)
+      + ' - due ' + rupees(row.due) + (row.concession ? ' (after concession ' + rupees(row.concession) + ')' : '') + ', paid ' + rupees(row.paid) + ', balance ' + rupees(row.balance) + (row.overdue ? ', overdue ' + rupees(row.overdue) : '')
       + (row.student.guardianPhone ? ' - ' + row.student.guardianName + ' ' + row.student.guardianPhone : ''));
   }
   defaultersStatus.textContent = rows.length
@@ -4989,9 +5028,9 @@ document.querySelector('#defaulters-csv').addEventListener('click', () => {
     defaultersStatus.textContent = 'Show the students with dues first.';
     return;
   }
-  downloadCsv('fee-dues', [['Admission no', 'Name', 'Class', 'Guardian', 'Guardian phone', 'Due (Rs)', 'Paid (Rs)', 'Balance (Rs)'],
+  downloadCsv('fee-dues', [['Admission no', 'Name', 'Class', 'Guardian', 'Guardian phone', 'Due (Rs)', 'Concession (Rs)', 'Paid (Rs)', 'Balance (Rs)', 'Overdue (Rs)'],
     ...defaultersRows.map((row) => [row.student.admissionNo, row.student.name, nameOfClass(row.classId), row.student.guardianName,
-      row.student.guardianPhone, row.due, row.paid, row.balance])]);
+      row.student.guardianPhone, row.due, row.concession, row.paid, row.balance, row.overdue])]);
 });
 
 function renderWorkload() {

@@ -927,7 +927,7 @@ service cloud.firestore {
 
       // A pure status change leaves the name and the maximum marks untouched.
       function examUnchangedFields(before, after) {
-        return after.name == before.name && after.maxMarks == before.maxMarks;
+        return after.name == before.name && after.maxMarks == before.maxMarks && after.get('passMarks', -1) == before.get('passMarks', -1);
       }
 
       // Helpers for student placement (feature 028).
@@ -1291,7 +1291,8 @@ service cloud.firestore {
     }
 
     function validResultMark(mark) {
-      return mark.keys().hasOnly(['examId', 'yearId', 'classId', 'subjectId', 'studentId', 'score', 'maxMarks', 'enteredBy'])
+      return mark.keys().hasOnly(['examId', 'yearId', 'classId', 'subjectId', 'studentId', 'score', 'maxMarks', 'enteredBy', 'draft'])
+        && (!mark.keys().hasAny(['draft']) || mark.draft == true)
         && mark.keys().hasAll(['examId', 'yearId', 'classId', 'subjectId', 'studentId', 'score', 'maxMarks', 'enteredBy'])
         && mark.examId is string && mark.examId.size() <= 100
         && mark.yearId is string && mark.yearId.matches('[a-z0-9-]{1,20}')
@@ -1352,8 +1353,9 @@ service cloud.firestore {
     }
 
     function validFeeStructure(item) {
-      return item.keys().hasOnly(['yearId', 'classId', 'head', 'name', 'amount'])
+      return item.keys().hasOnly(['yearId', 'classId', 'head', 'name', 'amount', 'dueOn'])
         && item.keys().hasAll(['yearId', 'classId', 'head', 'name', 'amount'])
+        && (!item.keys().hasAny(['dueOn']) || (item.dueOn is string && item.dueOn.matches('20[0-9]{2}-[0-9]{2}-[0-9]{2}')))
         && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
         && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
         && item.head is string && item.head.matches('[a-z0-9-]{1,20}')
@@ -2012,7 +2014,8 @@ service cloud.firestore {
     }
 
     function validExam(item) {
-      return item.keys().hasOnly(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status', 'approvedBy', 'published'])
+      return item.keys().hasOnly(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'passMarks', 'status', 'approvedBy', 'published'])
+        && (!item.keys().hasAny(['passMarks']) || (item.passMarks is int && item.passMarks >= 0 && item.passMarks <= item.maxMarks))
         && item.keys().hasAll(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status'])
         && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
         && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
