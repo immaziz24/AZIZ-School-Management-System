@@ -217,6 +217,8 @@ async function loadAcademic(request) {
         .map((name) => tools.list(name)),
     );
     if (request !== schoolRequest) return;
+    try { photoMap = new Map((await tools.list('studentPhotos')).docs.map((record) => [record.id, record.data().photo])); } catch { photoMap = new Map(); }
+    if (request !== schoolRequest) return;
     studentRecords = studentDocs.docs;
     renderStudents();
     placementData = { years: years.docs, classes: classes.docs, sections: sections.docs, enrollments: enrollments.docs };
@@ -364,12 +366,72 @@ const studentFields = ['admissionNo', 'name', 'guardianName', 'guardianPhone', '
 let studentRecords = [];
 let studentEditingId;
 
+let photoMap = new Map();
+let pendingPhoto = '';
+let schoolLogo = '';
+const studentPhotoInput = document.querySelector('#student-photo');
+const studentPhotoPreview = document.querySelector('#student-photo-preview');
+const studentPhotoRemove = document.querySelector('#student-photo-remove');
+const studentHistoryTitle = document.querySelector('#student-history-title');
+const studentHistoryList = document.querySelector('#student-history');
+
+// Shrinks a chosen picture to a small square JPEG (text) so it can be kept with the record. Returns '' if it cannot.
+async function shrinkImage(file, size) {
+  if (!file || !file.type.startsWith('image/') || file.size > 15000000) return '';
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return '';
+  for (const [dimension, quality] of [[size, 0.72], [size, 0.55], [Math.round(size * 0.75), 0.5], [Math.round(size * 0.5), 0.5]]) {
+    const canvas = document.createElement('canvas');
+    canvas.width = dimension;
+    canvas.height = dimension;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, dimension, dimension);
+    const edge = Math.min(bitmap.width, bitmap.height);
+    context.drawImage(bitmap, (bitmap.width - edge) / 2, (bitmap.height - edge) / 2, edge, edge, 0, 0, dimension, dimension);
+    const url = canvas.toDataURL('image/jpeg', quality);
+    if (url.length <= 38000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(url)) return url;
+  }
+  return '';
+}
+studentPhotoInput.addEventListener('change', async () => {
+  pendingPhoto = await shrinkImage(studentPhotoInput.files[0], 160);
+  studentPhotoPreview.hidden = !pendingPhoto;
+  if (pendingPhoto) { studentPhotoPreview.src = pendingPhoto; studentPhotoRemove.checked = false; }
+  else if (studentPhotoInput.files[0]) studentStatus.textContent = 'That picture could not be used. Try a different image.';
+});
+
 studentForm.addEventListener('reset', () => {
+  pendingPhoto = '';
+  studentPhotoPreview.hidden = true;
   studentEditingId = undefined;
   studentForm.elements.namedItem('admissionNo').readOnly = false;
   studentSave.textContent = 'Save student';
   studentCancel.hidden = true;
 });
+
+// Profile history: each owner edit to a student leaves a short, permanent note of what changed.
+async function addStudentHistory(studentId, summary) {
+  try {
+    await academic.save('studentHistory', newId('SH'), { studentId, at: new Date().toISOString(), by: schoolUid, summary: summary.slice(0, 500) });
+  } catch { /* The change itself stands even if the note could not be written. */ }
+}
+async function showStudentHistory(studentId, name) {
+  const { collection, getDocsFromServer, query, where } = firestoreTools;
+  const request = schoolRequest;
+  studentHistoryTitle.hidden = false;
+  studentHistoryList.hidden = false;
+  studentHistoryTitle.textContent = 'Change history - ' + name;
+  studentHistoryList.replaceChildren();
+  try {
+    const found = await getDocsFromServer(query(collection(academic.schoolRef, 'studentHistory'), where('studentId', '==', studentId)));
+    if (request !== schoolRequest) return;
+    for (const record of found.docs.sort((a, b) => b.data().at.localeCompare(a.data().at))) listItem(studentHistoryList, record.data().at.slice(0, 16).replace('T', ' ') + ' - ' + record.data().summary);
+    if (!found.docs.length) listItem(studentHistoryList, 'No changes recorded yet.');
+  } catch {
+    listItem(studentHistoryList, 'Could not load the history.');
+  }
+}
 
 function renderStudents() {
   studentList.replaceChildren();
@@ -380,8 +442,9 @@ function renderStudents() {
   for (const record of matches) {
     const student = record.data();
     const row = document.createElement('li');
-    row.textContent = student.name + ' - ' + student.admissionNo + ' - ' + student.guardianName
-      + (student.guardianPhone ? ' (' + student.guardianPhone + ')' : '') + ' - ' + student.status + ' ';
+    if (photoMap.has(record.id)) { const thumb = document.createElement('img'); thumb.className = 'thumb'; thumb.alt = ''; thumb.src = photoMap.get(record.id); row.append(thumb); }
+    row.append(student.name + ' - ' + student.admissionNo + ' - ' + student.guardianName
+      + (student.guardianPhone ? ' (' + student.guardianPhone + ')' : '') + ' - ' + student.status + ' ');
     const edit = document.createElement('button');
     edit.type = 'button';
     edit.textContent = 'Edit ' + student.name;
@@ -391,17 +454,27 @@ function renderStudents() {
       studentForm.elements.namedItem('admissionNo').readOnly = true;
       studentSave.textContent = 'Save changes';
       studentCancel.hidden = false;
+      pendingPhoto = '';
+      studentPhotoPreview.hidden = !photoMap.has(record.id);
+      if (photoMap.has(record.id)) studentPhotoPreview.src = photoMap.get(record.id);
       studentForm.elements.namedItem('name').focus();
     });
+    const history = document.createElement('button');
+    history.type = 'button';
+    history.textContent = 'History of ' + student.name;
+    history.addEventListener('click', () => showStudentHistory(record.id, student.name));
     const toggle = document.createElement('button');
     toggle.type = 'button';
     const next = student.status === 'active' ? 'inactive' : 'active';
     toggle.textContent = (next === 'inactive' ? 'Mark inactive ' : 'Mark active ') + student.name;
     toggle.addEventListener('click', () => runSetupAction(
-      () => academic.save('students', record.id, { ...student, status: next }),
+      async () => {
+        await academic.save('students', record.id, { ...student, status: next });
+        await addStudentHistory(record.id, 'status: ' + student.status + ' -> ' + next);
+      },
       'Student marked ' + next + '.', studentStatus,
     ));
-    row.append(edit, toggle);
+    row.append(edit, toggle, history);
     studentList.append(row);
   }
   if (!studentRecords.length) studentStatus.textContent = studentStatus.textContent || 'No students yet.';
@@ -444,11 +517,26 @@ studentForm.addEventListener('submit', (event) => {
     return;
   }
   runSetupAction(async () => {
-    await academic.save('students', id, {
+    const saved = {
       admissionNo, name: value('name'), guardianName: value('guardianName'),
       guardianPhone: value('guardianPhone'), status: existing?.data().status ?? 'active',
       ...(value('dob') ? { dob: value('dob') } : {}), ...(value('address') ? { address: value('address') } : {}),
-    });
+    };
+    await academic.save('students', id, saved);
+    if (existing) {
+      const before = existing.data();
+      const changes = studentFields.filter((field) => (before[field] ?? '') !== (saved[field] ?? '')).map((field) => field + ': ' + (before[field] || '-') + ' -> ' + (saved[field] || '-'));
+      if (changes.length) await addStudentHistory(id, changes.join('; '));
+    } else {
+      await addStudentHistory(id, 'student added');
+    }
+    if (pendingPhoto) {
+      await academic.save('studentPhotos', id, { photo: pendingPhoto });
+      if (existing) await addStudentHistory(id, 'photo changed');
+    } else if (studentPhotoRemove.checked && photoMap.has(id)) {
+      await academic.remove('studentPhotos', id);
+      await addStudentHistory(id, 'photo removed');
+    }
     studentForm.reset();
   }, 'Student saved.', studentStatus);
 });
@@ -1462,10 +1550,20 @@ attForm.addEventListener('submit', async (event) => {
   const classId = attClass.value;
   const date = attDate.value;
   const writes = attSelects().filter((select) => select.value !== '' && select.value !== select.dataset.original)
-    .map((select) => ({ studentId: select.dataset.student, status: select.value }));
+    .map((select) => ({ studentId: select.dataset.student, status: select.value, corrected: select.dataset.original !== '' }));
   if (!writes.length) {
     attMarkStatus.textContent = 'No new or changed attendance to save.';
     return;
+  }
+  // Changing an attendance mark that was already saved needs a short reason, kept with the record.
+  const correctionCount = writes.filter((write) => write.corrected).length;
+  let reason = '';
+  if (correctionCount) {
+    reason = (prompt('You are correcting ' + correctionCount + ' saved mark' + (correctionCount === 1 ? '' : 's') + '. Why? (a few words, required)') ?? '').trim().slice(0, 120);
+    if (reason.length < 3) {
+      attMarkStatus.textContent = 'Nothing was saved. A correction needs a reason of at least 3 characters.';
+      return;
+    }
   }
   const { doc, setDoc } = firestoreTools;
   const request = schoolRequest;
@@ -1476,9 +1574,9 @@ attForm.addEventListener('submit', async (event) => {
     // One write per student: each is checked on its own by the rules, so ten run at a time.
     for (let start = 0; start < writes.length; start += ATTENDANCE_PER_GROUP) {
       attMarkStatus.textContent = 'Saving attendance ' + (start + 1) + ' of ' + writes.length + '.';
-      const results = await Promise.allSettled(writes.slice(start, start + ATTENDANCE_PER_GROUP).map(({ studentId, status }) => setDoc(
+      const results = await Promise.allSettled(writes.slice(start, start + ATTENDANCE_PER_GROUP).map(({ studentId, status, corrected }) => setDoc(
         doc(context.schoolRef, 'attendance', date + '_' + classId + '_' + studentId), {
-          yearId: context.year.id, classId, studentId, date, status, markedBy: context.uid,
+          yearId: context.year.id, classId, studentId, date, status, markedBy: context.uid, ...(corrected ? { reason } : {}),
         })));
       done += results.filter((result) => result.status === 'fulfilled').length;
       const failed = results.find((result) => result.status === 'rejected');
@@ -2401,8 +2499,17 @@ gradingForm.addEventListener('submit', async (event) => {
 function printCard(headingId, who) {
   const heading = document.querySelector(headingId);
   heading.textContent = (schoolName.textContent || 'School') + ' - ' + who + ' - ' + localToday();
+  let logo;
+  if (schoolLogo) {
+    logo = document.createElement('img');
+    logo.className = 'print-logo';
+    logo.alt = 'School logo';
+    logo.src = schoolLogo;
+    heading.prepend(logo);
+  }
   document.body.classList.add('printing');
   const done = () => {
+    logo?.remove();
     document.body.classList.remove('printing');
     window.removeEventListener('afterprint', done);
   };
@@ -2992,6 +3099,9 @@ function buildCard(kind) {
   const sectionName = placementData.sections.find((item) => item.id === placement.sectionId)?.data().name ?? placement.sectionId;
   cardTitle.textContent = (kind === 'admit' ? 'Admit Card' : 'Student ID Card') + ' - ' + activeYear.data().label;
   cardLines.replaceChildren();
+  const cardPhoto = document.querySelector('#card-photo');
+  cardPhoto.hidden = !photoMap.has(record.id);
+  if (photoMap.has(record.id)) cardPhoto.src = photoMap.get(record.id);
   const lines = ['Name: ' + student.name, 'Admission no: ' + student.admissionNo,
     'Class: ' + nameOfClass(placement.classId) + ' - ' + sectionName + ', roll ' + placement.rollNo];
   if (kind === 'id') lines.push('Guardian: ' + student.guardianName, 'Phone: ' + (student.guardianPhone || '-'));
@@ -4474,6 +4584,47 @@ const prefsStatus = document.querySelector('#prefs-status');
 const prefsForm = document.querySelector('#prefs-form');
 const launchStatus = document.querySelector('#launch-status');
 const launchList = document.querySelector('#launch-manual');
+const logoStatus = document.querySelector('#logo-status');
+const logoPreview = document.querySelector('#logo-preview');
+let pendingLogo = '';
+document.querySelector('#logo-file').addEventListener('change', async (event) => {
+  pendingLogo = await shrinkImage(event.target.files[0], 200);
+  logoPreview.hidden = !pendingLogo;
+  if (pendingLogo) { logoPreview.src = pendingLogo; logoStatus.textContent = 'Preview shown. Click Save logo.'; }
+  else if (event.target.files[0]) logoStatus.textContent = 'That picture could not be used. Try a different image.';
+});
+document.querySelector('#logo-save').addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools || tools.busy || !pendingLogo) { if (!pendingLogo) logoStatus.textContent = 'Choose a picture first.'; return; }
+  const request = schoolRequest;
+  tools.busy = true;
+  try {
+    await tools.save('settings', 'branding', { logo: pendingLogo });
+    schoolLogo = pendingLogo;
+    pendingLogo = '';
+    if (request === schoolRequest) logoStatus.textContent = 'Logo saved. It now prints on report cards, ID cards and admit cards.';
+  } catch {
+    if (request === schoolRequest) logoStatus.textContent = 'Could not save the logo. Try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
+document.querySelector('#logo-remove').addEventListener('click', async () => {
+  const tools = academic;
+  if (!tools || tools.busy || !confirm('Remove the school logo from printed documents?')) return;
+  const request = schoolRequest;
+  tools.busy = true;
+  try {
+    await tools.remove('settings', 'branding');
+    schoolLogo = '';
+    logoPreview.hidden = true;
+    if (request === schoolRequest) logoStatus.textContent = 'Logo removed.';
+  } catch {
+    if (request === schoolRequest) logoStatus.textContent = 'Could not remove the logo. Try again.';
+  } finally {
+    tools.busy = false;
+  }
+});
 const FIELD_TYPES = [['text', 'Short text'], ['textarea', 'Long text'], ['number', 'Number'], ['date', 'Date'], ['select', 'Choose one']];
 const LAUNCH_ITEMS = ['Parents and staff have been told about the new system', 'A full data backup has been downloaded',
   'Fees and concessions have been reviewed', 'Teachers have logged in and tried marking attendance', 'The public website has been read and approved',
@@ -4578,6 +4729,12 @@ async function loadSettings(request) {
     }
     launchTicks = launch.exists() ? launch.data() : {};
     renderLaunch();
+    try {
+      const branding = await getDocFromServer(doc(academic.schoolRef, 'settings', 'branding'));
+      schoolLogo = branding.exists() ? branding.data().logo : '';
+      logoPreview.hidden = !schoolLogo;
+      if (schoolLogo) logoPreview.src = schoolLogo;
+    } catch { schoolLogo = ''; }
     await loadTemplateInfo(request);
     try {
       const plan = await getDocFromServer(doc(academic.schoolRef, 'billing', 'main'));
@@ -4681,7 +4838,7 @@ function resetSettings() {
   for (const section of [siteExtrasSection, prefsSection]) section.hidden = true;
   siteExtrasStatus.textContent = ''; prefsStatus.textContent = ''; launchStatus.textContent = '';
   siteExtrasForm.reset(); prefsForm.reset(); launchList.replaceChildren();
-  launchTicks = {}; schoolPrefs = null; extraLabels = []; siteExtrasCurrent = {}; storagePlanMb = null; tvInfo.textContent = '';
+  launchTicks = {}; schoolPrefs = null; extraLabels = []; siteExtrasCurrent = {}; storagePlanMb = null; tvInfo.textContent = ''; schoolLogo = ''; pendingLogo = ''; logoPreview.hidden = true; logoStatus.textContent = '';
 }
 
 // Parent page: register the student for upcoming calendar events, or cancel.
@@ -4856,7 +5013,7 @@ function renderWorkload() {
   workloadStatus.textContent = byTeacher.size ? 'Counted from the timetable.' : 'The timetable is empty, so there is nothing to count yet.';
 }
 
-const BACKUP_COLLECTIONS = ['members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
+const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
   'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
   'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
@@ -5952,6 +6109,10 @@ onAuthStateChanged(auth, async (user) => {
   examForm.reset();
   for (const name of ['yearId', 'mappingId']) examForm.elements.namedItem(name).replaceChildren();
   studentRecords = [];
+  photoMap = new Map();
+  studentHistoryTitle.hidden = true;
+  studentHistoryList.hidden = true;
+  studentHistoryList.replaceChildren();
   studentSection.hidden = true;
   studentStatus.textContent = '';
   studentSearch.value = '';
@@ -6049,6 +6210,7 @@ onAuthStateChanged(auth, async (user) => {
         status.textContent = 'The parent and student portal is switched off for now. Please contact the school.';
         return;
       }
+      try { const branding = await getDocFromServer(doc(schoolRef, 'settings', 'branding')); schoolLogo = branding.exists() ? branding.data().logo : ''; } catch { schoolLogo = ''; }
       await loadPortal({ schoolRef, user, doc, collection, getDocFromServer, getDocsFromServer, query, where }, request);
       return;
     }

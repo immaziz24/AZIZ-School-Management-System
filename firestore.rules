@@ -1001,6 +1001,33 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Student photos. studentPhotos/{studentId}: one small JPEG (data URL, shrunk in the browser). The owner
+      // keeps it; the owner, principal and the student's own linked family read it.
+      match /studentPhotos/{studentId} {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(studentId));
+        allow list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && studentId.matches('[a-z0-9-]{1,20}') && validImage(request.resource.data, 'photo')
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // School logo for printed documents. settings/branding: logo (JPEG data URL). Staff and linked families read it.
+      match /settings/branding {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validImage(request.resource.data, 'logo');
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Student profile history. studentHistory/{SH-...}: who changed what and when. Written when the owner
+      // edits a student; never edited or removed.
+      match /studentHistory/{historyId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && historyId.matches('SH-[A-Za-z0-9-]{1,30}') && validStudentHistory(request.resource.data)
+          && request.resource.data.by == request.auth.uid;
+      }
+
       match /settings/grading {
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
         allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validGrading(request.resource.data);
@@ -1292,8 +1319,9 @@ service cloud.firestore {
     }
 
     function validAttendance(item) {
-      return item.keys().hasOnly(['yearId', 'classId', 'studentId', 'date', 'status', 'markedBy'])
+      return item.keys().hasOnly(['yearId', 'classId', 'studentId', 'date', 'status', 'markedBy', 'reason'])
         && item.keys().hasAll(['yearId', 'classId', 'studentId', 'date', 'status', 'markedBy'])
+        && optionalText(item, 'reason', 120)
         && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
         && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
         && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
@@ -1877,6 +1905,20 @@ service cloud.firestore {
         && item.sizeKb is int && item.sizeKb >= 0 && item.sizeKb <= 5000000
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
         && optionalText(item, 'note', 200);
+    }
+
+    function validImage(item, key) {
+      return item.keys().hasOnly([key]) && item.keys().hasAll([key])
+        && item[key] is string && item[key].size() <= 40000
+        && item[key].matches('data:image/jpeg;base64,[A-Za-z0-9+/=]+');
+    }
+
+    function validStudentHistory(item) {
+      return item.keys().hasOnly(['studentId', 'at', 'by', 'summary']) && item.keys().hasAll(['studentId', 'at', 'by', 'summary'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.at is string && item.at.matches('20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,13}Z')
+        && item.by is string && item.by.size() <= 128
+        && item.summary is string && item.summary.size() >= 1 && item.summary.size() <= 500;
     }
 
     function validPreferences(item) {

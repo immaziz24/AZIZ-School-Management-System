@@ -139,3 +139,7 @@ body:not(.signed-in) #signup{margin:22px 0 0;background:rgba(255,255,255,.03)}
 }
 
 body.signed-in #signup{display:none}
+
+.thumb{width:56px;height:56px;object-fit:cover;border-radius:10px;border:1px solid var(--line);vertical-align:middle;margin:0 8px}
+.card-photo{width:96px;height:96px;object-fit:cover;border:1px solid #999;float:right;margin:0 0 8px 12px}
+.print-logo{display:block;max-height:64px;max-width:200px;margin:0 0 6px}

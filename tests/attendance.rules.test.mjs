@@ -358,3 +358,11 @@ test('family attendance access can be switched off, and is read only', async () 
   await denied(set('parent-1', path(rec({ studentId: 's2' })), rec({ studentId: 's2', markedBy: 'parent-1' })), 'parent create');
   await denied(remove('parent-1', path(rec())), 'parent delete');
 });
+
+test('a correction may carry a short reason', async () => {
+  await allowed(set('ct-a', path(), rec()), 'create present');
+  await allowed(set('ct-a', path(), rec({ status: 'absent', reason: 'Marked present by mistake' })), 'correction with reason');
+  await denied(set('ct-a', path(), rec({ status: 'late', reason: 'x'.repeat(121) })), 'reason too long');
+  await denied(set('ct-a', path(), rec({ status: 'late', reason: 5 })), 'reason must be text');
+  await denied(set('ct-a', path(), rec({ status: 'late', note: 'other field' })), 'unknown field');
+});
