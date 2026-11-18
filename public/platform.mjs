@@ -367,7 +367,20 @@ async function loadAdmin() {
     }
     const peak = Math.max(1, ...[...byMonth.values()].map((r) => r.paid + r.unpaid));
     const bar = (value) => '#'.repeat(Math.round(value / peak * 20));
+    const countStatus = (status) => allSchools.filter((s) => s.billing?.status === status).length;
+    const activeN = countStatus('active'); const trialN = countStatus('trial');
+    const lostN = countStatus('cancelled') + countStatus('suspended');
+    const soon = allSchools.filter((s) => s.billing?.status === 'trial' && daysLeft(s.billing.trialEnds) !== null && daysLeft(s.billing.trialEnds) >= 0 && daysLeft(s.billing.trialEnds) <= 14).length;
+    const overdue = allSchools.filter((s) => s.billing?.status === 'active' && s.billing.renewsOn && Date.parse(s.billing.renewsOn) < Date.now() - 86400000).length;
+    const analytics = [
+      ['Annual run rate: ' + rupees(mrr * 12) + '. Average per paying school: ' + (activeN ? rupees(Math.round(mrr / activeN)) : '-') + ' a month.'],
+      ['Schools: ' + activeN + ' active, ' + trialN + ' on trial, ' + lostN + ' cancelled or suspended.'],
+      ['Trial to paid so far: ' + (activeN + lostN ? Math.round(activeN / (activeN + lostN) * 100) + '% of schools that left trial are still paying.' : 'no school has left trial yet.')],
+      ['Churn: ' + (activeN + lostN ? Math.round(lostN / (activeN + lostN) * 100) + '% of paying-or-lost schools are cancelled or suspended.' : 'nothing yet.')],
+      ['Trials ending within 14 days: ' + soon + '. Renewals overdue: ' + overdue + '. Unpaid invoices: ' + rupees(due) + '.'],
+    ];
     fillList($('#platform-revenue-breakdown'), [
+      ...analytics,
       ...[...byPlan.entries()].sort().map(([key, r]) => ['Plan ' + key + ': ' + r.n + ' school(s), monthly ' + rupees(r.mrr)]),
       ...[...byMonth.entries()].sort().reverse().slice(0, 12).map(([period, r]) => [period + ': paid ' + rupees(r.paid) + ', unpaid ' + rupees(r.unpaid) + ' ' + bar(r.paid) + (r.unpaid ? ' (' + bar(r.unpaid).replaceAll('#', '.') + ')' : '')]),
     ], 'No billing yet.');

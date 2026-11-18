@@ -366,7 +366,7 @@ const studentCount = document.querySelector('#student-count');
 const studentForm = document.querySelector('#student-form');
 const studentSave = studentForm.querySelector('[type="submit"]');
 const studentCancel = studentForm.querySelector('[type="reset"]');
-const studentFields = ['admissionNo', 'name', 'guardianName', 'guardianPhone', 'dob', 'address'];
+const studentFields = ['admissionNo', 'name', 'guardianName', 'guardianPhone', 'dob', 'address', 'gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail'];
 let studentRecords = [];
 let studentEditingId;
 
@@ -581,11 +581,20 @@ studentForm.addEventListener('submit', (event) => {
       + existing.data().name + '. Use Edit to change that student.';
     return;
   }
+  if (value('emergencyPhone') && !/^[0-9+() -]{1,20}$/.test(value('emergencyPhone'))) {
+    studentStatus.textContent = 'Emergency phone may use digits, +, spaces, hyphens and brackets only.';
+    return;
+  }
+  if (value('gender') && !['male', 'female', 'other'].includes(value('gender'))) {
+    studentStatus.textContent = 'Choose a gender from the list, or leave it as Not stated.';
+    return;
+  }
   runSetupAction(async () => {
     const saved = {
       admissionNo, name: value('name'), guardianName: value('guardianName'),
       guardianPhone: value('guardianPhone'), status: existing?.data().status ?? 'active',
       ...(value('dob') ? { dob: value('dob') } : {}), ...(value('address') ? { address: value('address') } : {}),
+      ...Object.fromEntries(['gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail'].filter((key) => value(key)).map((key) => [key, value(key)])),
     };
     await academic.save('students', id, saved);
     if (existing) {
@@ -960,14 +969,14 @@ let viewOnly = false;
 // two capture handlers stop the buttons and forms first so the page says why.
 dashboard.addEventListener('click', (event) => {
   const button = viewOnly ? event.target.closest('button') : null;
-  if (!button || /^(download|print|show|refresh|view|preview|approve results)/i.test(button.textContent.trim())) return;
+  if (!button || button.closest('#leave-review') || /^(download|print|show|refresh|view|preview|approve results)/i.test(button.textContent.trim())) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   viewOnlyNote.focus?.();
-  viewOnlyNote.textContent = 'View only. You cannot change anything with this login.';
+  viewOnlyNote.textContent = 'View only. This login can approve leave and post notices; everything else is the owner\'s.';
 }, true);
 dashboard.addEventListener('submit', (event) => {
-  if (!viewOnly) return;
+  if (!viewOnly || event.target.closest('#notice-form')) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   viewOnlyNote.textContent = 'View only. You cannot change anything with this login.';
@@ -2554,6 +2563,26 @@ const AUDIT_ACTION_LABEL = {
 const AUDIT_SHOWN = 100;
 
 let auditItems = [];
+function renderAuditSummary(items) {
+  const target = document.querySelector('#audit-summary');
+  target.replaceChildren();
+  const hours = (n) => new Date(Date.now() - n * 3600000).toISOString();
+  const day = items.filter((item) => item.at >= hours(24));
+  const week = items.filter((item) => item.at >= hours(168));
+  listItem(target, 'Last 24 hours: ' + day.length + ' change(s). Last 7 days: ' + week.length + ' change(s).');
+  const byAction = new Map();
+  for (const item of week) byAction.set(item.action, (byAction.get(item.action) ?? 0) + 1);
+  if (byAction.size) listItem(target, 'This week by type: ' + [...byAction].sort((a, b) => b[1] - a[1]).map(([action, n]) => (AUDIT_ACTION_LABEL[action] ?? action) + ' ' + n).join(', ') + '.');
+  const byActor = new Map();
+  for (const item of week) byActor.set(item.actor, (byActor.get(item.actor) ?? 0) + 1);
+  const busy = [...byActor].filter(([, n]) => n >= 200).map(([actor, n]) => actor.slice(0, 6) + '... ' + n);
+  if (busy.length) listItem(target, 'Unusually busy account(s) this week: ' + busy.join(', ') + '. Check the entries below.');
+  const night = week.filter((item) => { const hour = (new Date(item.at).getHours()); return hour < 5; });
+  if (night.length >= 5) listItem(target, night.length + ' change(s) were made between midnight and 5 am this week.');
+  const removals = week.filter((item) => item.action === 'remove' || item.action === 'void').length;
+  if (removals >= 5) listItem(target, removals + ' removal(s) or voided payment(s) this week. Check they were expected.');
+  for (const note of securityNotes()) listItem(target, note);
+}
 async function loadAuditLog(request) {
   try {
     const saved = await academic.list('auditLog');
@@ -2568,6 +2597,7 @@ async function loadAuditLog(request) {
         + (item.detail ? ' (' + item.detail + ')' : '');
       listItem(auditList, when + ' - ' + what);
     }
+    renderAuditSummary(items);
     auditStatus.textContent = items.length
       ? 'Showing the latest ' + Math.min(items.length, AUDIT_SHOWN) + ' of ' + items.length + ' entries.'
       : 'No activity yet.';
@@ -3900,6 +3930,7 @@ function ownerList(cfg) {
   api.render = () => {
     api.dirty = false;
     if (form && cfg.prepare) cfg.prepare(form, api.items);
+    cfg.summary?.(api.items);
     list.replaceChildren();
     for (const record of [...api.items].sort(cfg.sort ?? ((a, b) => a.id.localeCompare(b.id)))) {
       const item = document.createElement('li');
@@ -4044,6 +4075,61 @@ lists.riders = ownerList({
     + (routeFee(item.routeId) ? ' - fee ' + rupees(routeFee(item.routeId)) + '/month' : ''),
 });
 
+const SOON_DAYS = 30;
+const daysUntil = (dateText) => Math.round((Date.parse(dateText) - Date.parse(localToday())) / 86400000);
+const expiryNote = (label, dateText) => {
+  if (!dateText) return '';
+  const days = daysUntil(dateText);
+  return ' - ' + label + ' ' + dateText + (days < 0 ? ' (EXPIRED ' + -days + ' days ago)' : days <= SOON_DAYS ? ' (expires in ' + days + ' days)' : '');
+};
+lists.vehicles = ownerList({
+  id: 'vehicles', collection: 'vehicles', empty: 'No vehicles yet.', saved: 'Vehicle added.',
+  sort: (a, b) => a.data().regNo.localeCompare(b.data().regNo),
+  prepare: (form) => {
+    const select = form.elements.namedItem('routeId');
+    fillSelect(select, lists.routes.items, (item) => item.name);
+    select.prepend(new Option('No route yet', ''));
+    select.value = '';
+  },
+  build: (fields) => {
+    const capacity = wholeNumber(fields, 'capacity');
+    if (!text(fields, 'regNo')) return { error: 'Enter the registration number.' };
+    if (!(capacity >= 1 && capacity <= 200)) return { error: 'Seats must be a whole number from 1 to 200.' };
+    for (const key of ['insuranceExpiry', 'fitnessExpiry', 'licenseExpiry']) {
+      if (text(fields, key) && !DATE_TEXT.test(text(fields, key))) return { error: 'Enter the dates as dates.' };
+    }
+    return { id: newId('VH'), data: { regNo: text(fields, 'regNo'), capacity,
+      ...optional(fields, 'model', 'insuranceExpiry', 'fitnessExpiry', 'licenseExpiry', 'routeId') } };
+  },
+  line: (item) => item.regNo + (item.model ? ' - ' + item.model : '') + ' - ' + item.capacity + ' seats'
+    + (item.routeId ? ' - route ' + routeName(item.routeId) + ', ' + lists.riders.items.filter((rider) => rider.data().routeId === item.routeId).length + ' rider(s)'
+      + (lists.riders.items.filter((rider) => rider.data().routeId === item.routeId).length > item.capacity ? ' (MORE RIDERS THAN SEATS)' : '') : '')
+    + expiryNote('insurance', item.insuranceExpiry) + expiryNote('fitness', item.fitnessExpiry) + expiryNote('driver licence', item.licenseExpiry),
+});
+
+lists.appraisals = ownerList({
+  id: 'appraisals', collection: 'appraisals', empty: 'No appraisals yet.', saved: 'Appraisal saved.',
+  sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
+  prepare: (form, items) => {
+    document.querySelector('#appraisal-staff').replaceChildren(...lists.staffdir.items.map((record) => new Option(record.data().name)));
+    const byStaff = new Map();
+    for (const record of items) {
+      const entry = byStaff.get(record.data().staffName) ?? { total: 0, n: 0 };
+      entry.total += record.data().rating; entry.n += 1;
+      byStaff.set(record.data().staffName, entry);
+    }
+    document.querySelector('#appraisals-summary').textContent = byStaff.size
+      ? 'Average ratings: ' + [...byStaff].map(([name, entry]) => name + ' ' + (Math.round(entry.total / entry.n * 10) / 10)).join(', ') + '.' : '';
+  },
+  build: (fields) => {
+    const rating = wholeNumber(fields, 'rating');
+    if (!text(fields, 'staffName') || !DATE_TEXT.test(text(fields, 'date'))) return { error: 'Enter the staff member and the date.' };
+    if (!(rating >= 1 && rating <= 5)) return { error: 'Rating must be a whole number from 1 to 5.' };
+    return { id: newId('AP'), data: { staffName: text(fields, 'staffName'), date: text(fields, 'date'), rating, ...optional(fields, 'remarks') } };
+  },
+  line: (item) => item.date + ' - ' + item.staffName + ' - rating ' + item.rating + ' of 5' + (item.remarks ? ' - ' + item.remarks : ''),
+});
+
 lists.activities = ownerList({
   id: 'activities', collection: 'activities', empty: 'No activities yet.', saved: 'Activity added.',
   sort: (a, b) => a.data().name.localeCompare(b.data().name),
@@ -4142,7 +4228,18 @@ lists.storage = ownerList({
     const kb = items.reduce((sum, record) => sum + record.data().sizeKb, 0);
     const mb = Math.round(kb / 1024 * 10) / 10;
     document.querySelector('#storage-total').textContent = 'Recorded: ' + mb + ' MB' + (storagePlanMb ? ' of ' + storagePlanMb + ' MB in your plan ('
-      + Math.round(mb / storagePlanMb * 1000) / 10 + '% used).' : '. Your plan has no storage limit set yet.');
+      + Math.round(mb / storagePlanMb * 1000) / 10 + '% used).' : '. Your plan has no storage limit set yet.')
+      + (storagePlanMb && mb / storagePlanMb >= 1 ? ' STORAGE FULL: new records are refused.' : storagePlanMb && mb / storagePlanMb >= 0.8 ? ' Warning: more than 80% used.' : '');
+    const meter = document.querySelector('#storage-meter');
+    meter.hidden = !storagePlanMb;
+    if (storagePlanMb) meter.value = Math.min(100, mb / storagePlanMb * 100);
+    const breakdown = document.querySelector('#storage-breakdown');
+    breakdown.replaceChildren();
+    const byKind = new Map();
+    for (const record of items) byKind.set(record.data().kind, (byKind.get(record.data().kind) ?? 0) + record.data().sizeKb);
+    for (const [kind, size] of [...byKind].sort((a, b) => b[1] - a[1])) listItem(breakdown, kind + ': ' + Math.round(size / 1024 * 10) / 10 + ' MB');
+    const biggest = [...items].sort((a, b) => b.data().sizeKb - a.data().sizeKb).slice(0, 3);
+    if (biggest.length) listItem(breakdown, 'Largest: ' + biggest.map((record) => record.data().name + ' (' + Math.round(record.data().sizeKb / 1024 * 10) / 10 + ' MB)').join(', '));
   },
   build: (fields) => {
     const sizeKb = Number(text(fields, 'sizeKb'));
@@ -4243,9 +4340,16 @@ lists.staffdir = ownerList({
   build: (fields) => {
     if (!text(fields, 'name') || !text(fields, 'role')) return { error: 'Enter the name and the role.' };
     if (!phoneOk(text(fields, 'phone'))) return { error: 'Phone may use digits, +, spaces, hyphens and brackets only.' };
-    return { id: newId('SD'), data: { name: text(fields, 'name'), role: text(fields, 'role'), ...optional(fields, 'phone', 'email', 'joinedOn') } };
+    if (!phoneOk(text(fields, 'emergencyPhone'))) return { error: 'Emergency phone may use digits, +, spaces, hyphens and brackets only.' };
+    const years = text(fields, 'experienceYears') ? wholeNumber(fields, 'experienceYears') : null;
+    if (years !== null && !(years >= 0 && years <= 60)) return { error: 'Experience must be a whole number of years, from 0 to 60.' };
+    return { id: newId('SD'), data: { name: text(fields, 'name'), role: text(fields, 'role'),
+      ...optional(fields, 'phone', 'email', 'joinedOn', 'qualification', 'emergencyPhone', 'address'), ...(years !== null ? { experienceYears: years } : {}) } };
   },
-  line: (item) => item.name + ' - ' + item.role + (item.phone ? ' - ' + item.phone : '') + (item.email ? ' - ' + item.email : ''),
+  line: (item) => item.name + ' - ' + item.role + (item.qualification ? ' - ' + item.qualification : '')
+    + (item.experienceYears !== undefined ? ' - ' + item.experienceYears + ' yr experience' : '')
+    + (item.phone ? ' - ' + item.phone : '') + (item.email ? ' - ' + item.email : '')
+    + (item.emergencyPhone ? ' - emergency ' + item.emergencyPhone : '') + (item.address ? ' - ' + item.address : ''),
 });
 
 lists.vendors = ownerList({
@@ -4448,6 +4552,30 @@ function securityNotes() {
   return notes;
 }
 
+function complianceNotes() {
+  const notes = [];
+  for (const record of lists.vehicles.items) {
+    const item = record.data();
+    for (const [label, key] of [['insurance', 'insuranceExpiry'], ['fitness certificate', 'fitnessExpiry'], ['driver licence', 'licenseExpiry']]) {
+      if (!item[key]) continue;
+      const days = daysUntil(item[key]);
+      if (days < 0) notes.push('Vehicle ' + item.regNo + ': ' + label + ' expired on ' + item[key] + '.');
+      else if (days <= SOON_DAYS) notes.push('Vehicle ' + item.regNo + ': ' + label + ' expires in ' + days + ' day(s).');
+    }
+    const riders = lists.riders.items.filter((rider) => rider.data().routeId === item.routeId).length;
+    if (item.routeId && riders > item.capacity) notes.push('Vehicle ' + item.regNo + ' has ' + riders + ' riders for ' + item.capacity + ' seats.');
+  }
+  return notes;
+}
+function storageNotes() {
+  const used = lists.storage.items.reduce((sum, record) => sum + record.data().sizeKb, 0) / 1024;
+  if (!storagePlanMb) return [];
+  const percent = used / storagePlanMb * 100;
+  if (percent >= 100) return ['Storage is full: ' + Math.round(used) + ' MB of ' + storagePlanMb + ' MB. New records are refused until space is freed or the plan is raised.'];
+  if (percent >= 80) return ['Storage is ' + Math.round(percent) + '% full (' + Math.round(used) + ' MB of ' + storagePlanMb + ' MB).'];
+  return [];
+}
+
 function refreshAttention() {
   const count = (list, test) => list.items.filter((record) => test(record.data())).length;
   const checks = [
@@ -4473,7 +4601,7 @@ function refreshAttention() {
     item.textContent = number + ' ' + label;
     attentionList.append(item);
   }
-  const notes = securityNotes();
+  const notes = [...securityNotes(), ...complianceNotes(), ...storageNotes()];
   for (const note of notes) listItem(attentionList, note);
   attentionStatus.textContent = checks.length || birthdays.length || notes.length ? '' : 'Nothing needs attention right now.';
 }
@@ -4747,6 +4875,14 @@ let extraLabels = [];
 const answersOf = (item) => extraLabels.map((label, index) => (item['a' + (index + 1)] ? label + ': ' + item['a' + (index + 1)] : '')).filter(Boolean).join('; ');
 lists.enquiries = ownerList({
   id: 'enquiries', collection: 'enquiries', empty: 'No enquiries yet.',
+  summary: (items) => {
+    const stages = ['new', 'contacted', 'interview', 'offered', 'admitted', 'rejected'];
+    const counts = Object.fromEntries(stages.map((stage) => [stage, items.filter((record) => record.data().status === stage).length]));
+    const decided = counts.admitted + counts.rejected;
+    document.querySelector('#enquiries-pipeline').textContent = items.length
+      ? 'Pipeline: ' + stages.map((stage) => stage + ' ' + counts[stage]).join(' > ') + '. ' + (decided ? 'Admission rate so far: ' + Math.round(counts.admitted / decided * 100) + '%.' : '')
+        + (counts.new ? ' ' + counts.new + ' new enquiry(ies) need a first call.' : '') : '';
+  },
   sort: (a, b) => b.data().createdAt.localeCompare(a.data().createdAt) || b.id.localeCompare(a.id),
   line: (item) => item.createdAt + ' - ' + item.studentName + ' for ' + item.classApplying + ' - guardian ' + item.guardianName
     + ' (' + item.phone + (item.email ? ', ' + item.email : '') + ')' + (item.message ? ' - "' + item.message + '"' : '')
@@ -4772,6 +4908,8 @@ lists.enquiries = ownerList({
         studentForm.elements.namedItem('name').value = item.studentName;
         studentForm.elements.namedItem('guardianName').value = item.guardianName;
         studentForm.elements.namedItem('guardianPhone').value = item.phone;
+        if (item.email) studentForm.elements.namedItem('guardianEmail').value = item.email;
+        studentStatus.textContent = 'Started from the enquiry for ' + item.classApplying + '. Give an admission number, save, then place the student in a class. Mark the enquiry admitted when done.';
         studentForm.elements.namedItem('admissionNo').focus();
       });
       buttons.push(button);
@@ -4793,6 +4931,34 @@ const websiteForm = document.querySelector('#website-form');
 const WEBSITE_FIELDS = ['name', 'tagline', 'about', 'vision', 'mission', 'leadership', 'programmes', 'faculty', 'facilities', 'news',
   'phone', 'email', 'address', 'mapUrl', 'seoTitle', 'seoDesc', 'gallery'];
 const MAP_PREFIX = /^https:\/\/www\.google\.com\/maps\/embed\?[^ ]*$/;
+
+// Starter text: fills only the empty boxes from what the school already holds (classes, staff directory, contact),
+// so the owner reviews and edits before saving. Nothing is published until Save.
+document.querySelector('#website-generate').addEventListener('click', () => {
+  const field = (key) => websiteForm.elements.namedItem(key);
+  const name = field('name').value.trim() || document.querySelector('#school-name')?.textContent.trim() || 'Our school';
+  const classNames = [...examData.classes].sort(byClassOrder).map((item) => item.name);
+  const staff = lists.staffdir.items.map((record) => record.data());
+  const draft = {
+    name,
+    tagline: 'Learning with care, growing with confidence',
+    about: name + ' is a school that welcomes students from ' + (classNames[0] ?? 'the early years') + ' to ' + (classNames.at(-1) ?? 'the senior classes')
+      + '. We work with families so every child is known, supported and encouraged. Add the year of founding and the story of the school here.',
+    vision: 'Every child learns well, behaves kindly and leaves school ready for the next step.',
+    mission: 'To give each student a safe classroom, good teaching and honest feedback, and to keep parents informed.',
+    programmes: classNames.join('\n'),
+    faculty: staff.filter((item) => item.qualification).slice(0, 12).map((item) => item.name + ' | ' + item.qualification + ' | ' + item.role).join('\n'),
+    seoTitle: name + ' - admissions, classes and contact',
+    seoDesc: name + ' offers ' + classNames.length + ' classes. See our programmes, faculty, facilities and how to apply.',
+  };
+  let filled = 0;
+  for (const [key, value] of Object.entries(draft)) {
+    const box = field(key);
+    if (box && value && !box.value.trim()) { box.value = value.slice(0, Number(box.maxLength) > 0 ? Number(box.maxLength) : value.length); filled += 1; }
+  }
+  websiteStatus.textContent = filled ? 'Filled ' + filled + ' empty box(es) with starter text. Read it, change it to your own words, then press Save.'
+    : 'Every box already has text, so nothing was changed.';
+});
 
 async function loadWebsite(request) {
   const { doc, getDocFromServer } = firestoreTools;
@@ -5734,7 +5900,7 @@ const resetInsights = () => {
 };
 
 async function loadOwnerLists(request) {
-  const names = ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage'];
+  const names = ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage', 'vehicles', 'appraisals'];
   await Promise.allSettled([...names.map((name) => lists[name].load(request)), loadBackupLog()]);
   if (request === schoolRequest) { refreshAttention(); showReportSections(); }
 }
@@ -6822,7 +6988,7 @@ onAuthStateChanged(auth, async (user) => {
     const feeOffice = membership.data()?.active === true && membership.data()?.role === 'accountant';
     if (feeOffice) document.body.dataset.role = 'accountant';
     viewOnlyNote.hidden = !viewOnly;
-    ownerRole.textContent = feeOffice ? 'Fee office' : viewOnly ? 'Principal (view only)' : 'School Owner';
+    ownerRole.textContent = feeOffice ? 'Fee office' : viewOnly ? 'Principal (view, approve leave, post notices)' : 'School Owner';
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);
     saveAssignment = (uid, assignment) => setDoc(doc(schoolRef, 'teacherAssignments', uid), assignment);
     ownerEmail.textContent = user.email;

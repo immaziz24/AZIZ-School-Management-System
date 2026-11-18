@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-45">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-46">
 </head>
 <body>
   <main>
@@ -25,7 +25,7 @@
     </form>
     <section id="owner-dashboard" aria-labelledby="school-name" hidden>
       <h2 id="school-name"></h2>
-      <p id="view-only-note" role="status" hidden><strong>View only.</strong> You can look at everything, download reports and print, but you cannot change anything.</p>
+      <p id="view-only-note" role="status" hidden><strong>View only.</strong> You can look at everything, download reports and print, approve staff leave and post notices. Everything else is the owner's.</p>
       <dl>
         <dt>Role</dt>
         <dd id="owner-role">School Owner</dd>
@@ -117,6 +117,11 @@
           <p><label>Guardian phone <input name="guardianPhone" type="tel" maxlength="20" pattern="[0-9+ \(\)\-]*"></label></p>
           <p><label>Date of birth (optional) <input name="dob" type="date"></label></p>
           <p><label>Address (optional) <input name="address" maxlength="200"></label></p>
+          <p><label>Gender (optional) <select name="gender"><option value="">Not stated</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select></label></p>
+          <p><label>Mother's name (optional) <input name="motherName" maxlength="120"></label></p>
+          <p><label>Previous school (optional) <input name="previousSchool" maxlength="120"></label></p>
+          <p><label>Emergency phone (optional) <input name="emergencyPhone" type="tel" maxlength="20" pattern="[0-9+ \(\)\-]*"></label></p>
+          <p><label>Guardian email (optional) <input name="guardianEmail" type="email" maxlength="100"></label></p>
           <p><label>Photo (optional, shrunk automatically) <input id="student-photo" type="file" accept="image/*"></label>
             <img id="student-photo-preview" class="thumb" alt="Student photo preview" hidden>
             <label><input id="student-photo-remove" type="checkbox"> Remove the saved photo</label></p>
@@ -479,6 +484,7 @@
         <h3 id="website-title">Public Website Content</h3>
         <p>This text appears on the public school page. Only write what you are happy for anyone to read.</p>
         <p id="website-status" role="status"></p>
+        <p><button id="website-generate" type="button">Generate starter text from my school records</button></p>
         <form id="website-form">
           <p><label>School name <input name="name" type="text" maxlength="80" required></label></p>
           <p><label>Tagline <input name="tagline" type="text" maxlength="120"></label></p>
@@ -556,6 +562,7 @@
       <section id="enquiries" aria-labelledby="enquiries-title" hidden>
         <h3 id="enquiries-title">Admission Enquiries</h3>
         <p id="enquiries-status" role="status"></p>
+        <p id="enquiries-pipeline" role="status"></p>
         <ul id="enquiries-list"></ul>
       </section>
       <section id="eventregs" aria-labelledby="eventregs-title" hidden>
@@ -666,6 +673,37 @@
         </form>
         <ul id="riders-list"></ul>
       </section>
+      <section id="vehicles" aria-labelledby="vehicles-title" hidden>
+        <h3 id="vehicles-title">Vehicles and Compliance</h3>
+        <p>Each vehicle, its seats and the dates its insurance, fitness certificate and driver licence run out. Needs Attention warns 30 days before.</p>
+        <p id="vehicles-status" role="status"></p>
+        <form id="vehicles-form">
+          <p><label>Registration number <input name="regNo" type="text" maxlength="20" required></label></p>
+          <p><label>Model (optional) <input name="model" type="text" maxlength="60"></label></p>
+          <p><label>Seats <input name="capacity" type="number" min="1" max="200" step="1" required></label></p>
+          <p><label>Route (optional) <select name="routeId"></select></label></p>
+          <p><label>Insurance valid until (optional) <input name="insuranceExpiry" type="date"></label></p>
+          <p><label>Fitness certificate valid until (optional) <input name="fitnessExpiry" type="date"></label></p>
+          <p><label>Driver licence valid until (optional) <input name="licenseExpiry" type="date"></label></p>
+          <button type="submit">Add vehicle</button>
+        </form>
+        <ul id="vehicles-list"></ul>
+      </section>
+      <section id="appraisals" aria-labelledby="appraisals-title" hidden>
+        <h3 id="appraisals-title">Staff Appraisals</h3>
+        <p>A yearly or termly review of a staff member: a rating from 1 (needs support) to 5 (outstanding) and short remarks. Only the owner and principal can read these.</p>
+        <p id="appraisals-status" role="status"></p>
+        <p id="appraisals-summary" role="status"></p>
+        <form id="appraisals-form">
+          <p><label>Staff member <input name="staffName" type="text" maxlength="80" list="appraisal-staff" required></label></p>
+          <datalist id="appraisal-staff"></datalist>
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Rating (1 to 5) <input name="rating" type="number" min="1" max="5" step="1" required></label></p>
+          <p><label>Remarks (optional) <input name="remarks" type="text" maxlength="300"></label></p>
+          <button type="submit">Save appraisal</button>
+        </form>
+        <ul id="appraisals-list"></ul>
+      </section>
       <section id="activities" aria-labelledby="activities-title" hidden>
         <h3 id="activities-title">Activities and Clubs</h3>
         <p id="activities-status" role="status"></p>
@@ -719,6 +757,8 @@
         <p>A log of the files your school keeps (reports, photos, backups). It shows how much of your storage plan is used. This is a record only; it does not upload files.</p>
         <p id="storage-status" role="status"></p>
         <p id="storage-total" role="status"></p>
+        <p><progress id="storage-meter" max="100" value="0" aria-label="Storage used" hidden></progress></p>
+        <ul id="storage-breakdown"></ul>
         <form id="storage-form">
           <p><label>File name <input name="name" type="text" maxlength="100" required></label></p>
           <p><label>Kind <select name="kind"><option value="document">Document</option><option value="photo">Photo</option><option value="report">Report</option><option value="backup">Backup</option><option value="other">Other</option></select></label></p>
@@ -759,6 +799,10 @@
           <p><label>Phone (optional) <input name="phone" type="text" maxlength="20"></label></p>
           <p><label>Email (optional) <input name="email" type="text" maxlength="80"></label></p>
           <p><label>Joined on (optional) <input name="joinedOn" type="date"></label></p>
+          <p><label>Qualification (optional) <input name="qualification" type="text" maxlength="100"></label></p>
+          <p><label>Experience in years (optional) <input name="experienceYears" type="number" min="0" max="60" step="1"></label></p>
+          <p><label>Emergency phone (optional) <input name="emergencyPhone" type="text" maxlength="20"></label></p>
+          <p><label>Address (optional) <input name="address" type="text" maxlength="200"></label></p>
           <button type="submit">Add staff</button>
         </form>
         <ul id="staffdir-list"></ul>
@@ -977,6 +1021,9 @@
         <h3 id="audit-log-title">Activity Log</h3>
         <p id="audit-log-status" role="status"></p>
         <button id="audit-refresh" type="button">Refresh log</button>
+        <h4>Security watch</h4>
+        <ul id="audit-summary"></ul>
+        <h4>Latest entries</h4>
         <ul id="audit-list"></ul>
       </section>
       <section id="notices" aria-labelledby="notices-title" hidden>
@@ -1346,14 +1393,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-45');
-      await import('./i18n.mjs?v=batch-45');
+      await import('./ui.mjs?v=batch-46');
+      await import('./i18n.mjs?v=batch-46');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-45');
-      await import('./platform.mjs?v=batch-45');
+      await import('./sign-in.mjs?v=batch-46');
+      await import('./platform.mjs?v=batch-46');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

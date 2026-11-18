@@ -117,11 +117,10 @@ test('principal sees no salaries and changes nothing', async () => {
   await denied(set('prin', P('students', 's1'), { ...student('Changed', 'A1') }), 'change a student');
   await denied(remove('prin', P('students', 's1')), 'remove a student');
   await denied(set('prin', P('payments', 'R-9'), { studentId: 's1', yearId: Y, amount: 5, date: TODAY, method: 'cash', receiptNo: 'R-9', receivedBy: 'prin' }), 'take a payment');
-  await denied(set('prin', P('notices', 'n-2'), { title: 'Hi', body: 'Text', audience: 'all', createdAt: TODAY, createdBy: 'prin' }), 'post a notice');
   await denied(set('prin', P('payroll', 't1_2026-12'), { staffUid: 't1', month: '2026-12', basic: 1, allowances: 0, deductions: 0 }), 'write payroll');
   await denied(set('prin', P('familyAccess', 'parent-1'), { studentId: 's1', relation: 'parent', active: false }), 'switch off a parent');
   await denied(set('prin', P('members', 'prin'), { role: 'owner', active: true }), 'promote self');
-  await denied(set('prin', P('auditLog', 'L-2'), { actor: 'prin', action: 'save', target: 'x', docId: 'y', at: new Date().toISOString() }), 'write the log');
+  await denied(set('prin', P('auditLog', 'L-2'), { actor: 'owner-a', action: 'save', target: 'x', docId: 'y', at: new Date().toISOString() }), 'write the log in the owner\'s name');
   await denied(remove('prin', P('auditLog', 'L-1')), 'delete the log');
 });
 
