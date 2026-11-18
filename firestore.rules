@@ -986,6 +986,14 @@ service cloud.firestore {
         allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validPreferences(request.resource.data);
       }
 
+      // Backup log. settings/backupLog: the date of the last backup the owner downloaded and its kind.
+      match /settings/backupLog {
+        allow get: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && request.resource.data.keys().hasOnly(['lastAt', 'kind']) && request.resource.data.keys().hasAll(['lastAt', 'kind'])
+          && dateText(request.resource.data.lastAt) && request.resource.data.kind in ['full', 'zip'];
+      }
+
       // Launch checklist. settings/launch: eight manual "done" ticks (m1 to m8) kept by the owner.
       match /settings/launch {
         allow get: if request.auth != null && isSchoolViewer(schoolId);

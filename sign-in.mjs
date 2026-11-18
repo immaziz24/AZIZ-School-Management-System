@@ -2477,11 +2477,13 @@ const AUDIT_ACTION_LABEL = {
 };
 const AUDIT_SHOWN = 100;
 
+let auditItems = [];
 async function loadAuditLog(request) {
   try {
     const saved = await academic.list('auditLog');
     if (request !== schoolRequest) return;
     const items = saved.docs.map((record) => record.data()).sort((a, b) => b.at.localeCompare(a.at));
+    auditItems = items;
     auditSection.hidden = false;
     auditList.replaceChildren();
     for (const item of items.slice(0, AUDIT_SHOWN)) {
@@ -4277,6 +4279,38 @@ lists.diary = ownerList({
 // Needs attention: counts of open work, taken from the lists the owner screens have already loaded.
 const attentionList = document.querySelector('#attention-list');
 const attentionStatus = document.querySelector('#attention-status');
+// Backup reminder and simple security checks, worked out from the settings/backupLog record and the activity log.
+let backupLog = null;
+async function loadBackupLog() {
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const found = await getDocFromServer(doc(academic.schoolRef, 'settings', 'backupLog'));
+    backupLog = found.exists() ? found.data() : null;
+  } catch {
+    backupLog = null;
+  }
+}
+async function noteBackup(kind) {
+  try {
+    await academic.save('settings', 'backupLog', { lastAt: localToday(), kind });
+    backupLog = { lastAt: localToday(), kind };
+    refreshAttention();
+  } catch { /* the backup itself already succeeded */ }
+}
+function securityNotes() {
+  const notes = [];
+  const days = backupLog ? Math.floor((Date.parse(localToday()) - Date.parse(backupLog.lastAt)) / 86400000) : null;
+  if (!backupLog) notes.push('No data backup has been downloaded yet. Use Data Backup below.');
+  else if (days > 14) notes.push('The last data backup was ' + days + ' days ago. Download a fresh one.');
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  const recent = auditItems.filter((item) => item.at >= since);
+  const voids = recent.filter((item) => item.action === 'void').length;
+  const removals = recent.filter((item) => item.action === 'remove').length;
+  if (voids >= 3) notes.push(voids + ' payments were voided in the last 7 days. Check the activity log.');
+  if (removals >= 10) notes.push(removals + ' records were removed in the last 7 days. Check the activity log.');
+  return notes;
+}
+
 function refreshAttention() {
   const count = (list, test) => list.items.filter((record) => test(record.data())).length;
   const checks = [
@@ -4302,7 +4336,9 @@ function refreshAttention() {
     item.textContent = number + ' ' + label;
     attentionList.append(item);
   }
-  attentionStatus.textContent = checks.length || birthdays.length ? '' : 'Nothing needs attention right now.';
+  const notes = securityNotes();
+  for (const note of notes) listItem(attentionList, note);
+  attentionStatus.textContent = checks.length || birthdays.length || notes.length ? '' : 'Nothing needs attention right now.';
 }
 document.querySelector('#attention-refresh').addEventListener('click', refreshAttention);
 
@@ -5437,6 +5473,7 @@ document.querySelector('#backup-zip').addEventListener('click', async () => {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     await tools.log('bulk', 'backup', 'data pack', files.length - 1 + ' files');
+    noteBackup('zip');
     if (request === schoolRequest) backupStatus.textContent = 'Data pack downloaded (' + (files.length - 1) + ' files).' + (notRead.length ? ' Could not read: ' + notRead.join(', ') + '.' : '');
   } catch {
     if (request === schoolRequest) backupStatus.textContent = 'The data pack did not finish. Try again.';
@@ -5477,6 +5514,7 @@ backupRun.addEventListener('click', async () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     await tools.log('bulk', 'backup', 'download', Object.keys(backup.collections).length + ' collections');
     if (request === schoolRequest) {
+      noteBackup('full');
       backupStatus.textContent = 'Backup downloaded (' + Object.keys(backup.collections).length + ' lists).'
         + (backup.notRead.length ? ' Could not read: ' + backup.notRead.join(', ') + '.' : '');
     }
@@ -5506,11 +5544,14 @@ async function loadOwnerLists(request) {
     if (request !== schoolRequest) return;
     await lists[name].load(request);
   }
+  if (request === schoolRequest) await loadBackupLog();
   if (request === schoolRequest) { refreshAttention(); showReportSections(); }
 }
 const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.render(); };
 const resetOwnerLists = () => {
   hideReportSections();
+  backupLog = null;
+  auditItems = [];
   for (const api of ownerLists) api.reset();
   financeList.replaceChildren();
   financeStatus.textContent = '';
@@ -6184,6 +6225,32 @@ function writeAudit(schoolRef, uid, action, target, docId, detail) {
   ).catch(() => {});
 }
 
+// Session expiry: a signed-in person who does nothing for IDLE_MINUTES is signed out, with a warning two minutes before.
+const IDLE_MINUTES = 30;
+let idleOn = false;
+let idleWarned = false;
+let idleTimer;
+let idleWarnTimer;
+let idleLast = 0;
+function idleWatch(on, throttled) {
+  if (on && throttled && Date.now() - idleLast < 5000 && !idleWarned) return;
+  idleOn = on;
+  clearTimeout(idleTimer);
+  clearTimeout(idleWarnTimer);
+  if (!on) { idleWarned = false; return; }
+  idleLast = Date.now();
+  if (idleWarned) { idleWarned = false; status.textContent = ''; }
+  idleWarnTimer = setTimeout(() => {
+    idleWarned = true;
+    status.hidden = false;
+    status.textContent = 'You will be signed out in 2 minutes because the page has not been used. Click anywhere to stay signed in.';
+  }, (IDLE_MINUTES - 2) * 60000);
+  idleTimer = setTimeout(() => { signOut(auth).catch(() => {}); }, IDLE_MINUTES * 60000);
+}
+for (const eventName of ['click', 'keydown', 'pointerdown', 'touchstart', 'scroll']) {
+  document.addEventListener(eventName, () => { if (idleOn) idleWatch(true, true); }, { passive: true });
+}
+
 onAuthStateChanged(auth, async (user) => {
   const request = ++schoolRequest;
   teacherMarks = undefined;
@@ -6477,6 +6544,7 @@ onAuthStateChanged(auth, async (user) => {
   status.textContent = user ? 'Signed in as ' + user.email : 'Sign in with your AZIZ account.';
   schoolStatus.hidden = !user;
   schoolStatus.textContent = '';
+  idleWatch(Boolean(user));
   if (!user) return;
 
   schoolStatus.textContent = 'Checking school access.';
