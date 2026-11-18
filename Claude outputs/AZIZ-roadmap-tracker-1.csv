@@ -62,19 +62,19 @@
 061,Leave applications and approval status,H,Built,Staff leave requests with owner approve/reject
 062,Dashboard summaries and operational reports,H,Built,"School summary: counts, attendance today, fees"
 063,Exports and activity logs for authorized staff,H,Built,"CSV exports of students, payments, activity log"
-064,AZIZ Super Admin Dashboard,I,Not started,
-065,Automatic school registration and tenant provisioning,I,Not started,
+064,AZIZ Super Admin Dashboard,I,Built,"Platform section for the AZIZ administrator: schools, billing, tickets, flags, templates"
+065,Automatic school registration and tenant provisioning,I,Built,"Self-service school signup creates the school, owner and trial billing in one step"
 066,Automatic public school website generator,I,Partial,Public school page generated from the website editor; single school only
-067,Custom domain mapping and verification,I,Not started,
-068,Website theme marketplace,I,Not started,
+067,Custom domain mapping and verification,I,Partial,Domain request with DNS target and SSL status; no automatic verification
+068,Website theme marketplace,I,Partial,Eight fixed colour themes; no marketplace
 069,School website content manager,I,Built,"Owner edits public website text, map and contacts"
-070,Subscription and plan entitlement control,J,Not started,
-071,Automated SaaS billing and renewals,J,Not started,
-072,Free trial management,J,Not started,
+070,Subscription and plan entitlement control,J,Built,"Plan limits for students, staff; checked against the last usage count (soft limit)"
+071,Automated SaaS billing and renewals,J,Partial,"Billing records, invoices, renewal dates; no automatic charging"
+072,Free trial management,J,Built,Trial with end date; read-only after trial and grace
 073,Multi-school data isolation,J,Built,School-scoped data and rules; two-school tests
-074,Bulk school data import and migration,K,Not started,
-075,School-specific academic settings and board policies,K,Not started,
-076,Custom admission form builder,K,Not started,
+074,Bulk school data import and migration,K,Built,"CSV import for students, subjects, classes with sample file"
+075,School-specific academic settings and board policies,K,Built,"Working days, hours, grading rules, terms, low-attendance level per school"
+076,Custom admission form builder,K,Built,Six custom admission form fields per school
 077,Parent mobile-friendly portal,K,Partial,"Installable offline app plus portal for results, fees, events, messages; no native app"
 078,Approved WhatsApp notification integration,K,Not started,
 079,Student promotion automation,K,Built,
@@ -82,33 +82,33 @@
 081,Digital homework submission,K,Built,Families submit homework once; teachers give feedback
 082,School transport GPS tracking integration,K,Not started,
 083,School-specific configurable reports,K,Partial,"Report builder over students, payments, expenses, salaries; fixed lists only"
-084,Per-school storage quotas,L,Not started,
-085,Per-school usage monitoring,L,Not started,
+084,Per-school storage quotas,L,Partial,Storage records log and plan view; no enforced storage quota
+085,Per-school usage monitoring,L,Built,Usage counts recounted automatically and shown to owner and platform
 086,Automated backups and tested restoration,L,Partial,Manual backup and data pack with reminder; no scheduled backups or tested restore
-087,Customer support ticket system,L,Not started,
+087,Customer support ticket system,L,Built,"Support tickets from schools, answered by the platform administrator"
 088,Guided school onboarding checklist,L,Built,
-089,Subscription renewal grace periods,J,Not started,
+089,Subscription renewal grace periods,J,Built,Grace days after trial or renewal before read-only
 090,School data export on cancellation,J,Partial,
 091,Audit logs and security monitoring,L,Partial,Activity log plus warnings for many voids/removals and old backups; no live monitoring
 092,Multi-school uptime and performance monitoring,L,Not started,
-093,AZIZ revenue and subscription analytics,J,Not started,
-094,School privacy and consent center,J,Not started,
+093,AZIZ revenue and subscription analytics,J,Partial,Platform totals plus monthly plan and invoice breakdown (text bars); no chart library
+094,School privacy and consent center,J,Built,"Policy consent per person, shown to the owner, plus data export and deletion requests"
 095,Progressive Web App support,J,Built,"Installable app, opens offline"
-096,Multilingual English/Bengali/Hindi interface,K,Not started,
+096,Multilingual English/Bengali/Hindi interface,K,Partial,"English, Hindi, Bengali for about 80 labels; not every screen"
 097,Online school-fee payment gateway and reconciliation,K,Not started,
 098,AI-assisted school content drafting with approval,K,Not started,
-099,School slug and subdomain uniqueness / reservation,M,Not started,
+099,School slug and subdomain uniqueness / reservation,M,Built,School slug rules and reserved names enforced at signup
 100,Domain ownership challenge and automatic TLS lifecycle,M,Not started,
-101,"School suspension, reactivation and safe read-only access",M,Not started,
+101,"School suspension, reactivation and safe read-only access",M,Built,Suspended or cancelled schools become read-only
 102,"Tenant-aware background jobs, queues and retries",M,Not started,
-103,"Subscription usage limits for students, staff and storage",M,Not started,
-104,School admin invitation and verified ownership transfer,M,Not started,
-105,SaaS-wide feature flags and gradual rollout,M,Not started,
-106,Central template versioning and safe theme upgrades,M,Not started,
-107,Automated onboarding health checks and launch checklist,M,Not started,
-108,Tenant-scoped API rate limits and abuse protection,M,Not started,
-109,Disaster recovery drills and recovery objectives,M,Not started,
-110,"School data retention, deletion and legal-hold workflow",M,Not started,
+103,"Subscription usage limits for students, staff and storage",M,Partial,Student and staff limits enforced softly; storage limit not enforced
+104,School admin invitation and verified ownership transfer,M,Built,Email invitations and ownership transfer by invite
+105,SaaS-wide feature flags and gradual rollout,M,Partial,Platform switches hide modules in the app; no gradual rollout
+106,Central template versioning and safe theme upgrades,M,Built,Template versions with upgrade and rollback
+107,Automated onboarding health checks and launch checklist,M,Built,Launch checklist and onboarding checks
+108,Tenant-scoped API rate limits and abuse protection,M,Partial,Browser-side limits on public forms; real protection needs App Check
+109,Disaster recovery drills and recovery objectives,M,Built,Platform recovery drill log with dates and results
+110,"School data retention, deletion and legal-hold workflow",M,Built,"Export and deletion requests with approve, hold and complete; legal hold blocks deletion"
 111,Library Management System,N,Built,
 112,Complete Transport Management,N,Partial,"Routes, riders and monthly transport fee; no GPS; fee not added to balance"
 113,Student Health & Medical Management,N,Built,Health records with vaccinations and checkup due dates

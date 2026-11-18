@@ -94,3 +94,9 @@ test('website: search title, description and gallery are owner-only and size lim
   await denied(set('prin', `${A}/site/main`, site()), 'principal cannot edit');
   await denied(set(null, `${A}/site/main`, site()), 'anonymous cannot edit');
 });
+
+test('themes: the new colour themes are accepted and unknown ones are not', async () => {
+  for (const theme of ['saffron', 'ocean', 'slate', 'classic']) await allowed(set('owner-a', `${A}/site/extras`, { theme }), theme);
+  await denied(set('owner-a', `${A}/site/extras`, { theme: 'neon' }), 'unknown theme');
+  await denied(set('prin', `${A}/site/extras`, { theme: 'ocean' }), 'principal cannot change the theme');
+});

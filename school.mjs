@@ -44,6 +44,8 @@ const THEMES = {
   classic: ['#14243d', '#faf6ec', '#b8913a', '#0f1b2f'], royal: ['#2e1a4d', '#f7f3fb', '#c29b3f', '#22123a'],
   emerald: ['#0f3d2e', '#f3f8f4', '#c0a040', '#0a2d22'], crimson: ['#5a1020', '#fbf4f2', '#c79a3a', '#430b17'],
   midnight: ['#0b1020', '#e8ecf5', '#d4af37', '#070a14'],
+  saffron: ['#7a2e0e', '#fdf6ee', '#d19a2a', '#5a2009'], ocean: ['#0b3550', '#f1f7fa', '#c9a23c', '#082a40'],
+  slate: ['#2b2f38', '#f4f5f7', '#b8913a', '#1f2229'],
 };
 async function loadExtras() {
   try {

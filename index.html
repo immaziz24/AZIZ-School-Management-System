@@ -10,7 +10,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-39">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-40">
 </head>
 <body>
   <main>
@@ -506,6 +506,9 @@
               <option value="emerald">Emerald green</option>
               <option value="crimson">Crimson red</option>
               <option value="midnight">Midnight dark</option>
+              <option value="saffron">Saffron</option>
+              <option value="ocean">Ocean blue</option>
+              <option value="slate">Slate grey</option>
             </select></label></p>
           <h4>Extra admission questions</h4>
           <div id="siteextras-slots"></div>
@@ -1268,6 +1271,7 @@
       <p id="platform-status" role="status"></p>
       <h3>Revenue</h3>
       <p id="platform-revenue"></p>
+      <ul id="platform-revenue-breakdown"></ul>
       <h3>Schools</h3>
       <ul id="platform-schools"></ul>
       <div id="platform-school" hidden>
@@ -1327,14 +1331,14 @@
   <script type="module">
     const status = document.querySelector('#firebase-status');
     try {
-      await import('./ui.mjs?v=batch-39');
-      await import('./i18n.mjs?v=batch-39');
+      await import('./ui.mjs?v=batch-40');
+      await import('./i18n.mjs?v=batch-40');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-39');
-      await import('./platform.mjs?v=batch-39');
+      await import('./sign-in.mjs?v=batch-40');
+      await import('./platform.mjs?v=batch-40');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
