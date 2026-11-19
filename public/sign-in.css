@@ -110,7 +110,16 @@ body:not(.signed-in) #signup{margin:22px 0 0;background:rgba(255,255,255,.03)}
 .card-sheet ul{margin:8px 0;padding-left:20px;list-style:disc}
 .print-only{display:none}
 
+/* Live clock beside Sign out (batch 59), shown on every signed-in panel. */
+#clock{position:fixed;top:21px;right:max(160px,calc((100vw - 1180px)/2 + 158px));z-index:40;display:flex;flex-direction:column;align-items:flex-end;line-height:1.25;color:var(--ink);font-variant-numeric:tabular-nums;pointer-events:none}
+#clock .clock-date{font-size:.8rem;opacity:.85}#clock .clock-time{font-size:1.05rem;font-weight:600;letter-spacing:.03em;color:var(--gold2,#d4af37)}
+#clock .d-short{display:none}
+body:not(.signed-in) #clock{display:none}
+@media print{#clock{display:none}}
 @media(max-width:760px){
+  #clock{top:15px;right:118px}#clock .clock-date{font-size:.66rem}#clock .clock-time{font-size:.8rem}
+  #clock .d-long{display:none}#clock .d-short{display:inline}
+  body.signed-in main>h1{padding-right:210px}
   main{padding-top:16px}
   body.signed-in main>h1{font-size:1.15rem;padding:10px 14px;padding-right:110px}
   #sign-out{top:18px;right:16px;padding:6px 14px}

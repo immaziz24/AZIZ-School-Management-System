@@ -111,3 +111,22 @@ for (const el of [...dashes, $('#sign-out'), platformSection].filter(Boolean)) s
 if (platformSection) new MutationObserver(() => { platform.hidden = platformSection.hidden; }).observe(platformSection, { attributes: true, attributeFilter: ['hidden'] });
 if (platform) platform.hidden = platformSection.hidden;
 refreshShell();
+
+// Live clock beside the Sign out button: day, date and time with seconds, on every panel.
+const clock = $('#clock');
+if (clock) {
+  const longDate = new Intl.DateTimeFormat('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const shortDate = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+  const timeText = new Intl.DateTimeFormat('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  const parts = { long: $('.d-long', clock), short: $('.d-short', clock), time: $('.clock-time', clock) };
+  const tick = () => {
+    if (document.hidden || !document.body.classList.contains('signed-in')) return;
+    const now = new Date();
+    parts.long.textContent = longDate.format(now);
+    parts.short.textContent = shortDate.format(now);
+    parts.time.textContent = timeText.format(now).toUpperCase();
+  };
+  tick();
+  setInterval(tick, 1000);
+  document.addEventListener('visibilitychange', tick);
+}

@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-55">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-59">
 </head>
 <body>
   <main>
@@ -1529,6 +1529,7 @@
       <ul id="drill-list"></ul>
     </section>
     <button id="sign-out" type="button" hidden>Sign out</button>
+    <div id="clock" aria-hidden="true"><span class="clock-date"><span class="d-long"></span><span class="d-short"></span></span><span class="clock-time"></span></div>
   </main>
   <script type="module">
     const status = document.querySelector('#firebase-status');
@@ -1547,7 +1548,7 @@
       box.focus();
     });
     try {
-      await import('./ui.mjs?v=batch-51');
+      await import('./ui.mjs?v=batch-59');
       await import('./i18n.mjs?v=batch-58');
     } catch (error) {
       console.error(error);
