@@ -846,6 +846,14 @@
           <p><label>Experience in years (optional) <input name="experienceYears" type="number" min="0" max="60" step="1"></label></p>
           <p><label>Emergency phone (optional) <input name="emergencyPhone" type="text" maxlength="20"></label></p>
           <p><label>Address (optional) <input name="address" type="text" maxlength="200"></label></p>
+          <p><label>Employee ID (optional) <input name="employeeId" type="text" maxlength="20"></label></p>
+          <p><label>Department (optional) <input name="department" type="text" maxlength="40"></label></p>
+          <p><label>Subjects taught (optional) <input name="subjects" type="text" maxlength="100"></label></p>
+          <p><label>Employment type (optional) <select name="employmentType"><option value="">Not stated</option><option value="permanent">Permanent</option><option value="contract">Contract</option><option value="part-time">Part-time</option><option value="visiting">Visiting</option></select></label></p>
+          <p><label>Date of birth (optional) <input name="dateOfBirth" type="date"></label></p>
+          <p><label>Gender (optional) <select name="gender"><option value="">Not stated</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select></label></p>
+          <p><label>Blood group (optional) <select name="bloodGroup"><option value="">Not known</option><option>A+</option><option>A-</option><option>B+</option><option>B-</option><option>AB+</option><option>AB-</option><option>O+</option><option>O-</option></select></label></p>
+          <p><label>Left the school on (optional) <input name="leftOn" type="date"></label></p>
           <button type="submit">Add staff</button>
         </form>
         <ul id="staffdir-list"></ul>
@@ -1517,13 +1525,13 @@
     });
     try {
       await import('./ui.mjs?v=batch-51');
-      await import('./i18n.mjs?v=batch-54');
+      await import('./i18n.mjs?v=batch-57');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-54');
-      await import('./platform.mjs?v=batch-54');
+      await import('./sign-in.mjs?v=batch-57');
+      await import('./platform.mjs?v=batch-57');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

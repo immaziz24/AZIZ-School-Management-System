@@ -2,7 +2,12 @@
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-document.querySelector('.burger')?.addEventListener('click', () => document.querySelector('.links').classList.toggle('open'));
+const burger = document.querySelector('.burger');
+const siteLinks = document.querySelector('.links');
+const setMenu = (open) => { siteLinks?.classList.toggle('open', open); burger?.setAttribute('aria-expanded', String(open)); };
+burger?.addEventListener('click', () => setMenu(!siteLinks.classList.contains('open')));
+siteLinks?.addEventListener('click', (event) => { if (event.target.closest('a')) setMenu(false); });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setMenu(false); });
 
 const io = new IntersectionObserver((entries) => {
   for (const e of entries) if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }

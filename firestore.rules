@@ -1715,7 +1715,8 @@ service cloud.firestore {
     }
 
     function validStaffCard(item) {
-      return item.keys().hasOnly(['name', 'role', 'phone', 'email', 'joinedOn', 'qualification', 'emergencyPhone', 'address', 'experienceYears'])
+      return item.keys().hasOnly(['name', 'role', 'phone', 'email', 'joinedOn', 'qualification', 'emergencyPhone', 'address', 'experienceYears',
+          'employeeId', 'department', 'employmentType', 'subjects', 'dateOfBirth', 'gender', 'bloodGroup', 'leftOn'])
         && item.keys().hasAll(['name', 'role'])
         && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
         && item.role is string && item.role.size() <= 40 && item.role.matches('.*[^[:space:]].*')
@@ -1725,7 +1726,15 @@ service cloud.firestore {
         && (!item.keys().hasAny(['qualification']) || (item.qualification is string && item.qualification.size() <= 100))
         && (!item.keys().hasAny(['emergencyPhone']) || (item.emergencyPhone is string && item.emergencyPhone.matches('[0-9+() -]{1,20}')))
         && (!item.keys().hasAny(['address']) || (item.address is string && item.address.size() <= 200))
-        && (!item.keys().hasAny(['experienceYears']) || (item.experienceYears is int && item.experienceYears >= 0 && item.experienceYears <= 60));
+        && (!item.keys().hasAny(['experienceYears']) || (item.experienceYears is int && item.experienceYears >= 0 && item.experienceYears <= 60))
+        && (!item.keys().hasAny(['employeeId']) || (item.employeeId is string && item.employeeId.size() <= 20))
+        && (!item.keys().hasAny(['department']) || (item.department is string && item.department.size() <= 40))
+        && (!item.keys().hasAny(['employmentType']) || item.employmentType in ['permanent', 'contract', 'part-time', 'visiting'])
+        && (!item.keys().hasAny(['subjects']) || (item.subjects is string && item.subjects.size() <= 100))
+        && (!item.keys().hasAny(['dateOfBirth']) || (item.dateOfBirth is string && item.dateOfBirth.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
+        && (!item.keys().hasAny(['gender']) || item.gender in ['male', 'female', 'other'])
+        && (!item.keys().hasAny(['bloodGroup']) || item.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'])
+        && (!item.keys().hasAny(['leftOn']) || (item.leftOn is string && item.leftOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
     }
 
     function validVehicle(item) {

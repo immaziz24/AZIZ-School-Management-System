@@ -4487,10 +4487,16 @@ lists.staffdir = ownerList({
     if (!phoneOk(text(fields, 'emergencyPhone'))) return { error: 'Emergency phone may use digits, +, spaces, hyphens and brackets only.' };
     const years = text(fields, 'experienceYears') ? wholeNumber(fields, 'experienceYears') : null;
     if (years !== null && !(years >= 0 && years <= 60)) return { error: 'Experience must be a whole number of years, from 0 to 60.' };
+    const todayText = new Date().toISOString().slice(0, 10);
+    if (text(fields, 'dateOfBirth') && text(fields, 'dateOfBirth') > todayText) return { error: 'Date of birth cannot be in the future.' };
     return { id: newId('SD'), data: { name: text(fields, 'name'), role: text(fields, 'role'),
-      ...optional(fields, 'phone', 'email', 'joinedOn', 'qualification', 'emergencyPhone', 'address'), ...(years !== null ? { experienceYears: years } : {}) } };
+      ...optional(fields, 'phone', 'email', 'joinedOn', 'qualification', 'emergencyPhone', 'address', 'employeeId', 'department', 'subjects', 'employmentType', 'dateOfBirth', 'gender', 'bloodGroup', 'leftOn'), ...(years !== null ? { experienceYears: years } : {}) } };
   },
-  line: (item) => item.name + ' - ' + item.role + (item.qualification ? ' - ' + item.qualification : '')
+  line: (item) => item.name + ' - ' + item.role + (item.employeeId ? ' (ID ' + item.employeeId + ')' : '')
+    + (item.department ? ' - ' + item.department : '') + (item.subjects ? ' - teaches ' + item.subjects : '')
+    + (item.employmentType ? ' - ' + item.employmentType : '') + (item.leftOn ? ' - left on ' + item.leftOn : '')
+    + (item.dateOfBirth ? ' - born ' + item.dateOfBirth : '') + (item.bloodGroup ? ' - blood group ' + item.bloodGroup : '')
+    + (item.qualification ? ' - ' + item.qualification : '')
     + (item.experienceYears !== undefined ? ' - ' + item.experienceYears + ' yr experience' : '')
     + (item.phone ? ' - ' + item.phone : '') + (item.email ? ' - ' + item.email : '')
     + (item.emergencyPhone ? ' - emergency ' + item.emergencyPhone : '') + (item.address ? ' - ' + item.address : ''),

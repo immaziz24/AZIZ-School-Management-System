@@ -585,6 +585,12 @@ Object.assign(HI, {
   "Lowercase letters, numbers and dashes. It becomes the address ?school=green-valley.": "छोटे अक्षर, संख्याएँ और डैश। यह ?school=green-valley पते का हिस्सा बनता है।",
   "The invited person signs in with that email on this page and accepts. To hand over ownership: invite the new owner, then they switch the old owner off.": "आमंत्रित व्यक्ति उसी ईमेल से इस पृष्ठ पर साइन इन करके स्वीकार करता है। स्वामित्व सौंपने के लिए: नए स्वामी को आमंत्रित करें, फिर वे पुराने स्वामी को बंद कर दें।",
   "Vendors": "विक्रेता",
+  "Employee ID (optional)": "कर्मचारी आईडी (वैकल्पिक)",
+  "Department (optional)": "विभाग (वैकल्पिक)",
+  "Subjects taught (optional)": "पढ़ाए जाने वाले विषय (वैकल्पिक)",
+  "Employment type (optional)": "नियुक्ति का प्रकार (वैकल्पिक)",
+  "Blood group (optional)": "रक्त समूह (वैकल्पिक)",
+  "Left the school on (optional)": "विद्यालय छोड़ने की तिथि (वैकल्पिक)",
 });
 Object.assign(BN, {
   "Show password": "পাসওয়ার্ড দেখান",
@@ -1129,6 +1135,12 @@ Object.assign(BN, {
   "Lowercase letters, numbers and dashes. It becomes the address ?school=green-valley.": "ছোট হাতের অক্ষর, সংখ্যা ও ড্যাশ। এটি ?school=green-valley ঠিকানার অংশ হয়।",
   "The invited person signs in with that email on this page and accepts. To hand over ownership: invite the new owner, then they switch the old owner off.": "আমন্ত্রিত ব্যক্তি ওই ইমেল দিয়ে এই পাতায় সাইন ইন করে গ্রহণ করেন। মালিকানা হস্তান্তর করতে: নতুন মালিককে আমন্ত্রণ জানান, তারপর তিনি পুরনো মালিককে বন্ধ করে দেন।",
   "Vendors": "সরবরাহকারী",
+  "Employee ID (optional)": "কর্মচারী আইডি (ঐচ্ছিক)",
+  "Department (optional)": "বিভাগ (ঐচ্ছিক)",
+  "Subjects taught (optional)": "যে বিষয়গুলি পড়ান (ঐচ্ছিক)",
+  "Employment type (optional)": "নিয়োগের ধরন (ঐচ্ছিক)",
+  "Blood group (optional)": "রক্তের গ্রুপ (ঐচ্ছিক)",
+  "Left the school on (optional)": "স্কুল ছাড়ার তারিখ (ঐচ্ছিক)",
 });
 const LANGS = { en: null, hi: HI, bn: BN };
 const originals = new WeakMap(); // text node -> its English text
