@@ -2081,7 +2081,8 @@ service cloud.firestore {
       return item.keys().hasOnly(['theme', 'tv', 'tvPrev', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'])
         && (!item.keys().hasAny(['tv']) || (item.tv is int && item.tv >= 1 && item.tv <= 20))
         && (!item.keys().hasAny(['tvPrev']) || (item.keys().hasAny(['tv']) && item.tvPrev is int && item.tvPrev >= 1 && item.tvPrev <= 20))
-        && (!item.keys().hasAny(['theme']) || item.theme in ['classic', 'royal', 'emerald', 'crimson', 'midnight', 'saffron', 'ocean', 'slate', 'teal', 'maroon', 'indigo', 'forest', 'sunrise', 'rose', 'charcoal', 'sky'])
+        && (!item.keys().hasAny(['theme']) || item.theme in ['classic', 'royal', 'emerald', 'crimson', 'midnight', 'saffron', 'ocean', 'slate', 'teal', 'maroon', 'indigo', 'forest', 'sunrise', 'rose', 'charcoal', 'sky',
+          'obsidian', 'champagne', 'sapphire', 'emerald-noir', 'ruby', 'rose-gold', 'sandstone', 'lavender', 'sage', 'blush', 'pearl', 'platinum', 'copper', 'abyss', 'amethyst', 'bordeaux', 'olive', 'denim', 'mocha', 'aurora'])
         && fieldSlot(item, 'f1') && fieldSlot(item, 'f2') && fieldSlot(item, 'f3')
         && fieldSlot(item, 'f4') && fieldSlot(item, 'f5') && fieldSlot(item, 'f6');
     }

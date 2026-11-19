@@ -534,6 +534,7 @@
         <form id="siteextras-form">
           <p><label>Theme
             <select name="theme">
+            <optgroup label="Classic colours">
               <option value="classic">Classic navy and gold</option>
               <option value="royal">Royal purple</option>
               <option value="emerald">Emerald green</option>
@@ -550,6 +551,28 @@
               <option value="rose">Rose</option>
               <option value="charcoal">Charcoal</option>
               <option value="sky">Sky blue</option>
+            </optgroup>
+            <optgroup label="Luxury, premium and aesthetic">
+              <option value="obsidian">Obsidian and gold</option>
+              <option value="champagne">Champagne</option>
+              <option value="sapphire">Royal sapphire</option>
+              <option value="emerald-noir">Emerald noir</option>
+              <option value="ruby">Ruby velvet</option>
+              <option value="rose-gold">Rose gold</option>
+              <option value="sandstone">Sandstone</option>
+              <option value="lavender">Lavender mist</option>
+              <option value="sage">Sage garden</option>
+              <option value="blush">Blush peach</option>
+              <option value="pearl">Ivory pearl</option>
+              <option value="platinum">Platinum</option>
+              <option value="copper">Copper bronze</option>
+              <option value="abyss">Deep ocean</option>
+              <option value="amethyst">Amethyst night</option>
+              <option value="bordeaux">Bordeaux</option>
+              <option value="olive">Olive and brass</option>
+              <option value="denim">Denim and cream</option>
+              <option value="mocha">Mocha latte</option>
+              <option value="aurora">Aurora</option>
             </select></label></p>
           <div id="theme-gallery" role="group" aria-label="Theme gallery"></div>
           <div id="theme-preview" aria-live="polite"></div>
@@ -1525,13 +1548,13 @@
     });
     try {
       await import('./ui.mjs?v=batch-51');
-      await import('./i18n.mjs?v=batch-57');
+      await import('./i18n.mjs?v=batch-58');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-57');
-      await import('./platform.mjs?v=batch-57');
+      await import('./sign-in.mjs?v=batch-58');
+      await import('./platform.mjs?v=batch-58');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

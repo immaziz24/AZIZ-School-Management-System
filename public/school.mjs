@@ -70,6 +70,27 @@ const THEMES = {
   charcoal: ['#222222', '#f5f5f3', '#c8a24a', '#161616'], sky: ['#0f5c8a', '#f2f9fd', '#e0b43c', '#0b4568'],
   saffron: ['#7a2e0e', '#fdf6ee', '#d19a2a', '#5a2009'], ocean: ['#0b3550', '#f1f7fa', '#c9a23c', '#082a40'],
   slate: ['#2b2f38', '#f4f5f7', '#b8913a', '#1f2229'],
+  // Luxury, premium and aesthetic palettes (batch 58). A fifth entry 'dark' means light text on a dark page.
+  'obsidian': ['#121212', '#f3ecd6', '#d4af37', '#050505', 'dark'],
+  'champagne': ['#5b4a2e', '#fbf6ea', '#c9a86a', '#3f321e'],
+  'sapphire': ['#0b2a5b', '#f4f7fc', '#d4b04a', '#081e42'],
+  'emerald-noir': ['#06241c', '#e6f2ec', '#d1b05a', '#031510', 'dark'],
+  'ruby': ['#6b0f2a', '#fbf3f5', '#e0b55a', '#4e0a1f'],
+  'rose-gold': ['#5a3a3f', '#fdf6f4', '#d08a93', '#44292d'],
+  'sandstone': ['#6b4f3a', '#faf4ea', '#d9a45e', '#523b2a'],
+  'lavender': ['#4a3f6b', '#f7f4fc', '#c3aaf0', '#372e52'],
+  'sage': ['#3d5a47', '#f4f7f1', '#d2bc72', '#2c4234'],
+  'blush': ['#8c4a3c', '#fff5f0', '#f0b27c', '#6b3529'],
+  'pearl': ['#2f3a4a', '#fcfbf7', '#c4a55a', '#232c38'],
+  'platinum': ['#3a3f47', '#f6f7f8', '#b4bcc7', '#2a2e34'],
+  'copper': ['#4a2c1a', '#fbf5ee', '#d18b4c', '#36200f'],
+  'abyss': ['#04202f', '#e4f1f6', '#6fd0d8', '#021520', 'dark'],
+  'amethyst': ['#1b1033', '#ece6f7', '#cdb0ff', '#120a24', 'dark'],
+  'bordeaux': ['#3a1020', '#fbf4f3', '#d2a56c', '#290914'],
+  'olive': ['#3b4220', '#f8f7ee', '#cdb84a', '#2b3117'],
+  'denim': ['#2c4a6e', '#faf5ea', '#d9b66a', '#1f3550'],
+  'mocha': ['#4b3621', '#f8f1e7', '#d0a778', '#38281a'],
+  'aurora': ['#101a2e', '#e8f0ff', '#7fdcc8', '#0a111f', 'dark'],
 };
 async function loadExtras() {
   try {
@@ -82,7 +103,11 @@ async function loadExtras() {
       const root = document.documentElement.style;
       root.setProperty('--navy', theme[0]); root.setProperty('--ivory', theme[1]); root.setProperty('--gold', theme[2]);
       document.querySelector('nav.site').style.background = theme[3];
-      if (data.theme === 'midnight') { root.setProperty('--ink', '#e8ecf5'); document.body.style.background = theme[0]; }
+      if (data.theme === 'midnight' || theme[4] === 'dark') {
+        root.setProperty('--ink', theme[1]);
+        document.body.style.background = theme[0];
+        document.body.classList.add('dark');
+      }
     }
     const host = document.querySelector('#extra-fields');
     host.replaceChildren();
