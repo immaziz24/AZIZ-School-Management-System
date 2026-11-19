@@ -1092,6 +1092,37 @@ service cloud.firestore {
           && request.resource.data.payroll is bool && request.resource.data.fees is bool && request.resource.data.admissions is bool;
       }
 
+      // School location (feature 130). settings/location: the school's map position, the distance a teacher must be within
+      // to check in (30 metres or more), the worst GPS accuracy accepted, and the school's time zone as minutes ahead of UTC.
+      // Only the platform administrator sets it. The school's staff read it.
+      match /settings/location {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || isPlatformAdmin());
+        allow create, update: if request.auth != null && isPlatformAdmin() && validLocation(request.resource.data);
+        allow delete: if false;
+      }
+
+      // Teacher check-in and check-out (features 128, 158). staffCheckins/{date}_{teacherUid}_{in|out}: one record for each
+      // check-in and check-out of a day, created once and never edited by the teacher. The server stamps the time. A
+      // verified record is accepted only when the reported position is inside the school's distance and the GPS accuracy is
+      // good enough. A teacher whose GPS fails sends a record with status review; the owner approves or rejects it.
+      match /staffCheckins/{docId} {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId)
+          || (isActiveTeacher() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}_' + request.auth.uid + '_(in|out)')));
+        allow list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create: if request.auth != null && isActiveTeacher()
+          && request.resource.data.staffUid == request.auth.uid
+          && (validVerifiedCheckin(schoolId, request.resource.data, docId)
+            || validReviewCheckin(schoolId, request.resource.data, docId));
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && resource.data.status == 'review'
+          && request.resource.data.status in ['approved', 'rejected']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewNote'])
+          && request.resource.data.reviewedBy == request.auth.uid
+          && (!request.resource.data.keys().hasAny(['reviewNote'])
+            || (request.resource.data.reviewNote is string && request.resource.data.reviewNote.size() <= 200));
+        allow delete: if false;
+      }
+
       // Backup log. settings/backupLog: the date of the last backup the owner downloaded and its kind.
       match /settings/backupLog {
         allow get: if request.auth != null && isSchoolViewer(schoolId);
@@ -1430,6 +1461,68 @@ service cloud.firestore {
 
     function pad2(n) {
       return n < 10 ? '0' + string(n) : string(n);
+    }
+
+    // School location and teacher check-in helpers (features 130, 128, 158).
+    function validLocation(item) {
+      return item.keys().hasOnly(['lat', 'lng', 'radiusM', 'maxAccuracyM', 'tzMinutes', 'setBy', 'setOn'])
+        && item.keys().hasAll(['lat', 'lng', 'radiusM', 'maxAccuracyM', 'tzMinutes', 'setBy', 'setOn'])
+        && item.lat is number && item.lat >= -66 && item.lat <= 66
+        && item.lng is number && item.lng >= -180 && item.lng <= 180
+        && item.radiusM is number && item.radiusM >= 30 && item.radiusM <= 500
+        && item.maxAccuracyM is number && item.maxAccuracyM >= 10 && item.maxAccuracyM <= 100
+        && item.tzMinutes is int && item.tzMinutes >= 0 && item.tzMinutes <= 840
+        && item.setBy == request.auth.uid
+        && item.setOn == request.time;
+    }
+
+    // Flat-earth distance: good to well under a metre over a few hundred metres. The cosine of the school's latitude is
+    // worked out from a short series because the rules have no trigonometry.
+    function withinSchoolRadius(loc, lat, lng) {
+      let x = loc.lat * 0.017453292519943295;
+      let x2 = x * x;
+      let c = 1.0 - x2 / 2.0 + x2 * x2 / 24.0 - x2 * x2 * x2 / 720.0 + x2 * x2 * x2 * x2 / 40320.0;
+      let dy = (lat - loc.lat) * 111320.0;
+      let dx = (lng - loc.lng) * 111320.0 * c;
+      return dx * dx + dy * dy <= loc.radiusM * loc.radiusM;
+    }
+
+    function checkinDay(loc) {
+      let t = request.time + duration.value(loc.tzMinutes, 'm');
+      return string(t.year()) + '-' + pad2(t.month()) + '-' + pad2(t.day());
+    }
+
+    function validCheckinBase(schoolId, item, docId) {
+      let loc = get(/databases/$(database)/documents/schools/$(schoolId)/settings/location).data;
+      return item.kind in ['in', 'out']
+        && item.at == request.time
+        && item.date == checkinDay(loc)
+        && docId == item.date + '_' + item.staffUid + '_' + item.kind
+        && (item.kind == 'in'
+          || exists(/databases/$(database)/documents/schools/$(schoolId)/staffCheckins/$(item.date + '_' + item.staffUid + '_in')));
+    }
+
+    function validVerifiedCheckin(schoolId, item, docId) {
+      let loc = get(/databases/$(database)/documents/schools/$(schoolId)/settings/location).data;
+      return item.keys().hasOnly(['staffUid', 'date', 'kind', 'at', 'lat', 'lng', 'accuracy', 'status'])
+        && item.keys().hasAll(['staffUid', 'date', 'kind', 'at', 'lat', 'lng', 'accuracy', 'status'])
+        && item.status == 'verified'
+        && item.lat is number && item.lng is number && item.accuracy is number
+        && item.accuracy >= 0 && item.accuracy <= loc.maxAccuracyM
+        && withinSchoolRadius(loc, item.lat, item.lng)
+        && validCheckinBase(schoolId, item, docId);
+    }
+
+    function validReviewCheckin(schoolId, item, docId) {
+      return item.keys().hasOnly(['staffUid', 'date', 'kind', 'at', 'status', 'reason', 'note', 'lat', 'lng', 'accuracy'])
+        && item.keys().hasAll(['staffUid', 'date', 'kind', 'at', 'status', 'reason'])
+        && item.status == 'review'
+        && item.reason in ['gps-weak', 'gps-denied', 'other']
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200))
+        && (!item.keys().hasAny(['lat']) || (item.lat is number && item.lat >= -90 && item.lat <= 90))
+        && (!item.keys().hasAny(['lng']) || (item.lng is number && item.lng >= -180 && item.lng <= 180))
+        && (!item.keys().hasAny(['accuracy']) || (item.accuracy is number && item.accuracy >= 0))
+        && validCheckinBase(schoolId, item, docId);
     }
 
     // Tomorrow's date in UTC as YYYY-MM-DD. One day of slack covers time zones ahead of UTC.

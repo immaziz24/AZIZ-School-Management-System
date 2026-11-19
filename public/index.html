@@ -230,6 +230,17 @@
           <tbody id="attendance-detail-body"></tbody>
         </table>
       </section>
+      <section id="checkins" aria-labelledby="checkins-title" hidden>
+        <h3 id="checkins-title">Teacher Check-ins</h3>
+        <p>Check-ins and check-outs sent from teachers' phones. The server stamps the time and checks the position against the school location set by AZIZ. A teacher whose GPS failed can send one for your review.</p>
+        <p id="checkins-status" role="status"></p>
+        <p id="checkins-location"></p>
+        <p><label>Date <input id="checkins-date" type="date"></label></p>
+        <table>
+          <thead><tr><th>Teacher</th><th>Check in</th><th>Check out</th><th>Time at school</th><th>Decision</th></tr></thead>
+          <tbody id="checkins-body"></tbody>
+        </table>
+      </section>
       <section id="staff-attendance" aria-labelledby="staff-attendance-title" hidden>
         <h3 id="staff-attendance-title">Staff Attendance</h3>
         <p>Mark each teacher's attendance for a day. Teachers see only their own record.</p>
@@ -1148,6 +1159,18 @@
           <button type="submit">Save attendance</button>
         </form>
       </section>
+      <section id="checkin" aria-labelledby="checkin-title" hidden>
+        <h3 id="checkin-title">Check In and Out</h3>
+        <p>Check in when you arrive and out when you leave. Your phone must be at the school, with location switched on.</p>
+        <p id="checkin-status" role="status"></p>
+        <p id="checkin-today"></p>
+        <p><button id="checkin-in" type="button">Check in</button> <button id="checkin-out" type="button">Check out</button></p>
+        <div id="checkin-review" hidden>
+          <p>Your phone could not prove you are at school. You can send this to the principal to decide instead.</p>
+          <p><label>Note for the principal (optional) <input id="checkin-note" type="text" maxlength="200"></label></p>
+          <button id="checkin-review-send" type="button">Send for review</button>
+        </div>
+      </section>
       <section id="my-attendance" aria-labelledby="my-attendance-title" hidden>
         <h3 id="my-attendance-title">My Attendance</h3>
         <p id="my-attendance-status" role="status"></p>
@@ -1493,6 +1516,21 @@
             <label>Note <input name="note" maxlength="200"></label></p>
           <button type="submit">Save plan</button>
         </form>
+        <h4>School location for teacher check-in</h4>
+        <p>Set where the school really is. Teachers can check in or out only when their phone is inside this distance. Stand at the school gate and use "Use my current location", or paste a map link or two numbers from a map.</p>
+        <p id="location-status" role="status"></p>
+        <form id="location-form">
+          <p><label>Paste a map link or coordinates <input name="paste" type="text" maxlength="300" placeholder="For example 26.7271, 88.3953 or a Google Maps link"></label>
+            <button type="button" id="location-read">Read it</button>
+            <button type="button" id="location-here">Use my current location</button></p>
+          <p><label>Latitude <input name="lat" type="number" step="any" min="-66" max="66" required></label>
+            <label>Longitude <input name="lng" type="number" step="any" min="-180" max="180" required></label></p>
+          <p><label>Check-in distance in metres (30 or more) <input name="radiusM" type="number" min="30" max="500" step="1" value="30" required></label>
+            <label>Worst GPS accuracy accepted in metres <input name="maxAccuracyM" type="number" min="10" max="100" step="1" value="50" required></label>
+            <label>School time zone <select name="tzMinutes"><option value="330">India (UTC+5:30)</option><option value="345">Nepal (UTC+5:45)</option><option value="360">Bangladesh (UTC+6:00)</option><option value="300">Pakistan (UTC+5:00)</option><option value="240">UAE (UTC+4:00)</option><option value="0">UTC (UTC+0:00)</option></select></label></p>
+          <iframe id="location-map" title="Map of the school location" loading="lazy" referrerpolicy="no-referrer-when-downgrade" hidden style="width:100%;height:260px;border:0;border-radius:8px"></iframe>
+          <button type="submit">Save school location</button>
+        </form>
         <h4>Invoices</h4>
         <form id="invoice-form">
           <p><label>Month <input name="period" type="month" required></label>
@@ -1548,14 +1586,14 @@
       box.focus();
     });
     try {
-      await import('./ui.mjs?v=batch-59');
-      await import('./i18n.mjs?v=batch-58');
+      await import('./ui.mjs?v=batch-60');
+      await import('./i18n.mjs?v=batch-60');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-58');
-      await import('./platform.mjs?v=batch-58');
+      await import('./sign-in.mjs?v=batch-60');
+      await import('./platform.mjs?v=batch-60');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

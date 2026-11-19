@@ -38,6 +38,7 @@ const admin = {
   section: $('#platform-section'), status: $('#platform-status'), revenue: $('#platform-revenue'), schools: $('#platform-schools'),
   panel: $('#platform-school'), title: $('#platform-school-title'), usage: $('#platform-usage'),
   billing: $('#billing-form'), invoiceForm: $('#invoice-form'), invoices: $('#platform-invoices'),
+  locationForm: $('#location-form'), locationStatus: $('#location-status'), locationMap: $('#location-map'),
   requests: $('#platform-requests'), tickets: $('#platform-tickets'), flagsForm: $('#flags-form'),
   templateForm: $('#template-form'), templateInfo: $('#template-info'), flagBoxes: $('#flags-boxes'), drillForm: $('#drill-form'), drills: $('#drill-list'),
 };
@@ -471,6 +472,7 @@ async function openSchool(id) {
   f.plan.value = b.plan; f.status.value = b.status; f.trialEnds.value = dayText(b.trialEnds); f.renewsOn.value = b.renewsOn ?? '';
   for (const k of ['graceDays', 'studentLimit', 'staffLimit', 'storageMb', 'monthlyPrice']) f[k].value = b[k] ?? '';
   f.legalHold.checked = b.legalHold === true; f.note.value = b.note ?? '';
+  await loadLocation(ref);
   try {
     const inv = await getDocs(collection(ref, 'invoices'));
     fillList(admin.invoices, inv.docs.sort((a, c) => c.data().period.localeCompare(a.data().period)).map((d) => [
@@ -538,6 +540,86 @@ admin.invoiceForm.addEventListener('submit', (event) => {
     admin.invoiceForm.reset();
     await loadAdmin(); await openSchool(chosenSchool);
   }, 'Invoice added.');
+});
+// School location (feature 130). The platform administrator sets where the school is, the distance a teacher must be inside to check in
+// (30 metres or more), the worst GPS accuracy accepted and the time zone. Teachers' check-ins are checked against this by the database rules.
+function showLocationMap(lat, lng) {
+  const frame = admin.locationMap;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) { frame.hidden = true; return; }
+  const d = 0.003;
+  frame.src = 'https://www.openstreetmap.org/export/embed.html?bbox=' + [lng - d, lat - d, lng + d, lat + d].join('%2C')
+    + '&layer=mapnik&marker=' + lat + '%2C' + lng;
+  frame.hidden = false;
+}
+// Reads "26.7271, 88.3953", "26.7271 88.3953" or a map link with @lat,lng, ?q=lat,lng or !3dLAT!4dLNG in it.
+function parseCoordinates(text) {
+  const clean = String(text ?? '').trim();
+  const patterns = [/@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/, /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/,
+    /[?&](?:q|ll|query)=(-?\d{1,2}(?:\.\d+)?)(?:,|%2C)(-?\d{1,3}(?:\.\d+)?)/, /^(-?\d{1,2}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)$/];
+  for (const pattern of patterns) {
+    const match = clean.match(pattern);
+    if (match) {
+      const lat = Number(match[1]); const lng = Number(match[2]);
+      if (Math.abs(lat) <= 66 && Math.abs(lng) <= 180) return { lat, lng };
+    }
+  }
+  return null;
+}
+async function loadLocation(ref) {
+  const f = admin.locationForm.elements;
+  admin.locationForm.reset();
+  admin.locationMap.hidden = true;
+  admin.locationStatus.textContent = 'Loading the saved location.';
+  try {
+    const found = await getDoc(doc(ref, 'settings', 'location'));
+    if (found.exists()) {
+      const l = found.data();
+      f.lat.value = l.lat; f.lng.value = l.lng; f.radiusM.value = l.radiusM; f.maxAccuracyM.value = l.maxAccuracyM; f.tzMinutes.value = String(l.tzMinutes);
+      showLocationMap(l.lat, l.lng);
+      admin.locationStatus.textContent = 'Saved: teachers must be within ' + l.radiusM + ' m of this point, with GPS accurate to ' + l.maxAccuracyM + ' m or better.';
+    } else {
+      admin.locationStatus.textContent = 'No location saved yet. Teachers cannot check in until you save one.';
+    }
+  } catch { admin.locationStatus.textContent = 'Could not load the saved location.'; }
+}
+$('#location-read').addEventListener('click', () => {
+  const f = admin.locationForm.elements;
+  const found = parseCoordinates(f.paste.value);
+  if (!found) { admin.locationStatus.textContent = 'Could not find two coordinates in that. Try two numbers like 26.7271, 88.3953, or a Google Maps link that contains them.'; return; }
+  f.lat.value = found.lat; f.lng.value = found.lng;
+  showLocationMap(found.lat, found.lng);
+  admin.locationStatus.textContent = 'Coordinates read. Check the map, then press Save school location.';
+});
+$('#location-here').addEventListener('click', () => {
+  const f = admin.locationForm.elements;
+  if (!navigator.geolocation) { admin.locationStatus.textContent = 'This browser cannot give its location. Paste coordinates instead.'; return; }
+  admin.locationStatus.textContent = 'Asking for your location. Allow it when the browser asks.';
+  navigator.geolocation.getCurrentPosition((pos) => {
+    f.lat.value = Math.round(pos.coords.latitude * 1e6) / 1e6; f.lng.value = Math.round(pos.coords.longitude * 1e6) / 1e6;
+    showLocationMap(pos.coords.latitude, pos.coords.longitude);
+    admin.locationStatus.textContent = 'Got your position (accurate to about ' + Math.round(pos.coords.accuracy) + ' m). Stand at the school for best results, then press Save school location.';
+  }, () => { admin.locationStatus.textContent = 'Could not get your location. Allow location for this site, or paste coordinates.'; },
+  { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+});
+for (const name of ['lat', 'lng']) admin.locationForm.elements.namedItem(name).addEventListener('change', () => {
+  const f = admin.locationForm.elements;
+  showLocationMap(Number(f.lat.value), Number(f.lng.value));
+});
+admin.locationForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!chosenSchool) return;
+  const f = admin.locationForm.elements;
+  const lat = Number(f.lat.value); const lng = Number(f.lng.value);
+  const radiusM = Number(f.radiusM.value); const maxAccuracyM = Number(f.maxAccuracyM.value); const tzMinutes = Number(f.tzMinutes.value);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || f.lat.value === '' || f.lng.value === '') { admin.locationStatus.textContent = 'Enter the latitude and longitude.'; return; }
+  if (Math.abs(lat) > 66 || Math.abs(lng) > 180) { admin.locationStatus.textContent = 'Those coordinates are outside the supported range.'; return; }
+  if (!(radiusM >= 30 && radiusM <= 500)) { admin.locationStatus.textContent = 'The check-in distance must be from 30 to 500 metres.'; return; }
+  if (!(maxAccuracyM >= 10 && maxAccuracyM <= 100)) { admin.locationStatus.textContent = 'The accepted GPS accuracy must be from 10 to 100 metres.'; return; }
+  const id = chosenSchool;
+  run(admin.locationStatus, async () => {
+    await setDoc(doc(db, 'schools', id, 'settings', 'location'), { lat, lng, radiusM, maxAccuracyM, tzMinutes, setBy: me.uid, setOn: serverTimestamp() });
+    showLocationMap(lat, lng);
+  }, 'School location saved. Teachers can now check in within ' + radiusM + ' m.');
 });
 async function loadAdminTickets() {
   try {

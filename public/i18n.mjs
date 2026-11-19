@@ -611,6 +611,17 @@ Object.assign(HI, {
   "Denim and cream": "डेनिम और क्रीम",
   "Mocha latte": "मोका लाटे",
   "Aurora": "अरोरा",
+  "Check In and Out": "चेक-इन और चेक-आउट",
+  "Check in when you arrive and out when you leave. Your phone must be at the school, with location switched on.": "स्कूल पहुँचने पर चेक-इन करें और जाते समय चेक-आउट करें। आपका फ़ोन स्कूल में होना चाहिए और लोकेशन चालू होनी चाहिए।",
+  "Check in": "चेक-इन",
+  "Check out": "चेक-आउट",
+  "Your phone could not prove you are at school. You can send this to the principal to decide instead.": "आपका फ़ोन यह साबित नहीं कर सका कि आप स्कूल में हैं। आप इसे निर्णय के लिए प्रधानाचार्य को भेज सकते हैं।",
+  "Note for the principal (optional)": "प्रधानाचार्य के लिए नोट (वैकल्पिक)",
+  "Send for review": "समीक्षा के लिए भेजें",
+  "Teacher Check-ins": "शिक्षक चेक-इन",
+  "Check-ins and check-outs sent from teachers' phones. The server stamps the time and checks the position against the school location set by AZIZ. A teacher whose GPS failed can send one for your review.": "शिक्षकों के फ़ोन से भेजे गए चेक-इन और चेक-आउट। समय सर्वर लगाता है और स्थिति की जाँच AZIZ द्वारा तय स्कूल की लोकेशन से होती है। जिस शिक्षक का GPS काम नहीं करता, वह आपकी समीक्षा के लिए भेज सकता है।",
+  "Time at school": "स्कूल में समय",
+  "Date": "तारीख",
 });
 Object.assign(BN, {
   "Show password": "পাসওয়ার্ড দেখান",
@@ -1181,6 +1192,17 @@ Object.assign(BN, {
   "Denim and cream": "ডেনিম ও ক্রিম",
   "Mocha latte": "মোকা ল্যাটে",
   "Aurora": "অরোরা",
+  "Check In and Out": "চেক-ইন ও চেক-আউট",
+  "Check in when you arrive and out when you leave. Your phone must be at the school, with location switched on.": "স্কুলে পৌঁছে চেক-ইন এবং বের হওয়ার সময় চেক-আউট করুন। আপনার ফোন স্কুলে থাকতে হবে এবং লোকেশন চালু থাকতে হবে।",
+  "Check in": "চেক-ইন",
+  "Check out": "চেক-আউট",
+  "Your phone could not prove you are at school. You can send this to the principal to decide instead.": "আপনার ফোন প্রমাণ করতে পারেনি যে আপনি স্কুলে আছেন। সিদ্ধান্তের জন্য আপনি এটি প্রধান শিক্ষকের কাছে পাঠাতে পারেন।",
+  "Note for the principal (optional)": "প্রধান শিক্ষকের জন্য নোট (ঐচ্ছিক)",
+  "Send for review": "পর্যালোচনার জন্য পাঠান",
+  "Teacher Check-ins": "শিক্ষকদের চেক-ইন",
+  "Check-ins and check-outs sent from teachers' phones. The server stamps the time and checks the position against the school location set by AZIZ. A teacher whose GPS failed can send one for your review.": "শিক্ষকদের ফোন থেকে পাঠানো চেক-ইন ও চেক-আউট। সার্ভার সময় বসায় এবং AZIZ-এর ঠিক করা স্কুলের অবস্থানের সাথে অবস্থান মিলিয়ে দেখে। যে শিক্ষকের GPS কাজ করেনি তিনি আপনার পর্যালোচনার জন্য পাঠাতে পারেন।",
+  "Time at school": "স্কুলে সময়",
+  "Date": "তারিখ",
 });
 const LANGS = { en: null, hi: HI, bn: BN };
 const originals = new WeakMap(); // text node -> its English text

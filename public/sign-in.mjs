@@ -2076,6 +2076,299 @@ async function loadMyAttendance(request, schoolRef, uid) {
   }
 }
 
+// Teacher check-in and check-out (features 128, 130, 158). The school's map position and allowed distance are set by AZIZ
+// (settings/location). The phone reports its position; the database rules check it again against the school position and stamp
+// the time themselves, so a wrong phone clock or an edited page cannot make an early check-in. GPS can be faked, so a record
+// is a strong signal and not proof: the principal sees every position and can reject a doubtful one.
+const CHECKIN_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const checkinSection = document.querySelector('#checkin');
+const checkinStatus = document.querySelector('#checkin-status');
+const checkinToday = document.querySelector('#checkin-today');
+const checkinInButton = document.querySelector('#checkin-in');
+const checkinOutButton = document.querySelector('#checkin-out');
+const checkinReviewBox = document.querySelector('#checkin-review');
+const checkinNote = document.querySelector('#checkin-note');
+const checkinReviewSend = document.querySelector('#checkin-review-send');
+let myCheckin; // { schoolRef, uid, loc, docs: { in, out }, failed, busy }
+const schoolClock = (loc, ms = Date.now()) => new Date(ms + (loc?.tzMinutes ?? 330) * 60000);
+const schoolDay = (loc, ms) => schoolClock(loc, ms).toISOString().slice(0, 10);
+const schoolTime = (loc, ms) => schoolClock(loc, ms).toISOString().slice(11, 19);
+// The same flat-earth distance the database rules use, so the page and the server agree.
+function metresFromSchool(loc, lat, lng) {
+  const x = loc.lat * 0.017453292519943295;
+  const x2 = x * x;
+  const c = 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720 + x2 * x2 * x2 * x2 / 40320;
+  const dy = (lat - loc.lat) * 111320;
+  const dx = (lng - loc.lng) * 111320 * c;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+const CHECKIN_STATE = { verified: 'position checked', review: 'waiting for the principal', approved: 'approved by the principal', rejected: 'rejected by the principal' };
+const checkinKindLabel = { in: 'Check in', out: 'Check out' };
+
+function renderMyCheckin() {
+  const ctx = myCheckin;
+  checkinToday.replaceChildren();
+  if (!ctx?.loc) return;
+  const dayText = new Intl.DateTimeFormat('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(schoolClock(ctx.loc));
+  const lines = [dayText + ' (school time)'];
+  for (const kind of ['in', 'out']) {
+    const found = ctx.docs[kind];
+    lines.push(checkinKindLabel[kind] + ': ' + (found ? (found.at?.toMillis ? schoolTime(ctx.loc, found.at.toMillis()) : 'saved') + ' - ' + (CHECKIN_STATE[found.status] ?? found.status) : 'not yet'));
+  }
+  for (const line of lines) {
+    const row = document.createElement('div');
+    row.textContent = line;
+    checkinToday.append(row);
+  }
+  checkinInButton.disabled = ctx.busy || Boolean(ctx.docs.in);
+  checkinOutButton.disabled = ctx.busy || !ctx.docs.in || Boolean(ctx.docs.out);
+}
+
+async function refreshMyCheckin(request) {
+  const ctx = myCheckin;
+  const { doc, getDocFromServer } = firestoreTools;
+  const day = schoolDay(ctx.loc);
+  const [checkedIn, checkedOut] = await Promise.all(['in', 'out'].map((kind) => getDocFromServer(doc(ctx.schoolRef, 'staffCheckins', day + '_' + ctx.uid + '_' + kind))));
+  if (request !== schoolRequest) return;
+  ctx.docs = { in: checkedIn.exists() ? checkedIn.data() : null, out: checkedOut.exists() ? checkedOut.data() : null };
+  renderMyCheckin();
+}
+
+async function loadMyCheckin(request, schoolRef, uid) {
+  const { doc, getDocFromServer } = firestoreTools;
+  checkinSection.hidden = false;
+  myCheckin = { schoolRef, uid, loc: null, docs: { in: null, out: null }, failed: null, busy: false };
+  checkinInButton.disabled = true;
+  checkinOutButton.disabled = true;
+  checkinStatus.textContent = 'Loading.';
+  try {
+    const found = await getDocFromServer(doc(schoolRef, 'settings', 'location'));
+    if (request !== schoolRequest) return;
+    if (!found.exists()) {
+      checkinStatus.textContent = 'Your school has not set its map location yet, so check-in is not ready. Please tell the school owner.';
+      return;
+    }
+    myCheckin.loc = found.data();
+    await refreshMyCheckin(request);
+    if (request === schoolRequest) checkinStatus.textContent = 'You must be within ' + myCheckin.loc.radiusM + ' m of the school, with GPS accurate to ' + myCheckin.loc.maxAccuracyM + ' m or better.';
+  } catch {
+    if (request === schoolRequest) checkinStatus.textContent = 'Could not load check-in. Try again.';
+  }
+}
+
+const currentPosition = () => new Promise((resolve, reject) => {
+  if (!navigator.geolocation) { reject({ code: 0 }); return; }
+  navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
+});
+
+async function attemptCheckin(kind) {
+  const ctx = myCheckin;
+  if (!ctx?.loc || ctx.busy) return;
+  const request = schoolRequest;
+  ctx.busy = true;
+  ctx.failed = null;
+  checkinReviewBox.hidden = true;
+  renderMyCheckin();
+  checkinStatus.textContent = 'Finding your position. Keep this page open and allow location when your phone asks.';
+  try {
+    let position;
+    try {
+      position = await currentPosition();
+    } catch (error) {
+      ctx.failed = { kind, reason: 'gps-denied' };
+      checkinStatus.textContent = error?.code === 1
+        ? 'Location is blocked for this site. Allow location in your browser settings and try again, or send this for review.'
+        : 'Your phone could not find its position. Go near a window or outside and try again, or send this for review.';
+      checkinReviewBox.hidden = false;
+      return;
+    }
+    const { latitude, longitude, accuracy } = position.coords;
+    if (accuracy > ctx.loc.maxAccuracyM) {
+      ctx.failed = { kind, reason: 'gps-weak', lat: latitude, lng: longitude, accuracy: Math.round(accuracy * 10) / 10 };
+      checkinStatus.textContent = 'Your GPS is only accurate to about ' + Math.round(accuracy) + ' m, and ' + ctx.loc.maxAccuracyM
+        + ' m or better is needed. Go near a window or outside and try again, or send this for review.';
+      checkinReviewBox.hidden = false;
+      return;
+    }
+    const away = metresFromSchool(ctx.loc, latitude, longitude);
+    if (away > ctx.loc.radiusM) {
+      checkinStatus.textContent = 'You are about ' + Math.round(away) + ' m from the school. You must be within ' + ctx.loc.radiusM + ' m to ' + checkinKindLabel[kind].toLowerCase() + '.';
+      return;
+    }
+    const { doc, setDoc, serverTimestamp } = firestoreTools;
+    const day = schoolDay(ctx.loc);
+    await setDoc(doc(ctx.schoolRef, 'staffCheckins', day + '_' + ctx.uid + '_' + kind),
+      { staffUid: ctx.uid, date: day, kind, at: serverTimestamp(), lat: latitude, lng: longitude, accuracy: Math.round(accuracy * 10) / 10, status: 'verified' });
+    await refreshMyCheckin(request);
+    if (request === schoolRequest) checkinStatus.textContent = checkinKindLabel[kind] + ' saved. Thank you.';
+  } catch (error) {
+    if (request !== schoolRequest) return;
+    checkinStatus.textContent = error?.code === 'permission-denied'
+      ? 'The school server did not accept this. Make sure your phone date and time are set to automatic, then try again. If it keeps happening, tell the principal.'
+      : 'Could not save. Check your internet and try again.';
+  } finally {
+    if (request === schoolRequest) {
+      ctx.busy = false;
+      renderMyCheckin();
+    }
+  }
+}
+
+checkinInButton.addEventListener('click', () => attemptCheckin('in'));
+checkinOutButton.addEventListener('click', () => attemptCheckin('out'));
+checkinReviewSend.addEventListener('click', async () => {
+  const ctx = myCheckin;
+  if (!ctx?.loc || !ctx.failed || ctx.busy) return;
+  const request = schoolRequest;
+  const { kind, reason, lat, lng, accuracy } = ctx.failed;
+  const note = checkinNote.value.trim().slice(0, 200);
+  ctx.busy = true;
+  renderMyCheckin();
+  checkinStatus.textContent = 'Sending for review.';
+  try {
+    const { doc, setDoc, serverTimestamp } = firestoreTools;
+    const day = schoolDay(ctx.loc);
+    await setDoc(doc(ctx.schoolRef, 'staffCheckins', day + '_' + ctx.uid + '_' + kind),
+      { staffUid: ctx.uid, date: day, kind, at: serverTimestamp(), status: 'review', reason, ...(note ? { note } : {}),
+        ...(lat !== undefined ? { lat, lng, accuracy } : {}) });
+    await refreshMyCheckin(request);
+    if (request === schoolRequest) {
+      checkinReviewBox.hidden = true;
+      checkinNote.value = '';
+      ctx.failed = null;
+      checkinStatus.textContent = 'Sent. The principal will approve or reject it.';
+    }
+  } catch {
+    if (request === schoolRequest) checkinStatus.textContent = 'Could not send it. Make sure your phone date and time are automatic, then try again.';
+  } finally {
+    if (request === schoolRequest) {
+      ctx.busy = false;
+      renderMyCheckin();
+    }
+  }
+});
+
+// Owner and principal view: one day's check-ins. Only the owner decides a review.
+const checkinsSection = document.querySelector('#checkins');
+const checkinsStatus = document.querySelector('#checkins-status');
+const checkinsLocation = document.querySelector('#checkins-location');
+const checkinsDate = document.querySelector('#checkins-date');
+const checkinsBody = document.querySelector('#checkins-body');
+let checkinsToken = 0;
+let checkinsLoc = null;
+let checkinsReady = false;
+
+async function renderCheckins() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++checkinsToken;
+  if (!tools || !DATE_TEXT.test(checkinsDate.value)) return;
+  checkinsStatus.textContent = 'Loading check-ins.';
+  try {
+    if (!checkinsReady) {
+      const found = await firestoreTools.getDocFromServer(firestoreTools.doc(tools.schoolRef, 'settings', 'location'));
+      if (request !== schoolRequest || token !== checkinsToken) return;
+      checkinsLoc = found.exists() ? found.data() : null;
+      checkinsReady = true;
+      checkinsLocation.textContent = checkinsLoc
+        ? 'School location is set. Teachers must be within ' + checkinsLoc.radiusM + ' m, with GPS accurate to ' + checkinsLoc.maxAccuracyM + ' m or better.'
+        : 'The school map location is not set yet, so teachers cannot check in. AZIZ support sets it for you.';
+    }
+    const saved = await firestoreTools.getDocsFromServer(firestoreTools.query(firestoreTools.collection(tools.schoolRef, 'staffCheckins'),
+      firestoreTools.where('date', '==', checkinsDate.value)));
+    if (request !== schoolRequest || token !== checkinsToken) return;
+    const byTeacher = new Map();
+    for (const record of saved.docs) {
+      const data = record.data();
+      const entry = byTeacher.get(data.staffUid) ?? {};
+      entry[data.kind] = { id: record.id, data };
+      byTeacher.set(data.staffUid, entry);
+    }
+    checkinsBody.replaceChildren();
+    const accepted = (found) => found && ['verified', 'approved'].includes(found.data.status);
+    for (const [uid, entry] of [...byTeacher].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const tr = document.createElement('tr');
+      const nameCell = document.createElement('td');
+      nameCell.textContent = staffLabel(uid);
+      tr.append(nameCell);
+      for (const kind of ['in', 'out']) {
+        const cell = document.createElement('td');
+        const found = entry[kind];
+        if (!found) cell.textContent = '-';
+        else {
+          const at = found.data.at?.toMillis ? schoolTime(checkinsLoc, found.data.at.toMillis()) : 'saved';
+          const place = found.data.accuracy !== undefined && checkinsLoc && found.data.lat !== undefined
+            ? ', ' + Math.round(metresFromSchool(checkinsLoc, found.data.lat, found.data.lng)) + ' m from school, GPS +/-' + Math.round(found.data.accuracy) + ' m' : '';
+          cell.textContent = at + ' - ' + (CHECKIN_STATE[found.data.status] ?? found.data.status)
+            + (found.data.status === 'review' ? ' (' + found.data.reason + (found.data.note ? ': ' + found.data.note : '') + ')' : '') + place;
+        }
+        tr.append(cell);
+      }
+      const worked = document.createElement('td');
+      if (accepted(entry.in) && accepted(entry.out) && entry.in.data.at?.toMillis && entry.out.data.at?.toMillis) {
+        const minutes = Math.max(0, Math.round((entry.out.data.at.toMillis() - entry.in.data.at.toMillis()) / 60000));
+        worked.textContent = Math.floor(minutes / 60) + ' h ' + (minutes % 60) + ' min';
+      } else worked.textContent = '-';
+      tr.append(worked);
+      const decision = document.createElement('td');
+      for (const kind of ['in', 'out']) {
+        const found = entry[kind];
+        if (!found || found.data.status !== 'review' || viewOnly) continue;
+        for (const next of ['approved', 'rejected']) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = (next === 'approved' ? 'Approve ' : 'Reject ') + kind;
+          button.addEventListener('click', async () => {
+            if (tools.busy) return;
+            tools.busy = true;
+            checkinsStatus.textContent = 'Saving decision.';
+            try {
+              await tools.save('staffCheckins', found.id, { ...found.data, status: next, reviewedBy: auth.currentUser.uid });
+              tools.busy = false;
+              if (request === schoolRequest) await renderCheckins();
+            } catch {
+              if (request === schoolRequest) checkinsStatus.textContent = 'Could not save the decision. Try again.';
+            } finally {
+              tools.busy = false;
+            }
+          });
+          decision.append(button, ' ');
+        }
+      }
+      if (!decision.childNodes.length) decision.textContent = '-';
+      tr.append(decision);
+      checkinsBody.append(tr);
+    }
+    checkinsStatus.textContent = byTeacher.size ? byTeacher.size + ' teacher(s) checked in or out on ' + checkinsDate.value + '.' : 'No check-ins on this date.';
+  } catch {
+    if (request === schoolRequest && token === checkinsToken) checkinsStatus.textContent = 'Could not load check-ins. Try again.';
+  }
+}
+checkinsDate.addEventListener('change', renderCheckins);
+// Check-ins are read only when the owner opens this module, to save database reads.
+checkinsSection.addEventListener('mod-open', () => { if (!checkinsDate.value) checkinsDate.value = checkinsLoc ? schoolDay(checkinsLoc) : localToday(); renderCheckins(); });
+function startCheckins() {
+  checkinsSection.hidden = false;
+}
+function resetCheckins() {
+  checkinsSection.hidden = true;
+  checkinsToken += 1;
+  checkinsLoc = null;
+  checkinsReady = false;
+  checkinsBody.replaceChildren();
+  checkinsStatus.textContent = '';
+  checkinsLocation.textContent = '';
+  checkinsDate.value = '';
+}
+function resetMyCheckin() {
+  checkinSection.hidden = true;
+  myCheckin = undefined;
+  checkinToday.replaceChildren();
+  checkinStatus.textContent = '';
+  checkinReviewBox.hidden = true;
+  checkinNote.value = '';
+}
+
 // Leave requests. Teachers ask for their own leave; the owner approves or rejects each once.
 const LEAVE_LABEL = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' };
 const leaveReviewSection = document.querySelector('#leave-review');
@@ -3990,7 +4283,11 @@ behaviourForm.addEventListener('submit', async (event) => {
 const ownerLists = [];
 document.addEventListener('mod-open', (event) => {
   const api = ownerLists.find((item) => document.querySelector('#' + item.cfg.id) === event.target);
-  if (api?.dirty) api.render();
+  // Lists that nothing else depends on are read from the database only when their module is first opened (saves reads).
+  if (api?.lazy && !api.loaded) {
+    document.querySelector('#' + api.cfg.id + '-status').textContent = 'Loading.';
+    api.load(schoolRequest);
+  } else if (api?.dirty) api.render();
 });
 
 // Owner can change any saved record in these lists. Records that keep their number (like a payment receipt)
@@ -4057,6 +4354,7 @@ function ownerList(cfg) {
     else api.dirty = true;
   };
   api.render = () => {
+    if (api.lazy && !api.loaded) return;
     api.dirty = false;
     if (form && cfg.prepare) cfg.prepare(form, api.items);
     cfg.summary?.(api.items);
@@ -4090,6 +4388,7 @@ function ownerList(cfg) {
       const saved = await academic.list(cfg.collection);
       if (request !== schoolRequest) return;
       api.items = saved.docs;
+      api.loaded = true;
       section.hidden = false;
       status.textContent = '';
       api.draw();
@@ -4102,7 +4401,10 @@ function ownerList(cfg) {
     }
   };
 
+  api.ensure = () => (api.loaded ? Promise.resolve() : api.load(schoolRequest));
   api.reset = () => {
+    api.loaded = false;
+    api.lazy = false;
     section.hidden = true;
     status.textContent = '';
     list.replaceChildren();
@@ -4829,6 +5131,8 @@ document.querySelector('#profile360-show').addEventListener('click', async () =>
     }
     const paid = payments.docs.filter((item) => item.data().studentId === studentId && !item.data().voided);
     rows.push(['Fees paid', rupees(paid.reduce((sum, item) => sum + item.data().amount, 0)) + ' in ' + paid.length + ' receipt(s)']);
+    await Promise.all([lists.achievements.ensure(), lists.certificates.ensure(), lists.sales.ensure()]);
+    if (request !== schoolRequest) return;
     const mine = (list) => list.items.filter((record) => record.data().studentId === studentId).map((record) => record.data());
     const concessions = mine(lists.concessions);
     if (concessions.length) rows.push(['Concessions', concessions.map((item) => item.kind + ' ' + rupees(item.amount)).join(', ')]);
@@ -6236,7 +6540,17 @@ const resetInsights = () => {
 
 async function loadOwnerLists(request) {
   const names = ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage', 'vehicles', 'appraisals'];
-  await Promise.allSettled([...names.map((name) => lists[name].load(request)), loadBackupLog()]);
+  // These lists feed no other screen, so they are read only when the owner opens them. The rest are needed at once by the
+  // Needs Attention list, fee balances, finance summaries and the staff and activity screens.
+  const lazyNames = new Set(['substitutions', 'alumni', 'certificates', 'vendors', 'minutes', 'achievements', 'assets', 'sales', 'trainings',
+    'diary', 'health', 'lessons', 'ptm', 'eventregs', 'appraisals']);
+  for (const name of names) {
+    if (!lazyNames.has(name)) continue;
+    lists[name].lazy = true;
+    lists[name].loaded = false;
+    document.querySelector('#' + lists[name].cfg.id).hidden = false;
+  }
+  await Promise.allSettled([...names.filter((name) => !lazyNames.has(name)).map((name) => lists[name].load(request)), loadBackupLog()]);
   if (request === schoolRequest) { refreshAttention(); showReportSections(); }
 }
 const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.draw(); };
@@ -7143,6 +7457,8 @@ onAuthStateChanged(auth, async (user) => {
   staffRoster = [];
   staffAttToken += 1;
   staffReportToken += 1;
+  resetCheckins();
+  resetMyCheckin();
   myAttSection.hidden = true;
   myAttStatus.textContent = '';
   myAttTotal.textContent = '';
@@ -7262,11 +7578,11 @@ onAuthStateChanged(auth, async (user) => {
 
   schoolStatus.textContent = 'Checking school access.';
   try {
-    const { addDoc, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, query, setDoc, updateDoc, where, writeBatch } = await import(
+    const { addDoc, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } = await import(
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
-    firestoreTools = { collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, query, setDoc, where };
+    firestoreTools = { collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, query, serverTimestamp, setDoc, where };
     const schoolRef = doc(getFirestore(app), 'schools', SCHOOL_ID);
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     if (request !== schoolRequest) return;
@@ -7322,6 +7638,7 @@ onAuthStateChanged(auth, async (user) => {
         isClassTeacher ? loadStudentLeaveBoard(request, schoolRef, user.uid, { status: teacherStudentLeaveStatus, list: teacherStudentLeaveList }, myClassIds) : undefined,
         examsLoader?.(),
         loadMyAttendance(request, schoolRef, user.uid),
+        loadMyCheckin(request, schoolRef, user.uid),
         loadMyLeave(request, schoolRef, user.uid),
         loadTeacherNotices(request, schoolRef, user.uid),
         loadTeacherHomework(request),
@@ -7455,6 +7772,7 @@ onAuthStateChanged(auth, async (user) => {
       renderPromotionYears();
       // Everything below only reads, so it runs side by side instead of one after another.
       const roster = loadStaffAttendance(request);
+      startCheckins();
       await Promise.allSettled([
         roster.then(() => (request === schoolRequest ? renderLeaveReview() : undefined)),
         roster.then(() => (request === schoolRequest ? loadOwnerLists(request) : undefined)),
