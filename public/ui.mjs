@@ -1,7 +1,7 @@
 // App shell: turns each dashboard into a launcher of module tiles. Only the chosen module is shown, so
 // every role gets a clean home screen instead of one very long page. The modules keep working as before.
 const $ = (s, r = document) => r.querySelector(s);
-const ICONS = [[/check-in|check in/, '📍'], [/fee|payment|defaulter|concession|sales/, '💳'], [/attend/, '🗓️'], [/exam|mark|assess|result/, '📝'], [/report|card|certificate/, '📄'],
+const ICONS = [[/qr/, '🔳'], [/shift|hours/, '⏰'], [/check-in|check in/, '📍'], [/fee|payment|defaulter|concession|sales/, '💳'], [/attend/, '🗓️'], [/exam|mark|assess|result/, '📝'], [/report|card|certificate/, '📄'],
   [/student|roster|profile|alumni|family/, '🎓'], [/library|book/, '📚'], [/timetable|cover|workload/, '⏱️'], [/homework|lesson|syllabus|diary|submit/, '📒'],
   [/calendar|event|ptm|meeting/, '📅'], [/notice|inbox|message|enquir|complaint/, '📣'], [/payroll|expense|finance|vendor/, '💰'], [/website|public/, '🌐'],
   [/staff|teacher|training|leave|class|assign/, '🧑‍🏫'], [/route|rider|transport|activit/, '🚌'], [/health|behaviour|visitor|lost|achieve/, '🛡️'],

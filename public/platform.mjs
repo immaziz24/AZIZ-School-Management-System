@@ -575,8 +575,10 @@ async function loadLocation(ref) {
     if (found.exists()) {
       const l = found.data();
       f.lat.value = l.lat; f.lng.value = l.lng; f.radiusM.value = l.radiusM; f.maxAccuracyM.value = l.maxAccuracyM; f.tzMinutes.value = String(l.tzMinutes);
+      f.qrRequired.checked = l.qrRequired === true; f.selfieRequired.checked = l.selfieRequired === true;
       showLocationMap(l.lat, l.lng);
-      admin.locationStatus.textContent = 'Saved: teachers must be within ' + l.radiusM + ' m of this point, with GPS accurate to ' + l.maxAccuracyM + ' m or better.';
+      admin.locationStatus.textContent = 'Saved: teachers must be within ' + l.radiusM + ' m of this point, with GPS accurate to ' + l.maxAccuracyM + ' m or better.'
+        + (l.qrRequired ? ' They must scan the school QR code.' : '') + (l.selfieRequired ? ' They must take a live selfie.' : '');
     } else {
       admin.locationStatus.textContent = 'No location saved yet. Teachers cannot check in until you save one.';
     }
@@ -617,9 +619,11 @@ admin.locationForm.addEventListener('submit', (event) => {
   if (!(maxAccuracyM >= 10 && maxAccuracyM <= 100)) { admin.locationStatus.textContent = 'The accepted GPS accuracy must be from 10 to 100 metres.'; return; }
   const id = chosenSchool;
   run(admin.locationStatus, async () => {
-    await setDoc(doc(db, 'schools', id, 'settings', 'location'), { lat, lng, radiusM, maxAccuracyM, tzMinutes, setBy: me.uid, setOn: serverTimestamp() });
+    await setDoc(doc(db, 'schools', id, 'settings', 'location'), { lat, lng, radiusM, maxAccuracyM, tzMinutes,
+      qrRequired: f.qrRequired.checked, selfieRequired: f.selfieRequired.checked, setBy: me.uid, setOn: serverTimestamp() });
     showLocationMap(lat, lng);
-  }, 'School location saved. Teachers can now check in within ' + radiusM + ' m.');
+  }, 'School location saved. Teachers can now check in within ' + radiusM + ' m.'
+    + (f.qrRequired.checked ? ' The school QR code is required.' : '') + (f.selfieRequired.checked ? ' A live selfie is required.' : ''));
 });
 async function loadAdminTickets() {
   try {

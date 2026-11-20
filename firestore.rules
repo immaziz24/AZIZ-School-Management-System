@@ -1123,6 +1123,63 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // School QR code (features 129, 158). The owner's or principal's screen posts a new code about once a minute and keeps the one before it as prev.
+      match /settings/qrCode {
+        allow get: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolViewer(schoolId) && !schoolSuspended(schoolId)
+          && request.resource.data.keys().hasOnly(['code', 'prev', 'at']) && request.resource.data.keys().hasAll(['code', 'at'])
+          && request.resource.data.code is string && request.resource.data.code.matches('^[A-HJ-NP-Z2-9]{8}$')
+          && (!request.resource.data.keys().hasAny(['prev'])
+            || (request.resource.data.prev is string && request.resource.data.prev.matches('^[A-HJ-NP-Z2-9]{8}$')))
+          && request.resource.data.at == request.time;
+        allow delete: if false;
+      }
+
+      // Shift (feature 132). settings/shift: start and end time, minutes of grace before a check-in counts as late, and minutes of break.
+      match /settings/shift {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validShift(request.resource.data);
+        allow delete: if false;
+      }
+
+      // Selfie (feature 128). staffSelfies/{date}_{teacherUid}_{in|out}: a small compressed photo taken live at check-in.
+      // The teacher saves it before the check-in and may replace it until the check-in exists. The school's owner and principal read it.
+      match /staffSelfies/{docId} {
+        allow get: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isActiveTeacher()
+          && request.resource.data.keys().hasOnly(['staffUid', 'date', 'kind', 'photo', 'at'])
+          && request.resource.data.keys().hasAll(['staffUid', 'date', 'kind', 'photo', 'at'])
+          && request.resource.data.staffUid == request.auth.uid
+          && request.resource.data.kind in ['in', 'out']
+          && request.resource.data.date == checkinDay(get(/databases/$(database)/documents/schools/$(schoolId)/settings/location).data)
+          && docId == request.resource.data.date + '_' + request.auth.uid + '_' + request.resource.data.kind
+          && request.resource.data.photo is string && request.resource.data.photo.size() <= 40000
+          && request.resource.data.photo.matches('^data:image/jpeg;base64,.*')
+          && request.resource.data.at == request.time
+          && !exists(/databases/$(database)/documents/schools/$(schoolId)/staffCheckins/$(docId));
+        allow delete: if false;
+      }
+
+      // Attendance disputes and missed punches (feature 133). attendanceDisputes/{date}_{teacherUid}: a teacher says what time
+      // they came or left on a day the check-in did not work. The owner approves or rejects it once.
+      match /attendanceDisputes/{docId} {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId)
+          || (isActiveTeacher() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}_' + request.auth.uid)));
+        allow list: if request.auth != null && (isSchoolViewer(schoolId)
+          || (isActiveTeacher() && resource.data.staffUid == request.auth.uid));
+        allow create: if request.auth != null && isActiveTeacher()
+          && request.resource.data.staffUid == request.auth.uid
+          && validDispute(schoolId, request.resource.data, docId);
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && resource.data.status == 'open'
+          && request.resource.data.status in ['approved', 'rejected']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewNote'])
+          && request.resource.data.reviewedBy == request.auth.uid
+          && (!request.resource.data.keys().hasAny(['reviewNote'])
+            || (request.resource.data.reviewNote is string && request.resource.data.reviewNote.size() <= 200));
+        allow delete: if false;
+      }
+
       // Backup log. settings/backupLog: the date of the last backup the owner downloaded and its kind.
       match /settings/backupLog {
         allow get: if request.auth != null && isSchoolViewer(schoolId);
@@ -1465,8 +1522,10 @@ service cloud.firestore {
 
     // School location and teacher check-in helpers (features 130, 128, 158).
     function validLocation(item) {
-      return item.keys().hasOnly(['lat', 'lng', 'radiusM', 'maxAccuracyM', 'tzMinutes', 'setBy', 'setOn'])
+      return item.keys().hasOnly(['lat', 'lng', 'radiusM', 'maxAccuracyM', 'tzMinutes', 'setBy', 'setOn', 'qrRequired', 'selfieRequired'])
         && item.keys().hasAll(['lat', 'lng', 'radiusM', 'maxAccuracyM', 'tzMinutes', 'setBy', 'setOn'])
+        && (!item.keys().hasAny(['qrRequired']) || item.qrRequired is bool)
+        && (!item.keys().hasAny(['selfieRequired']) || item.selfieRequired is bool)
         && item.lat is number && item.lat >= -66 && item.lat <= 66
         && item.lng is number && item.lng >= -180 && item.lng <= 180
         && item.radiusM is number && item.radiusM >= 30 && item.radiusM <= 500
@@ -1504,13 +1563,65 @@ service cloud.firestore {
 
     function validVerifiedCheckin(schoolId, item, docId) {
       let loc = get(/databases/$(database)/documents/schools/$(schoolId)/settings/location).data;
-      return item.keys().hasOnly(['staffUid', 'date', 'kind', 'at', 'lat', 'lng', 'accuracy', 'status'])
+      return item.keys().hasOnly(['staffUid', 'date', 'kind', 'at', 'lat', 'lng', 'accuracy', 'status', 'qr'])
         && item.keys().hasAll(['staffUid', 'date', 'kind', 'at', 'lat', 'lng', 'accuracy', 'status'])
         && item.status == 'verified'
         && item.lat is number && item.lng is number && item.accuracy is number
         && item.accuracy >= 0 && item.accuracy <= loc.maxAccuracyM
         && withinSchoolRadius(loc, item.lat, item.lng)
-        && validCheckinBase(schoolId, item, docId);
+        && validCheckinBase(schoolId, item, docId)
+        && qrOk(schoolId, item, loc)
+        && selfieOk(schoolId, loc, docId);
+    }
+
+    // School-posted QR code (features 129, 158). settings/qrCode holds the current code and the server time it was posted.
+    // Teachers cannot read it; the rules read it for them, so a code is only known by someone who saw the school's screen.
+    // A code is accepted for 150 seconds after it was posted. The code before it is also accepted for 60 seconds after the
+    // new one is posted, so a teacher who scanned just before the change is not refused. When the school requires the QR,
+    // a check-in without a good code is refused.
+    function qrOk(schoolId, item, loc) {
+      return item.keys().hasAny(['qr'])
+        ? validQrCode(schoolId, item.qr)
+        : loc.get('qrRequired', false) != true;
+    }
+
+    function validQrCode(schoolId, code) {
+      let posted = get(/databases/$(database)/documents/schools/$(schoolId)/settings/qrCode).data;
+      return code is string && code.matches('^[A-HJ-NP-Z2-9]{8}$')
+        && ((code == posted.code && request.time < posted.at + duration.value(150, 's'))
+          || (code == posted.get('prev', '') && request.time < posted.at + duration.value(60, 's')));
+    }
+
+    // Selfie (feature 128). staffSelfies/{same id as the check-in} must exist first when the school requires selfies.
+    function selfieOk(schoolId, loc, docId) {
+      return loc.get('selfieRequired', false) != true
+        || exists(/databases/$(database)/documents/schools/$(schoolId)/staffSelfies/$(docId));
+    }
+
+    function hhmm(value) {
+      return value is string && value.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$');
+    }
+
+    function validShift(item) {
+      return item.keys().hasOnly(['start', 'end', 'graceMin', 'breakMin'])
+        && item.keys().hasAll(['start', 'end', 'graceMin', 'breakMin'])
+        && hhmm(item.start) && hhmm(item.end) && item.end > item.start
+        && item.graceMin is int && item.graceMin >= 0 && item.graceMin <= 120
+        && item.breakMin is int && item.breakMin >= 0 && item.breakMin <= 240;
+    }
+
+    function validDispute(schoolId, item, docId) {
+      let loc = get(/databases/$(database)/documents/schools/$(schoolId)/settings/location).data;
+      return item.keys().hasOnly(['staffUid', 'date', 'reason', 'inTime', 'outTime', 'status', 'createdAt'])
+        && item.keys().hasAll(['staffUid', 'date', 'reason', 'status', 'createdAt'])
+        && item.keys().hasAny(['inTime', 'outTime'])
+        && dateText(item.date) && item.date <= checkinDay(loc)
+        && docId == item.date + '_' + item.staffUid
+        && item.reason is string && item.reason.size() >= 3 && item.reason.size() <= 300
+        && (!item.keys().hasAny(['inTime']) || hhmm(item.inTime))
+        && (!item.keys().hasAny(['outTime']) || hhmm(item.outTime))
+        && item.status == 'open'
+        && item.createdAt == request.time;
     }
 
     function validReviewCheckin(schoolId, item, docId) {

@@ -2089,6 +2089,12 @@ const checkinOutButton = document.querySelector('#checkin-out');
 const checkinReviewBox = document.querySelector('#checkin-review');
 const checkinNote = document.querySelector('#checkin-note');
 const checkinReviewSend = document.querySelector('#checkin-review-send');
+const checkinQrBox = document.querySelector('#checkin-qr');
+const checkinQrScan = document.querySelector('#checkin-qr-scan');
+const checkinQrCode = document.querySelector('#checkin-qr-code');
+const checkinQrVideo = document.querySelector('#checkin-qr-video');
+const checkinSelfieBox = document.querySelector('#checkin-selfie');
+const checkinSelfieVideo = document.querySelector('#checkin-selfie-video');
 let myCheckin; // { schoolRef, uid, loc, docs: { in, out }, failed, busy }
 const schoolClock = (loc, ms = Date.now()) => new Date(ms + (loc?.tzMinutes ?? 330) * 60000);
 const schoolDay = (loc, ms) => schoolClock(loc, ms).toISOString().slice(0, 10);
@@ -2149,8 +2155,11 @@ async function loadMyCheckin(request, schoolRef, uid) {
       return;
     }
     myCheckin.loc = found.data();
+    checkinQrBox.hidden = myCheckin.loc.qrRequired !== true;
+    checkinSelfieBox.hidden = myCheckin.loc.selfieRequired !== true;
     await refreshMyCheckin(request);
-    if (request === schoolRequest) checkinStatus.textContent = 'You must be within ' + myCheckin.loc.radiusM + ' m of the school, with GPS accurate to ' + myCheckin.loc.maxAccuracyM + ' m or better.';
+    if (request === schoolRequest) checkinStatus.textContent = 'You must be within ' + myCheckin.loc.radiusM + ' m of the school, with GPS accurate to ' + myCheckin.loc.maxAccuracyM + ' m or better.'
+      + (myCheckin.loc.qrRequired ? ' You also need the code from the school QR screen.' : '') + (myCheckin.loc.selfieRequired ? ' A live selfie is taken with each check-in.' : '');
   } catch {
     if (request === schoolRequest) checkinStatus.textContent = 'Could not load check-in. Try again.';
   }
@@ -2161,6 +2170,93 @@ const currentPosition = () => new Promise((resolve, reject) => {
   navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
 });
 
+const QR_CODE_TEXT = /^[A-HJ-NP-Z2-9]{8}$/;
+let qrScanStop = null;
+function stopQrScan() {
+  if (qrScanStop) qrScanStop();
+}
+// Reads the school's QR code with the phone camera where the browser can (BarcodeDetector). Otherwise the teacher types the code.
+async function scanSchoolQr() {
+  if (qrScanStop) { stopQrScan(); return; }
+  if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) {
+    checkinStatus.textContent = 'This browser cannot scan QR codes. Type the 8 letters shown under the code on the school screen.';
+    return;
+  }
+  let stream;
+  try {
+    const detector = new BarcodeDetector({ formats: ['qr_code'] });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    let live = true;
+    qrScanStop = () => {
+      live = false;
+      for (const track of stream.getTracks()) track.stop();
+      checkinQrVideo.srcObject = null;
+      checkinQrVideo.hidden = true;
+      checkinQrScan.textContent = 'Scan QR code';
+      qrScanStop = null;
+    };
+    checkinQrVideo.srcObject = stream;
+    checkinQrVideo.hidden = false;
+    await checkinQrVideo.play();
+    checkinQrScan.textContent = 'Stop scanning';
+    checkinStatus.textContent = 'Point the camera at the QR code on the school screen.';
+    while (live) {
+      const codes = await detector.detect(checkinQrVideo).catch(() => []);
+      const match = codes.map((item) => /^AZIZ:([A-HJ-NP-Z2-9]{8})$/.exec(item.rawValue ?? '')).find(Boolean);
+      if (match) {
+        checkinQrCode.value = match[1];
+        checkinStatus.textContent = 'Code read. Now press Check in or Check out.';
+        stopQrScan();
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  } catch {
+    if (stream && !qrScanStop) for (const track of stream.getTracks()) track.stop();
+    stopQrScan();
+    checkinStatus.textContent = 'Could not use the camera. Allow camera access for this site, or type the code shown on the school screen.';
+  }
+}
+checkinQrScan.addEventListener('click', scanSchoolQr);
+checkinQrCode.addEventListener('input', () => { checkinQrCode.value = checkinQrCode.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+
+// A live selfie: the front camera opens, counts down, and keeps one small JPEG (about 200 by 200 pixels) with the date and time on it.
+// It is taken from the camera only, never from the gallery, and stays small so the database holds it cheaply.
+async function takeSelfie(ctx) {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('no camera');
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 480 } }, audio: false });
+  try {
+    checkinSelfieVideo.srcObject = stream;
+    checkinSelfieVideo.hidden = false;
+    await checkinSelfieVideo.play();
+    for (let count = 3; count >= 1; count--) {
+      checkinStatus.textContent = 'Look at the camera. Taking the photo in ' + count + '.';
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    const side = Math.min(checkinSelfieVideo.videoWidth, checkinSelfieVideo.videoHeight);
+    if (!(side > 0)) throw new Error('camera not ready');
+    const canvas = document.createElement('canvas');
+    canvas.width = 200;
+    canvas.height = 200;
+    const context = canvas.getContext('2d');
+    context.drawImage(checkinSelfieVideo, (checkinSelfieVideo.videoWidth - side) / 2, (checkinSelfieVideo.videoHeight - side) / 2, side, side, 0, 0, 200, 200);
+    context.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    context.fillRect(0, 182, 200, 18);
+    context.fillStyle = '#ffffff';
+    context.font = '11px sans-serif';
+    context.fillText(schoolDay(ctx.loc) + ' ' + schoolTime(ctx.loc).slice(0, 5), 4, 195);
+    for (const quality of [0.6, 0.45, 0.3]) {
+      const photo = canvas.toDataURL('image/jpeg', quality);
+      if (photo.startsWith('data:image/jpeg;base64,') && photo.length <= 38000) return photo;
+    }
+    throw new Error('photo too large');
+  } finally {
+    for (const track of stream.getTracks()) track.stop();
+    checkinSelfieVideo.srcObject = null;
+    checkinSelfieVideo.hidden = true;
+  }
+}
+
 async function attemptCheckin(kind) {
   const ctx = myCheckin;
   if (!ctx?.loc || ctx.busy) return;
@@ -2169,8 +2265,13 @@ async function attemptCheckin(kind) {
   ctx.failed = null;
   checkinReviewBox.hidden = true;
   renderMyCheckin();
-  checkinStatus.textContent = 'Finding your position. Keep this page open and allow location when your phone asks.';
   try {
+    const qrCode = checkinQrCode.value.trim().toUpperCase();
+    if (ctx.loc.qrRequired && !QR_CODE_TEXT.test(qrCode)) {
+      checkinStatus.textContent = 'Scan the QR code on the school screen first, or type the 8 letters shown under it.';
+      return;
+    }
+    checkinStatus.textContent = 'Finding your position. Keep this page open and allow location when your phone asks.';
     let position;
     try {
       position = await currentPosition();
@@ -2197,14 +2298,32 @@ async function attemptCheckin(kind) {
     }
     const { doc, setDoc, serverTimestamp } = firestoreTools;
     const day = schoolDay(ctx.loc);
-    await setDoc(doc(ctx.schoolRef, 'staffCheckins', day + '_' + ctx.uid + '_' + kind),
-      { staffUid: ctx.uid, date: day, kind, at: serverTimestamp(), lat: latitude, lng: longitude, accuracy: Math.round(accuracy * 10) / 10, status: 'verified' });
+    const id = day + '_' + ctx.uid + '_' + kind;
+    if (ctx.loc.selfieRequired) {
+      let photo;
+      try {
+        photo = await takeSelfie(ctx);
+      } catch {
+        if (request === schoolRequest) checkinStatus.textContent = 'Could not take the selfie. Allow camera access for this site and try again. If the camera does not work, use Missed Check-in to tell the principal.';
+        return;
+      }
+      checkinStatus.textContent = 'Saving your selfie.';
+      await setDoc(doc(ctx.schoolRef, 'staffSelfies', id), { staffUid: ctx.uid, date: day, kind, photo, at: serverTimestamp() });
+    }
+    await setDoc(doc(ctx.schoolRef, 'staffCheckins', id),
+      { staffUid: ctx.uid, date: day, kind, at: serverTimestamp(), lat: latitude, lng: longitude, accuracy: Math.round(accuracy * 10) / 10, status: 'verified',
+        ...(ctx.loc.qrRequired ? { qr: qrCode } : {}) });
     await refreshMyCheckin(request);
-    if (request === schoolRequest) checkinStatus.textContent = checkinKindLabel[kind] + ' saved. Thank you.';
+    if (request === schoolRequest) {
+      checkinQrCode.value = '';
+      checkinStatus.textContent = checkinKindLabel[kind] + ' saved. Thank you.';
+    }
   } catch (error) {
     if (request !== schoolRequest) return;
     checkinStatus.textContent = error?.code === 'permission-denied'
-      ? 'The school server did not accept this. Make sure your phone date and time are set to automatic, then try again. If it keeps happening, tell the principal.'
+      ? (ctx.loc.qrRequired
+        ? 'The school server did not accept this. The QR code changes every minute, so scan the screen again. Also make sure your phone date and time are set to automatic. If it keeps happening, tell the principal.'
+        : 'The school server did not accept this. Make sure your phone date and time are set to automatic, then try again. If it keeps happening, tell the principal.')
       : 'Could not save. Check your internet and try again.';
   } finally {
     if (request === schoolRequest) {
@@ -2272,6 +2391,7 @@ async function renderCheckins() {
       checkinsReady = true;
       checkinsLocation.textContent = checkinsLoc
         ? 'School location is set. Teachers must be within ' + checkinsLoc.radiusM + ' m, with GPS accurate to ' + checkinsLoc.maxAccuracyM + ' m or better.'
+          + (checkinsLoc.qrRequired ? ' The school QR code is required.' : '') + (checkinsLoc.selfieRequired ? ' A live selfie is required.' : '')
         : 'The school map location is not set yet, so teachers cannot check in. AZIZ support sets it for you.';
     }
     const saved = await firestoreTools.getDocsFromServer(firestoreTools.query(firestoreTools.collection(tools.schoolRef, 'staffCheckins'),
@@ -2310,6 +2430,35 @@ async function renderCheckins() {
         worked.textContent = Math.floor(minutes / 60) + ' h ' + (minutes % 60) + ' min';
       } else worked.textContent = '-';
       tr.append(worked);
+      const selfieCell = document.createElement('td');
+      for (const kind of ['in', 'out']) {
+        const found = entry[kind];
+        if (!found) continue;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Show ' + kind + ' selfie';
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            const photo = await firestoreTools.getDocFromServer(firestoreTools.doc(tools.schoolRef, 'staffSelfies', found.id));
+            const url = photo.exists() ? photo.data().photo : '';
+            if (typeof url === 'string' && url.startsWith('data:image/jpeg;base64,')) {
+              const image = document.createElement('img');
+              image.src = url;
+              image.alt = 'Selfie at ' + kind;
+              image.width = 100;
+              image.height = 100;
+              button.replaceWith(image);
+            } else button.replaceWith(document.createTextNode('No ' + kind + ' selfie'));
+          } catch {
+            button.disabled = false;
+            if (request === schoolRequest) checkinsStatus.textContent = 'Could not load the selfie. Try again.';
+          }
+        });
+        selfieCell.append(button, ' ');
+      }
+      if (!selfieCell.childNodes.length) selfieCell.textContent = '-';
+      tr.append(selfieCell);
       const decision = document.createElement('td');
       for (const kind of ['in', 'out']) {
         const found = entry[kind];
@@ -2361,12 +2510,371 @@ function resetCheckins() {
   checkinsDate.value = '';
 }
 function resetMyCheckin() {
+  stopQrScan();
+  checkinQrBox.hidden = true;
+  checkinSelfieBox.hidden = true;
+  checkinQrCode.value = '';
   checkinSection.hidden = true;
   myCheckin = undefined;
   checkinToday.replaceChildren();
   checkinStatus.textContent = '';
   checkinReviewBox.hidden = true;
   checkinNote.value = '';
+}
+
+// Missed check-in (feature 133). A teacher whose check-in did not work says what time they came and left; the owner decides.
+const disputeSection = document.querySelector('#dispute');
+const disputeStatus = document.querySelector('#dispute-status');
+const disputeForm = document.querySelector('#dispute-form');
+const disputeList = document.querySelector('#dispute-list');
+let myDispute; // { schoolRef, uid, busy }
+const DISPUTE_STATE = { open: 'waiting for the owner', approved: 'approved', rejected: 'rejected' };
+
+async function refreshMyDisputes(request) {
+  const ctx = myDispute;
+  const { collection, getDocsFromServer, query, where } = firestoreTools;
+  const saved = await getDocsFromServer(query(collection(ctx.schoolRef, 'attendanceDisputes'), where('staffUid', '==', ctx.uid)));
+  if (request !== schoolRequest) return;
+  disputeList.replaceChildren();
+  const rows = saved.docs.map((record) => record.data()).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 15);
+  for (const item of rows) {
+    const li = document.createElement('li');
+    li.textContent = item.date + ' - came ' + (item.inTime ?? '-') + ', left ' + (item.outTime ?? '-') + ' - ' + (DISPUTE_STATE[item.status] ?? item.status)
+      + (item.reviewNote ? ' (' + item.reviewNote + ')' : '');
+    disputeList.append(li);
+  }
+}
+
+async function loadMyDispute(request, schoolRef, uid) {
+  disputeSection.hidden = false;
+  myDispute = { schoolRef, uid, busy: false };
+  try {
+    await refreshMyDisputes(request);
+  } catch {
+    if (request === schoolRequest) disputeStatus.textContent = 'Could not load your earlier requests. Try again later.';
+  }
+}
+
+disputeForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const ctx = myDispute;
+  if (!ctx || ctx.busy) return;
+  const request = schoolRequest;
+  const form = new FormData(disputeForm);
+  const date = String(form.get('date') ?? '');
+  const inTime = String(form.get('inTime') ?? '');
+  const outTime = String(form.get('outTime') ?? '');
+  const reason = String(form.get('reason') ?? '').trim();
+  if (!myCheckin?.loc) { disputeStatus.textContent = 'Your school has not set its map location yet, so this cannot be sent. Please tell the school owner.'; return; }
+  if (!DATE_TEXT.test(date) || date > schoolDay(myCheckin.loc)) { disputeStatus.textContent = 'Choose today or an earlier day.'; return; }
+  if (!inTime && !outTime) { disputeStatus.textContent = 'Enter the time you came, the time you left, or both.'; return; }
+  if (reason.length < 3) { disputeStatus.textContent = 'Write the reason in a few words.'; return; }
+  ctx.busy = true;
+  disputeStatus.textContent = 'Sending.';
+  try {
+    const { doc, setDoc, serverTimestamp } = firestoreTools;
+    await setDoc(doc(ctx.schoolRef, 'attendanceDisputes', date + '_' + ctx.uid),
+      { staffUid: ctx.uid, date, reason: reason.slice(0, 300), ...(inTime ? { inTime } : {}), ...(outTime ? { outTime } : {}), status: 'open', createdAt: serverTimestamp() });
+    await refreshMyDisputes(request);
+    if (request === schoolRequest) {
+      disputeForm.reset();
+      disputeStatus.textContent = 'Sent. The owner will approve or reject it.';
+    }
+  } catch (error) {
+    if (request === schoolRequest) disputeStatus.textContent = error?.code === 'permission-denied'
+      ? 'Could not send. You may already have sent a request for that date.'
+      : 'Could not send. Check your internet and try again.';
+  } finally {
+    ctx.busy = false;
+  }
+});
+function resetMyDispute() {
+  disputeSection.hidden = true;
+  myDispute = undefined;
+  disputeStatus.textContent = '';
+  disputeList.replaceChildren();
+  disputeForm.reset();
+}
+
+// School QR screen (features 129, 158). The owner's or principal's screen posts a fresh random code every minute. The code
+// is saved with the server time, so the rules accept it for 150 seconds. Teachers cannot read it; they must see the screen.
+const qrSection = document.querySelector('#qr-screen');
+const qrStatus = document.querySelector('#qr-status');
+const qrStart = document.querySelector('#qr-start');
+const qrStop = document.querySelector('#qr-stop');
+const qrCanvas = document.querySelector('#qr-canvas');
+const qrCodeText = document.querySelector('#qr-code');
+const QR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+let qrTimer = 0;
+let qrLast = '';
+let qrStartedAt = 0;
+let qrBusy = false;
+const newQrCode = () => [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => QR_ALPHABET[byte % 32]).join('');
+
+async function postQrCode(request) {
+  const tools = academic;
+  if (!tools || qrBusy) return;
+  if (Date.now() - qrStartedAt > 12 * 3600000) { stopQrScreen('The QR screen stopped after 12 hours. Press Start to show it again.'); return; }
+  qrBusy = true;
+  try {
+    const code = newQrCode();
+    const { doc, setDoc, serverTimestamp } = firestoreTools;
+    await setDoc(doc(tools.schoolRef, 'settings', 'qrCode'), { code, ...(qrLast ? { prev: qrLast } : {}), at: serverTimestamp() });
+    qrLast = code;
+    if (request !== schoolRequest || !qrTimer) return;
+    const { drawQr } = await import('./qr.mjs?v=batch-61');
+    drawQr(qrCanvas, 'AZIZ:' + code, 280);
+    qrCanvas.hidden = false;
+    qrCodeText.textContent = code.slice(0, 4) + ' ' + code.slice(4);
+    qrStatus.textContent = 'Showing the code. It changes every minute. Keep this page open on this screen.';
+  } catch {
+    if (request === schoolRequest) qrStatus.textContent = 'Could not post a new code. Check the internet. Trying again in a minute.';
+  } finally {
+    qrBusy = false;
+  }
+}
+function stopQrScreen(message = '') {
+  clearInterval(qrTimer);
+  qrTimer = 0;
+  qrLast = '';
+  qrCanvas.hidden = true;
+  qrCodeText.textContent = '';
+  qrStart.hidden = false;
+  qrStop.hidden = true;
+  qrStatus.textContent = message;
+}
+qrStart.addEventListener('click', () => {
+  if (qrTimer || !academic) return;
+  const request = schoolRequest;
+  qrStartedAt = Date.now();
+  qrStart.hidden = true;
+  qrStop.hidden = false;
+  qrStatus.textContent = 'Starting.';
+  qrTimer = setInterval(() => postQrCode(request), 60000);
+  postQrCode(request);
+});
+qrStop.addEventListener('click', () => stopQrScreen('Stopped. Teachers cannot scan until you start it again.'));
+function startQrScreen() { qrSection.hidden = false; }
+function resetQrScreen() {
+  stopQrScreen('');
+  qrSection.hidden = true;
+}
+
+// Missed check-in requests for the owner and principal. Only the owner decides.
+const disputesSection = document.querySelector('#disputes');
+const disputesStatus = document.querySelector('#disputes-status');
+const disputesBody = document.querySelector('#disputes-body');
+let disputesToken = 0;
+
+async function renderDisputes() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++disputesToken;
+  if (!tools) return;
+  disputesStatus.textContent = 'Loading requests.';
+  try {
+    const { collection, getDocsFromServer, query, where } = firestoreTools;
+    const saved = await getDocsFromServer(query(collection(tools.schoolRef, 'attendanceDisputes'), where('status', '==', 'open')));
+    if (request !== schoolRequest || token !== disputesToken) return;
+    disputesBody.replaceChildren();
+    const rows = saved.docs.map((record) => ({ id: record.id, data: record.data() })).sort((a, b) => a.data.date.localeCompare(b.data.date) || a.id.localeCompare(b.id));
+    for (const found of rows) {
+      addRow(disputesBody, [found.data.date, staffLabel(found.data.staffUid), found.data.inTime ?? '-', found.data.outTime ?? '-', found.data.reason, '']);
+      const cell = disputesBody.lastElementChild.lastElementChild;
+      cell.textContent = viewOnly ? '-' : '';
+      if (viewOnly) continue;
+      for (const next of ['approved', 'rejected']) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = next === 'approved' ? 'Approve' : 'Reject';
+        button.addEventListener('click', async () => {
+          if (tools.busy) return;
+          tools.busy = true;
+          disputesStatus.textContent = 'Saving decision.';
+          try {
+            await tools.save('attendanceDisputes', found.id, { ...found.data, status: next, reviewedBy: auth.currentUser.uid });
+            tools.busy = false;
+            if (request === schoolRequest) await renderDisputes();
+          } catch {
+            if (request === schoolRequest) disputesStatus.textContent = 'Could not save the decision. Try again.';
+          } finally {
+            tools.busy = false;
+          }
+        });
+        cell.append(button, ' ');
+      }
+    }
+    disputesStatus.textContent = rows.length ? rows.length + ' request(s) waiting.' : 'No requests waiting.';
+  } catch {
+    if (request === schoolRequest && token === disputesToken) disputesStatus.textContent = 'Could not load requests. Try again.';
+  }
+}
+document.querySelector('#disputes-refresh').addEventListener('click', renderDisputes);
+disputesSection.addEventListener('mod-open', renderDisputes);
+function startDisputes() { disputesSection.hidden = false; }
+function resetDisputes() {
+  disputesSection.hidden = true;
+  disputesToken += 1;
+  disputesBody.replaceChildren();
+  disputesStatus.textContent = '';
+}
+
+// Shifts, hours and the payroll check (features 132, 134). The shift decides what counts as late and overtime. The monthly
+// table works out days at school, late days, hours and overtime from verified or approved check-ins and approved requests,
+// and sets them beside the principal's own attendance marks and the salary record. It reads only when the owner presses the button.
+const hoursSection = document.querySelector('#hours');
+const shiftForm = document.querySelector('#shift-form');
+const shiftStatus = document.querySelector('#shift-status');
+const hoursMonth = document.querySelector('#hours-month');
+const hoursStatus = document.querySelector('#hours-status');
+const hoursBody = document.querySelector('#hours-body');
+const SHIFT_DEFAULT = { start: '09:00', end: '17:00', graceMin: 10, breakMin: 30 };
+let shiftSaved = null;
+let shiftLoaded = false;
+let hoursToken = 0;
+let hoursBusy = false;
+const minutesOf = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+const hoursText = (minutes) => Math.floor(minutes / 60) + ' h ' + (minutes % 60) + ' min';
+
+async function loadShift() {
+  const tools = academic;
+  const request = schoolRequest;
+  if (!tools || shiftLoaded) return;
+  try {
+    const found = await firestoreTools.getDocFromServer(firestoreTools.doc(tools.schoolRef, 'settings', 'shift'));
+    if (request !== schoolRequest) return;
+    shiftLoaded = true;
+    shiftSaved = found.exists() ? found.data() : null;
+    const values = shiftSaved ?? SHIFT_DEFAULT;
+    for (const name of ['start', 'end', 'graceMin', 'breakMin']) shiftForm.elements.namedItem(name).value = values[name];
+    for (const control of shiftForm.elements) control.disabled = viewOnly;
+    shiftStatus.textContent = shiftSaved ? 'Shift saved.' : 'No shift saved yet. Hours are worked out with ' + SHIFT_DEFAULT.start + ' to ' + SHIFT_DEFAULT.end + ' until you save one.';
+  } catch {
+    if (request === schoolRequest) shiftStatus.textContent = 'Could not load the shift. Try again.';
+  }
+}
+shiftForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tools = academic;
+  const request = schoolRequest;
+  if (!tools || viewOnly || hoursBusy) return;
+  const form = new FormData(shiftForm);
+  const start = String(form.get('start') ?? '');
+  const end = String(form.get('end') ?? '');
+  const graceMin = Number(form.get('graceMin'));
+  const breakMin = Number(form.get('breakMin'));
+  if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(start) || !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(end) || end <= start) { shiftStatus.textContent = 'The shift must end after it starts.'; return; }
+  if (!Number.isInteger(graceMin) || graceMin < 0 || graceMin > 120) { shiftStatus.textContent = 'Grace must be a whole number from 0 to 120 minutes.'; return; }
+  if (!Number.isInteger(breakMin) || breakMin < 0 || breakMin > 240) { shiftStatus.textContent = 'Break must be a whole number from 0 to 240 minutes.'; return; }
+  hoursBusy = true;
+  shiftStatus.textContent = 'Saving.';
+  try {
+    const data = { start, end, graceMin, breakMin };
+    await firestoreTools.setDoc(firestoreTools.doc(tools.schoolRef, 'settings', 'shift'), data);
+    shiftSaved = data;
+    if (request === schoolRequest) shiftStatus.textContent = 'Shift saved.';
+  } catch {
+    if (request === schoolRequest) shiftStatus.textContent = 'Could not save the shift. Try again.';
+  } finally {
+    hoursBusy = false;
+  }
+});
+
+async function runHours() {
+  const tools = academic;
+  const request = schoolRequest;
+  const token = ++hoursToken;
+  if (!tools || hoursBusy) return;
+  const month = hoursMonth.value;
+  if (!/^[0-9]{4}-[0-9]{2}$/.test(month)) { hoursStatus.textContent = 'Choose a month.'; return; }
+  hoursBusy = true;
+  hoursBody.replaceChildren();
+  hoursStatus.textContent = 'Working out the month. This reads every check-in of the month once.';
+  try {
+    const { collection, doc, getDocFromServer, getDocsFromServer, query, where } = firestoreTools;
+    const from = month + '-01';
+    const to = month + '-31';
+    const range = (name) => getDocsFromServer(query(collection(tools.schoolRef, name), where('date', '>=', from), where('date', '<=', to)));
+    const [locFound, checkSnap, disputeSnap, markSnap, payrollSnap] = await Promise.all([
+      getDocFromServer(doc(tools.schoolRef, 'settings', 'location')),
+      range('staffCheckins'), range('attendanceDisputes'), tools.staffAttendanceBetween(from, to),
+      getDocsFromServer(query(collection(tools.schoolRef, 'payroll'), where('month', '==', month))).catch(() => null),
+    ]);
+    if (request !== schoolRequest || token !== hoursToken) return;
+    const loc = locFound.exists() ? locFound.data() : null;
+    if (!loc) { hoursStatus.textContent = 'The school map location is not set, so check-in times cannot be read. AZIZ support sets it.'; return; }
+    const shift = shiftSaved ?? SHIFT_DEFAULT;
+    const startMin = minutesOf(shift.start);
+    const scheduled = minutesOf(shift.end) - startMin - shift.breakMin;
+    const days = new Map(); // uid -> date -> { in, out } in minutes of the school day
+    const slot = (uid, date) => {
+      if (!days.has(uid)) days.set(uid, new Map());
+      if (!days.get(uid).has(date)) days.get(uid).set(date, {});
+      return days.get(uid).get(date);
+    };
+    for (const record of checkSnap.docs) {
+      const item = record.data();
+      if (!['verified', 'approved'].includes(item.status) || !item.at?.toMillis) continue;
+      slot(item.staffUid, item.date)[item.kind] = minutesOf(schoolTime(loc, item.at.toMillis()).slice(0, 5));
+    }
+    for (const record of disputeSnap.docs) {
+      const item = record.data();
+      if (item.status !== 'approved') continue;
+      const day = slot(item.staffUid, item.date);
+      if (item.inTime && day.in === undefined) day.in = minutesOf(item.inTime);
+      if (item.outTime && day.out === undefined) day.out = minutesOf(item.outTime);
+    }
+    const marked = new Map();
+    for (const record of markSnap.docs) {
+      const item = record.data();
+      if (item.status === 'present' || item.status === 'late') marked.set(item.staffUid, (marked.get(item.staffUid) ?? 0) + 1);
+    }
+    const pay = new Map((payrollSnap?.docs ?? []).map((record) => [record.data().staffUid, record.data()]));
+    for (const uid of staffRoster) {
+      let present = 0; let late = 0; let worked = 0; let overtime = 0;
+      for (const day of (days.get(uid) ?? new Map()).values()) {
+        if (day.in === undefined) continue;
+        present += 1;
+        if (day.in > startMin + shift.graceMin) late += 1;
+        if (day.out !== undefined && day.out > day.in) {
+          const net = Math.max(0, day.out - day.in - shift.breakMin);
+          worked += net;
+          overtime += Math.max(0, net - scheduled);
+        }
+      }
+      const byPrincipal = marked.get(uid) ?? 0;
+      const salary = pay.get(uid);
+      let check;
+      if (present !== byPrincipal) check = 'Differs: ' + present + ' by check-in, ' + byPrincipal + ' marked';
+      else if (salary && present === 0) check = 'Salary record but no attendance';
+      else check = salary || !payrollSnap ? 'Matches' : 'Matches (no salary record)';
+      addRow(hoursBody, [staffLabel(uid), String(present), String(byPrincipal), String(late), hoursText(worked), hoursText(overtime),
+        !payrollSnap ? 'not shown' : salary ? 'net ' + rupees(salary.basic + salary.allowances - salary.deductions) + (salary.paidOn ? ', paid' : ', NOT PAID') : 'none', check]);
+    }
+    hoursStatus.textContent = (staffRoster.length ? 'Counted from verified or approved check-ins and approved requests. Shift ' + shift.start + ' to ' + shift.end
+      + ', grace ' + shift.graceMin + ' min, break ' + shift.breakMin + ' min.' : 'No active teacher accounts yet.')
+      + (shiftSaved ? '' : ' (No shift saved, so the default is used.)');
+  } catch {
+    if (request === schoolRequest && token === hoursToken) hoursStatus.textContent = 'Could not work out the month. Try again.';
+  } finally {
+    hoursBusy = false;
+  }
+}
+document.querySelector('#hours-run').addEventListener('click', runHours);
+hoursSection.addEventListener('mod-open', () => { if (!hoursMonth.value) hoursMonth.value = localToday().slice(0, 7); loadShift(); });
+function startHours() { hoursSection.hidden = false; }
+function resetHours() {
+  hoursSection.hidden = true;
+  hoursToken += 1;
+  hoursBusy = false;
+  shiftSaved = null;
+  shiftLoaded = false;
+  hoursBody.replaceChildren();
+  hoursStatus.textContent = '';
+  shiftStatus.textContent = '';
+  hoursMonth.value = '';
+  shiftForm.reset();
+  for (const control of shiftForm.elements) control.disabled = false;
 }
 
 // Leave requests. Teachers ask for their own leave; the owner approves or rejects each once.
@@ -7459,6 +7967,10 @@ onAuthStateChanged(auth, async (user) => {
   staffReportToken += 1;
   resetCheckins();
   resetMyCheckin();
+  resetMyDispute();
+  resetQrScreen();
+  resetDisputes();
+  resetHours();
   myAttSection.hidden = true;
   myAttStatus.textContent = '';
   myAttTotal.textContent = '';
@@ -7639,6 +8151,7 @@ onAuthStateChanged(auth, async (user) => {
         examsLoader?.(),
         loadMyAttendance(request, schoolRef, user.uid),
         loadMyCheckin(request, schoolRef, user.uid),
+        loadMyDispute(request, schoolRef, user.uid),
         loadMyLeave(request, schoolRef, user.uid),
         loadTeacherNotices(request, schoolRef, user.uid),
         loadTeacherHomework(request),
@@ -7773,6 +8286,9 @@ onAuthStateChanged(auth, async (user) => {
       // Everything below only reads, so it runs side by side instead of one after another.
       const roster = loadStaffAttendance(request);
       startCheckins();
+      startQrScreen();
+      startDisputes();
+      startHours();
       await Promise.allSettled([
         roster.then(() => (request === schoolRequest ? renderLeaveReview() : undefined)),
         roster.then(() => (request === schoolRequest ? loadOwnerLists(request) : undefined)),

@@ -237,8 +237,45 @@
         <p id="checkins-location"></p>
         <p><label>Date <input id="checkins-date" type="date"></label></p>
         <table>
-          <thead><tr><th>Teacher</th><th>Check in</th><th>Check out</th><th>Time at school</th><th>Decision</th></tr></thead>
+          <thead><tr><th>Teacher</th><th>Check in</th><th>Check out</th><th>Time at school</th><th>Selfie</th><th>Decision</th></tr></thead>
           <tbody id="checkins-body"></tbody>
+        </table>
+      </section>
+      <section id="qr-screen" aria-labelledby="qr-screen-title" hidden>
+        <h3 id="qr-screen-title">School QR Screen</h3>
+        <p>Open this on a screen at the school gate or office and leave it open. The code changes every minute, so a teacher must be looking at the screen to check in. Teachers scan it with their phones.</p>
+        <p id="qr-status" role="status"></p>
+        <p><button id="qr-start" type="button">Start QR screen</button> <button id="qr-stop" type="button" hidden>Stop</button></p>
+        <canvas id="qr-canvas" hidden role="img" aria-label="Check-in QR code" style="max-width:100%"></canvas>
+        <p id="qr-code" style="font-size:2rem;font-weight:700;letter-spacing:0.2em"></p>
+      </section>
+      <section id="disputes" aria-labelledby="disputes-title" hidden>
+        <h3 id="disputes-title">Missed Check-in Requests</h3>
+        <p>Teachers who forgot to check in or out, or whose phone failed, send the times here. An approved request counts as their check-in or check-out in the monthly hours.</p>
+        <p id="disputes-status" role="status"></p>
+        <p><button id="disputes-refresh" type="button">Refresh</button></p>
+        <table>
+          <thead><tr><th>Date</th><th>Teacher</th><th>Came</th><th>Left</th><th>Reason</th><th>Decision</th></tr></thead>
+          <tbody id="disputes-body"></tbody>
+        </table>
+      </section>
+      <section id="hours" aria-labelledby="hours-title" hidden>
+        <h3 id="hours-title">Shifts, Hours and Payroll Check</h3>
+        <p>Set the school day once. Late days, hours worked and overtime are then worked out from the check-ins and approved requests, and set beside the principal's attendance marks and the salary record.</p>
+        <p id="shift-status" role="status"></p>
+        <form id="shift-form">
+          <p><label>Shift starts <input name="start" type="time" value="09:00" required></label>
+            <label>Shift ends <input name="end" type="time" value="17:00" required></label></p>
+          <p><label>Minutes of grace before late <input name="graceMin" type="number" min="0" max="120" step="1" value="10" required></label>
+            <label>Break in minutes <input name="breakMin" type="number" min="0" max="240" step="1" value="30" required></label></p>
+          <button type="submit">Save shift</button>
+        </form>
+        <h4>Monthly hours</h4>
+        <p id="hours-status" role="status"></p>
+        <p><label>Month <input id="hours-month" type="month"></label> <button id="hours-run" type="button">Work out hours</button></p>
+        <table>
+          <thead><tr><th>Teacher</th><th>Days at school</th><th>Days marked by principal</th><th>Late days</th><th>Hours worked</th><th>Overtime</th><th>Salary record</th><th>Check</th></tr></thead>
+          <tbody id="hours-body"></tbody>
         </table>
       </section>
       <section id="staff-attendance" aria-labelledby="staff-attendance-title" hidden>
@@ -1164,12 +1201,35 @@
         <p>Check in when you arrive and out when you leave. Your phone must be at the school, with location switched on.</p>
         <p id="checkin-status" role="status"></p>
         <p id="checkin-today"></p>
+        <div id="checkin-qr" hidden>
+          <p>Your school uses the QR code on the school screen. Scan it, or type the 8 letters shown under it. The code changes every minute.</p>
+          <p><button id="checkin-qr-scan" type="button">Scan QR code</button>
+            <label>Code <input id="checkin-qr-code" type="text" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false"></label></p>
+          <video id="checkin-qr-video" playsinline muted hidden style="width:100%;max-width:320px;border-radius:8px"></video>
+        </div>
+        <div id="checkin-selfie" hidden>
+          <p>Your school needs a live selfie with each check-in. Press Check in or Check out, look at the camera, and the photo is taken after a short count.</p>
+          <video id="checkin-selfie-video" playsinline muted hidden style="width:100%;max-width:240px;border-radius:8px"></video>
+        </div>
         <p><button id="checkin-in" type="button">Check in</button> <button id="checkin-out" type="button">Check out</button></p>
         <div id="checkin-review" hidden>
           <p>Your phone could not prove you are at school. You can send this to the principal to decide instead.</p>
           <p><label>Note for the principal (optional) <input id="checkin-note" type="text" maxlength="200"></label></p>
           <button id="checkin-review-send" type="button">Send for review</button>
         </div>
+      </section>
+      <section id="dispute" aria-labelledby="dispute-title" hidden>
+        <h3 id="dispute-title">Missed Check-in</h3>
+        <p>If you forgot to check in or out, or your phone did not work, tell the principal what time you came and left. The owner approves or rejects it.</p>
+        <p id="dispute-status" role="status"></p>
+        <form id="dispute-form">
+          <p><label>Date <input name="date" type="date" required></label></p>
+          <p><label>Time you came <input name="inTime" type="time"></label>
+            <label>Time you left <input name="outTime" type="time"></label></p>
+          <p><label>Reason <input name="reason" type="text" required minlength="3" maxlength="300"></label></p>
+          <button type="submit">Send request</button>
+        </form>
+        <ul id="dispute-list"></ul>
       </section>
       <section id="my-attendance" aria-labelledby="my-attendance-title" hidden>
         <h3 id="my-attendance-title">My Attendance</h3>
@@ -1528,6 +1588,8 @@
           <p><label>Check-in distance in metres (30 or more) <input name="radiusM" type="number" min="30" max="500" step="1" value="30" required></label>
             <label>Worst GPS accuracy accepted in metres <input name="maxAccuracyM" type="number" min="10" max="100" step="1" value="50" required></label>
             <label>School time zone <select name="tzMinutes"><option value="330">India (UTC+5:30)</option><option value="345">Nepal (UTC+5:45)</option><option value="360">Bangladesh (UTC+6:00)</option><option value="300">Pakistan (UTC+5:00)</option><option value="240">UAE (UTC+4:00)</option><option value="0">UTC (UTC+0:00)</option></select></label></p>
+          <p><label><input type="checkbox" name="qrRequired"> Teachers must scan the school QR code to check in</label></p>
+          <p><label><input type="checkbox" name="selfieRequired"> Teachers must take a live selfie to check in</label></p>
           <iframe id="location-map" title="Map of the school location" loading="lazy" referrerpolicy="no-referrer-when-downgrade" hidden style="width:100%;height:260px;border:0;border-radius:8px"></iframe>
           <button type="submit">Save school location</button>
         </form>
@@ -1586,14 +1648,14 @@
       box.focus();
     });
     try {
-      await import('./ui.mjs?v=batch-60');
-      await import('./i18n.mjs?v=batch-60');
+      await import('./ui.mjs?v=batch-61');
+      await import('./i18n.mjs?v=batch-61');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-60');
-      await import('./platform.mjs?v=batch-60');
+      await import('./sign-in.mjs?v=batch-61');
+      await import('./platform.mjs?v=batch-61');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
