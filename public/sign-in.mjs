@@ -4,7 +4,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { app } from './firebase-client.mjs';
+import { app, PUSH_VAPID_KEY } from './firebase-client.mjs';
 
 const auth = getAuth(app);
 // The school comes from the page address (?school=green-valley); without it the original school is used.
@@ -1169,6 +1169,7 @@ async function loadPortal(tools, request) {
     loadPortalConsents(tools, request, studentId);
     loadPortalTests(tools, request, studentId);
     loadPortalPickup(tools, request, studentId);
+    loadPortalAlerts(tools, request, studentId);
     loadPortalEvents(tools, request, studentId);
     loadPortalCoursework(tools, request, studentId);
     loadPortalLeave(tools, request, studentId);
@@ -2625,7 +2626,7 @@ async function postQrCode(request) {
     await setDoc(doc(tools.schoolRef, 'settings', 'qrCode'), { code, ...(qrLast ? { prev: qrLast } : {}), at: serverTimestamp() });
     qrLast = code;
     if (request !== schoolRequest || !qrTimer) return;
-    const { drawQr } = await import('./qr.mjs?v=batch-63');
+    const { drawQr } = await import('./qr.mjs?v=batch-64');
     drawQr(qrCanvas, 'AZIZ:' + code, 280);
     qrCanvas.hidden = false;
     qrCodeText.textContent = code.slice(0, 4) + ' ' + code.slice(4);
@@ -6045,6 +6046,161 @@ document.querySelector('#riskboard-csv').addEventListener('click', () => {
       row.marksPct === null ? '' : Math.round(row.marksPct), row.overdue, row.signals.join('; ')])]);
 });
 
+// ---------- Batch 64 ----------
+// Fee reminders (feature 148). The owner finds students with overdue fees and sends a reminder record for each; the server job
+// turns every new record into a phone notification for that family.
+const reminderStatus = document.querySelector('#feereminders-status');
+const reminderList = document.querySelector('#feereminders-list');
+const reminderHistory = document.querySelector('#feereminders-history');
+let reminderPlan = [];
+let reminderSent = [];
+let reminderBusy = false;
+async function loadReminderHistory() {
+  const request = schoolRequest;
+  try {
+    const { collection, getDocsFromServer } = firestoreTools;
+    const saved = await getDocsFromServer(collection(academic.schoolRef, 'feeReminders'));
+    if (request !== schoolRequest) return;
+    reminderSent = saved.docs.map((record) => record.data());
+    reminderHistory.replaceChildren();
+    for (const item of [...reminderSent].sort((a, b) => b.createdOn.localeCompare(a.createdOn)).slice(0, 30)) {
+      listItem(reminderHistory, item.createdOn + ' - ' + item.studentName + ' - ' + rupees(item.amount) + (item.message ? ' (' + item.message + ')' : ''));
+    }
+  } catch {
+    if (request === schoolRequest) reminderStatus.textContent = 'Could not load the reminders already sent.';
+  }
+}
+document.querySelector('#feereminders').addEventListener('mod-open', loadReminderHistory);
+document.querySelector('#feereminders-find').addEventListener('click', async () => {
+  const year = activeYearRecord();
+  if (!academic || !year) { reminderStatus.textContent = 'Set an active academic year first.'; return; }
+  if (!feeData.structures.length) { reminderStatus.textContent = 'Fees are not set up for this year yet, so there is nothing to remind about.'; return; }
+  const minimum = Math.max(1, Number.parseInt(document.querySelector('#feereminders-min').value || '1', 10) || 1);
+  const skipDays = Number.parseInt(document.querySelector('#feereminders-skip').value, 10);
+  if (!reminderSent.length) await loadReminderHistory();
+  const since = skipDays > 0 ? addDays(localToday(), -skipDays) : '9999-12-31';
+  const recent = new Set(reminderSent.filter((item) => item.createdOn >= since).map((item) => item.studentId));
+  const classOf = new Map(placementData.enrollments.filter((record) => record.data().yearId === year.id).map((record) => [record.data().studentId, record.data().classId]));
+  reminderPlan = [];
+  let skipped = 0;
+  for (const record of studentRecords.filter((found) => found.data().status === 'active')) {
+    const classId = classOf.get(record.id);
+    if (!classId) continue;
+    const overdue = feeSummaryFor(record.id, year.id, classId).overdue;
+    if (overdue < minimum) continue;
+    if (recent.has(record.id)) { skipped += 1; continue; }
+    reminderPlan.push({ studentId: record.id, studentName: record.data().name, amount: overdue });
+  }
+  reminderPlan.sort((a, b) => b.amount - a.amount);
+  reminderList.replaceChildren();
+  for (const item of reminderPlan) listItem(reminderList, item.studentName + ' - ' + rupees(item.amount) + ' overdue');
+  reminderStatus.textContent = reminderPlan.length ? reminderPlan.length + ' student(s) will get a reminder' + (skipped ? ' (' + skipped + ' skipped, reminded recently)' : '') + '. Press Send reminders.'
+    : 'No student needs a reminder' + (skipped ? ' (' + skipped + ' reminded recently)' : '') + '.';
+});
+document.querySelector('#feereminders-send').addEventListener('click', async () => {
+  if (viewOnly) { reminderStatus.textContent = 'Only the owner can send reminders.'; return; }
+  if (!academic || reminderBusy) return;
+  if (!reminderPlan.length) { reminderStatus.textContent = 'Press Find students with dues first.'; return; }
+  const message = document.querySelector('#feereminders-message').value.trim().slice(0, 200);
+  if (!confirm('Send a fee reminder to ' + reminderPlan.length + ' famil' + (reminderPlan.length === 1 ? 'y' : 'ies') + '?')) return;
+  const request = schoolRequest;
+  reminderBusy = true;
+  try {
+    const today = localToday();
+    let sent = 0;
+    for (let start = 0; start < reminderPlan.length; start += 100) {
+      const group = reminderPlan.slice(start, start + 100);
+      await academic.commit(group.map((item) => ({ path: ['feeReminders', newId('FR')], data: { studentId: item.studentId, studentName: item.studentName, amount: item.amount,
+        createdOn: today, ...(message ? { message } : {}), by: schoolUid } })));
+      sent += group.length;
+      if (request === schoolRequest) reminderStatus.textContent = 'Sent ' + sent + ' of ' + reminderPlan.length + '.';
+    }
+    reminderPlan = [];
+    if (request === schoolRequest) { reminderList.replaceChildren(); reminderStatus.textContent = 'Sent ' + sent + ' reminder(s).'; await loadReminderHistory(); }
+  } catch {
+    if (request === schoolRequest) reminderStatus.textContent = 'Some reminders were not sent. Press Find students with dues again to see who is left.';
+  } finally {
+    reminderBusy = false;
+  }
+});
+
+// Parent: reminders and phone notifications.
+const portalRemindersSection = document.querySelector('#portal-reminders');
+const portalRemindersStatus = document.querySelector('#portal-reminders-status');
+const portalRemindersList = document.querySelector('#portal-reminders-list');
+const portalPushSection = document.querySelector('#portal-push');
+const portalPushStatus = document.querySelector('#portal-push-status');
+const portalPushOn = document.querySelector('#portal-push-on');
+const portalPushOff = document.querySelector('#portal-push-off');
+let portalPush; // { tools, studentId, busy }
+async function loadPortalAlerts(tools, request, studentId) {
+  if (portalRole === 'student') { portalRemindersSection.hidden = true; portalPushSection.hidden = true; return; }
+  const { schoolRef, collection, doc, getDocFromServer, getDocsFromServer, query, where } = tools;
+  portalPush = { tools, studentId, busy: false };
+  portalRemindersSection.hidden = false;
+  portalPushSection.hidden = false;
+  try {
+    const [saved, token] = await Promise.all([
+      getDocsFromServer(query(collection(schoolRef, 'feeReminders'), where('studentId', '==', studentId))),
+      getDocFromServer(doc(schoolRef, 'pushTokens', tools.user.uid)).catch(() => null),
+    ]);
+    if (request !== schoolRequest) return;
+    portalRemindersList.replaceChildren();
+    for (const item of saved.docs.map((record) => record.data()).sort((a, b) => b.createdOn.localeCompare(a.createdOn)).slice(0, 10)) {
+      listItem(portalRemindersList, item.createdOn + ' - ' + rupees(item.amount) + ' overdue' + (item.message ? ' - ' + item.message : ''));
+    }
+    portalRemindersStatus.textContent = saved.docs.length ? '' : 'No reminders.';
+    const on = Boolean(token?.exists()) && 'Notification' in window && Notification.permission === 'granted';
+    portalPushOn.hidden = on;
+    portalPushOff.hidden = !on;
+    portalPushStatus.textContent = on ? 'Notifications are on for this phone.' : (PUSH_VAPID_KEY ? '' : 'Notifications are not switched on for this school yet.');
+  } catch {
+    if (request === schoolRequest) portalRemindersStatus.textContent = 'Could not load. Try again.';
+  }
+}
+portalPushOn.addEventListener('click', async () => {
+  const context = portalPush;
+  if (!context || context.busy) return;
+  if (!('serviceWorker' in navigator) || !('Notification' in window)) { portalPushStatus.textContent = 'This browser cannot receive notifications. On an iPhone, add the app to the Home Screen first.'; return; }
+  if (!PUSH_VAPID_KEY) { portalPushStatus.textContent = 'Notifications are not switched on for this school yet.'; return; }
+  context.busy = true;
+  const request = schoolRequest;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') { portalPushStatus.textContent = 'Notifications are blocked. Allow them in the browser settings for this site.'; return; }
+    const { getMessaging, getToken, isSupported } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-messaging.js');
+    if (!(await isSupported())) { portalPushStatus.textContent = 'This browser cannot receive notifications.'; return; }
+    const registration = await navigator.serviceWorker.ready;
+    const token = await getToken(getMessaging(app), { vapidKey: PUSH_VAPID_KEY, serviceWorkerRegistration: registration });
+    if (!token) { portalPushStatus.textContent = 'Could not turn on notifications. Try again.'; return; }
+    const { schoolRef, collection, doc, setDoc, getDocsFromServer, query, where } = context.tools;
+    const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', context.studentId)));
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    await setDoc(doc(schoolRef, 'pushTokens', context.tools.user.uid), { token, studentId: context.studentId, ...(latest?.classId ? { classId: latest.classId } : {}), updatedOn: localToday() });
+    if (request === schoolRequest) { portalPushOn.hidden = true; portalPushOff.hidden = false; portalPushStatus.textContent = 'Notifications are on for this phone.'; }
+  } catch {
+    if (request === schoolRequest) portalPushStatus.textContent = 'Could not turn on notifications. Try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+portalPushOff.addEventListener('click', async () => {
+  const context = portalPush;
+  if (!context || context.busy) return;
+  context.busy = true;
+  try {
+    const { doc, deleteDoc } = firestoreTools;
+    await deleteDoc(doc(context.tools.schoolRef, 'pushTokens', context.tools.user.uid));
+    portalPushOn.hidden = false;
+    portalPushOff.hidden = true;
+    portalPushStatus.textContent = 'Notifications are off.';
+  } catch {
+    portalPushStatus.textContent = 'That did not work. Try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+
 lists.assets = ownerList({
   id: 'assets', collection: 'assets', empty: 'No assets recorded yet.', saved: 'Asset added.',
   sort: (a, b) => a.data().place.localeCompare(b.data().place) || a.data().name.localeCompare(b.data().name),
@@ -6138,6 +6294,15 @@ async function loadBackupLog() {
   } catch {
     backupLog = null;
   }
+  // The nightly server backup (feature 086) reports into settings/autoBackup.
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const auto = await getDocFromServer(doc(academic.schoolRef, 'settings', 'autoBackup'));
+    const line = document.querySelector('#backup-auto');
+    if (!auto.exists()) line.textContent = 'Automatic nightly backup: no backup has run yet.';
+    else if (auto.data().ok) line.textContent = 'Automatic nightly backup: last saved ' + auto.data().date + ', ' + auto.data().docs + ' records, checked after saving.';
+    else line.textContent = 'Automatic nightly backup FAILED on ' + auto.data().date + '. Download a backup by hand and tell AZIZ support.';
+  } catch { /* the school has no automatic backup result to show */ }
 }
 async function noteBackup(kind) {
   try {
@@ -7715,7 +7880,7 @@ async function loadPortalPickup(tools, request, studentId) {
       const row = document.createElement('li');
       row.append(item.name + ' (' + item.relation + ')' + (item.phone ? ' - ' + item.phone : '') + ' - code ' + item.code + (item.active ? '' : ' - SWITCHED OFF') + ' ');
       row.append(actionButton('Show QR', async () => {
-        const { drawQr } = await import('./qr.mjs?v=batch-63');
+        const { drawQr } = await import('./qr.mjs?v=batch-64');
         portalPickupQr.hidden = false;
         drawQr(portalPickupQr, 'PICK:' + item.code, 200);
         portalPickupStatus.textContent = 'QR code for ' + item.name + '. Show it at the gate.';
@@ -7931,7 +8096,7 @@ const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'members', 'stud
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
   'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
   'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog', 'scholarships', 'scholarshipApps', 'consentForms', 'consentResponses', 'staffProfiles',
-  'hostelRooms', 'hostelStays', 'canteenMenu', 'canteenPlans', 'bookReservations', 'workflowRules', 'questionBank', 'onlineTests', 'onlineTestKeys', 'onlineAttempts', 'pickupPeople', 'pickupLogs'];
+  'hostelRooms', 'hostelStays', 'canteenMenu', 'canteenPlans', 'bookReservations', 'workflowRules', 'questionBank', 'onlineTests', 'onlineTestKeys', 'onlineAttempts', 'pickupPeople', 'pickupLogs', 'feeReminders'];
 
 // School data pack: every list as a CSV file inside one ZIP (stored, not compressed) built here in the browser.
 const CRC_TABLE = (() => {
@@ -8111,6 +8276,8 @@ const resetOwnerLists = () => {
   backupLog = null;
   auditItems = [];
   for (const api of ownerLists) api.reset();
+  reminderPlan = []; reminderSent = []; reminderList.replaceChildren(); reminderHistory.replaceChildren(); reminderStatus.textContent = '';
+  document.querySelector('#backup-auto').textContent = '';
   ledgerBody.replaceChildren(); ledgerRows = []; ledgerSummary.textContent = ''; ledgerStatus.textContent = '';
   staffProfilesBody.replaceChildren(); staffProfilesStatus.textContent = '';
   consentsDetail.replaceChildren();
@@ -8909,6 +9076,12 @@ onAuthStateChanged(auth, async (user) => {
   portalMessagesList.replaceChildren();
   messageForm.reset();
   portalMessaging = undefined;
+  portalPush = undefined;
+  portalRemindersSection.hidden = true;
+  portalRemindersStatus.textContent = '';
+  portalRemindersList.replaceChildren();
+  portalPushSection.hidden = true;
+  portalPushStatus.textContent = '';
   stopPortalTest();
   portalTestsSection.hidden = true;
   portalTestsStatus.textContent = '';
@@ -9599,10 +9772,10 @@ const PORTAL_PLAN = {
   parent: {
     title: 'Parent Dashboard', tagline: 'Stay Connected \u2022 Monitor Progress \u2022 Support Your Child',
     order: ['portal-profile', 'portal-attendance', 'portal-homework', 'portal-timetable', 'portal-results', 'portal-assessments', 'portal-fees',
-      'portal-materials', 'portal-life', 'portal-leave', 'portal-messages', 'portal-consents', 'portal-tests', 'portal-pickup', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
+      'portal-materials', 'portal-life', 'portal-leave', 'portal-messages', 'portal-consents', 'portal-reminders', 'portal-push', 'portal-tests', 'portal-pickup', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
     names: { 'portal-profile': 'My Child', 'portal-attendance': 'Attendance', 'portal-homework': 'Homework & Assignments', 'portal-timetable': 'Timetable',
       'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-fees': 'Fees & Payments', 'portal-materials': 'Study Materials',
-      'portal-life': 'Bus & Route', 'portal-leave': 'Leave Application', 'portal-messages': 'Messages & Communication', 'portal-consents': 'Consent Forms', 'portal-tests': 'Online Tests', 'portal-pickup': 'Pickup Authorisation', 'portal-ptm': 'Parent-Teacher Meetings',
+      'portal-life': 'Bus & Route', 'portal-leave': 'Leave Application', 'portal-messages': 'Messages & Communication', 'portal-consents': 'Consent Forms', 'portal-tests': 'Online Tests', 'portal-pickup': 'Pickup Authorisation', 'portal-reminders': 'Fee Reminders', 'portal-push': 'Phone Notifications', 'portal-ptm': 'Parent-Teacher Meetings',
       'portal-notices': 'Notices', 'portal-calendar': 'School Calendar', 'portal-events': 'School Events' },
     quick: [['Exams & Results', 'portal-results'], ['Fees & Payments', 'portal-fees'], ['Bus & Route', 'portal-life'], ['Apply for Leave', 'portal-leave']],
   },

@@ -937,6 +937,34 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // Fee reminders (feature 148). feeReminders/{id}: a reminder the owner sent for a student with dues. The owner writes them;
+      // the owner and principal read all; a linked family reads its own student's (query by studentId).
+      match /feeReminders/{docId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('FR-[A-Za-z0-9-]{1,27}') && validFeeReminder(request.resource.data)
+          && request.resource.data.by == request.auth.uid
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow update: if false;
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Phone notifications (feature 150). pushTokens/{uid}: the notification address of a family's phone, kept by that family only.
+      // The server reads these (with admin rights) to send notices and fee reminders.
+      match /pushTokens/{uid} {
+        allow get: if request.auth != null && request.auth.uid == uid && familyActive();
+        allow create, update: if request.auth != null && request.auth.uid == uid && validPushToken(request.resource.data)
+          && familyOwns(request.resource.data.studentId);
+        allow delete: if request.auth != null && request.auth.uid == uid;
+        allow list: if false;
+      }
+
+      // Automatic backup result (feature 086). settings/autoBackup is written only by the nightly server job.
+      match /settings/autoBackup {
+        allow get: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update, delete: if false;
+      }
+
       // Assets register. assets/{id}: name, place, cost, condition, boughtOn. Owner only.
       match /assets/{docId} {
         allow get, list: if request.auth != null && isSchoolViewer(schoolId);
@@ -1880,6 +1908,25 @@ service cloud.firestore {
         && item.by is string && item.at is timestamp
         && (!item.keys().hasAny(['score']) || (item.score is int && item.score >= 0 && item.score <= 1200))
         && (!item.keys().hasAny(['gradedOn']) || dateText(item.gradedOn));
+    }
+
+    function validFeeReminder(item) {
+      return item.keys().hasOnly(['studentId', 'studentName', 'amount', 'createdOn', 'message', 'by'])
+        && item.keys().hasAll(['studentId', 'studentName', 'amount', 'createdOn', 'by'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
+        && item.amount is int && item.amount >= 1 && item.amount <= 100000000
+        && dateText(item.createdOn) && item.by is string
+        && (!item.keys().hasAny(['message']) || (item.message is string && item.message.size() <= 200));
+    }
+
+    function validPushToken(item) {
+      return item.keys().hasOnly(['token', 'studentId', 'classId', 'updatedOn'])
+        && item.keys().hasAll(['token', 'studentId', 'updatedOn'])
+        && item.token is string && item.token.size() >= 20 && item.token.size() <= 600
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && dateText(item.updatedOn)
+        && (!item.keys().hasAny(['classId']) || (item.classId is string && item.classId.matches('[A-Za-z0-9-]{1,30}')));
     }
 
     function pad2(n) {

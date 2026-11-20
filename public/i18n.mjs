@@ -1434,6 +1434,24 @@ Object.assign(BN, {
   "Recent hand-overs": "সাম্প্রতিক হস্তান্তর",
   "Class comparison": "শ্রেণি তুলনা",
 });
+Object.assign(HI, {
+  "Fee Reminders": "फ़ीस अनुस्मारक",
+  "Phone Notifications": "फ़ोन सूचनाएँ",
+  "Find students with dues": "बकाया वाले विद्यार्थी खोजें",
+  "Send reminders": "अनुस्मारक भेजें",
+  "Recently sent": "हाल में भेजे गए",
+  "Turn on notifications": "सूचनाएँ चालू करें",
+  "Turn off notifications": "सूचनाएँ बंद करें",
+});
+Object.assign(BN, {
+  "Fee Reminders": "ফি অনুস্মারক",
+  "Phone Notifications": "ফোন বিজ্ঞপ্তি",
+  "Find students with dues": "বকেয়া থাকা শিক্ষার্থী খুঁজুন",
+  "Send reminders": "অনুস্মারক পাঠান",
+  "Recently sent": "সম্প্রতি পাঠানো",
+  "Turn on notifications": "বিজ্ঞপ্তি চালু করুন",
+  "Turn off notifications": "বিজ্ঞপ্তি বন্ধ করুন",
+});
 const LANGS = { en: null, hi: HI, bn: BN };
 const originals = new WeakMap(); // text node -> its English text
 let current = 'en';
