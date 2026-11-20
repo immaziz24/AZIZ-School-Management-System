@@ -1074,6 +1074,158 @@
         </form>
         <ul id="complaints-list"></ul>
       </section>
+      <section id="hostelrooms" aria-labelledby="hostelrooms-title" hidden>
+        <h3 id="hostelrooms-title">Hostel Rooms</h3>
+        <p>Rooms and beds for boarders. Allocate students in Hostel Allocation.</p>
+        <p id="hostelrooms-status" role="status"></p>
+        <form id="hostelrooms-form">
+          <p><label>Room <input name="name" type="text" maxlength="40" required></label></p>
+          <p><label>Block (optional) <input name="block" type="text" maxlength="40"></label></p>
+          <p><label>Beds <input name="beds" type="number" min="1" max="50" step="1" required></label></p>
+          <p><label>Monthly fee (Rs, optional) <input name="monthlyFee" type="number" min="0" max="1000000" step="1"></label></p>
+
+          <button type="submit">Save room</button>
+        </form>
+        <ul id="hostelrooms-list"></ul>
+      </section>
+      <section id="hostelstays" aria-labelledby="hostelstays-title" hidden>
+        <h3 id="hostelstays-title">Hostel Allocation</h3>
+        <p>Give a student a bed. A room cannot take more students than it has beds. Mark a student as left when they move out.</p>
+        <p id="hostelstays-status" role="status"></p>
+        <form id="hostelstays-form">
+          <p><label>Room <select name="roomId"></select></label></p>
+          <p><label>Student <select name="studentId"></select></label></p>
+          <p><label>From <input name="from" type="date" required></label></p>
+
+          <button type="submit">Allocate bed</button>
+        </form>
+        <ul id="hostelstays-list"></ul>
+      </section>
+      <section id="canteenmenu" aria-labelledby="canteenmenu-title" hidden>
+        <h3 id="canteenmenu-title">Canteen Menu</h3>
+        <p>The weekly menu by day and meal.</p>
+        <p id="canteenmenu-status" role="status"></p>
+        <form id="canteenmenu-form">
+          <p><label>Day <select name="day"><option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option><option>Sunday</option></select></label></p>
+          <p><label>Meal <select name="meal"><option>Breakfast</option><option>Lunch</option><option>Snacks</option><option>Dinner</option></select></label></p>
+          <p><label>Items <input name="items" type="text" maxlength="300" required></label></p>
+          <p><label>Price (Rs, optional) <input name="price" type="number" min="0" max="100000" step="1"></label></p>
+
+          <button type="submit">Save menu item</button>
+        </form>
+        <ul id="canteenmenu-list"></ul>
+      </section>
+      <section id="canteenplans" aria-labelledby="canteenplans-title" hidden>
+        <h3 id="canteenplans-title">Canteen Meal Plans</h3>
+        <p>A student on a monthly meal plan, with the monthly fee.</p>
+        <p id="canteenplans-status" role="status"></p>
+        <form id="canteenplans-form">
+          <p><label>Student <select name="studentId"></select></label></p>
+          <p><label>Plan <input name="plan" type="text" maxlength="40" required></label></p>
+          <p><label>Monthly fee (Rs) <input name="monthlyFee" type="number" min="0" max="1000000" step="1" required></label></p>
+          <p><label>From <input name="from" type="date" required></label></p>
+
+          <button type="submit">Add meal plan</button>
+        </form>
+        <ul id="canteenplans-list"></ul>
+      </section>
+      <section id="bookreservations" aria-labelledby="bookreservations-title" hidden>
+        <h3 id="bookreservations-title">Book Reservations</h3>
+        <p>A student waits for a book that is out. The waiting list is in order of reservation date; the first in line is shown first.</p>
+        <p id="bookreservations-status" role="status"></p>
+        <form id="bookreservations-form">
+          <p><label>Book <select name="bookId"></select></label></p>
+          <p><label>Student <select name="studentId"></select></label></p>
+
+          <button type="submit">Reserve book</button>
+        </form>
+        <ul id="bookreservations-list"></ul>
+      </section>
+      <section id="workflowrules" aria-labelledby="workflowrules-title" hidden>
+        <h3 id="workflowrules-title">Approval Rules</h3>
+        <p>An expense at or above the amount here is saved as waiting for approval instead of counting at once. You approve it in Expenses.</p>
+        <p id="workflowrules-status" role="status"></p>
+        <form id="workflowrules-form">
+          <p><label>Rule name <input name="name" type="text" maxlength="80" required></label></p>
+          <p><label>Approval needed from (Rs) <input name="over" type="number" min="1" max="100000000" step="1" required></label></p>
+
+          <button type="submit">Save rule</button>
+        </form>
+        <ul id="workflowrules-list"></ul>
+      </section>
+      <section id="questionbank" aria-labelledby="questionbank-title" hidden>
+        <h3 id="questionbank-title">Question Bank</h3>
+        <p>Multiple-choice questions you can reuse in online tests. Fill at least two options.</p>
+        <p id="questionbank-status" role="status"></p>
+        <form id="questionbank-form">
+          <p><label>Class <select name="classId"></select></label></p>
+          <p><label>Subject (optional) <input name="subjectName" type="text" maxlength="60"></label></p>
+          <p><label>Question <input name="text" type="text" maxlength="300" required></label></p>
+          <p><label>Option 1 <input name="opt1" type="text" maxlength="120" required></label></p>
+          <p><label>Option 2 <input name="opt2" type="text" maxlength="120" required></label></p>
+          <p><label>Option 3 <input name="opt3" type="text" maxlength="120"></label></p>
+          <p><label>Option 4 <input name="opt4" type="text" maxlength="120"></label></p>
+          <p><label>Right answer <select name="correct"><option value="1">Option 1</option><option value="2">Option 2</option><option value="3">Option 3</option><option value="4">Option 4</option></select></label></p>
+          <p><label>Marks <input name="marks" type="number" min="1" max="20" step="1" value="1" required></label></p>
+
+          <button type="submit">Save question</button>
+        </form>
+        <ul id="questionbank-list"></ul>
+      </section>
+      <section id="onlinetests" aria-labelledby="onlinetests-title" hidden>
+        <h3 id="onlinetests-title">Online Tests</h3>
+        <p>Build a test from the question bank for one class. A test starts as a draft; open it so students can take it from their dashboard. Students get one attempt. After the test closes, press Grade to score every answer sheet.</p>
+        <p id="onlinetests-status" role="status"></p>
+        <form id="onlinetests-form">
+          <p><label>Title <input name="title" type="text" maxlength="120" required></label></p>
+          <p><label>Class <select name="classId"></select></label></p>
+          <p><label>Minutes allowed <input name="durationMin" type="number" min="5" max="180" step="1" value="20" required></label></p>
+          <p><label>Questions (hold Ctrl to choose several) <select name="questionIds" multiple size="8"></select></label></p>
+
+          <button type="submit">Create test</button>
+        </form>
+        <ul id="onlinetests-list"></ul>
+        <div id="onlinetests-detail" role="status"></div>
+      </section>
+      <section id="pickuppeople" aria-labelledby="pickuppeople-title" hidden>
+        <h3 id="pickuppeople-title">Student Pickup People</h3>
+        <p>People allowed to collect a student. Parents can also add their own from the Parent Dashboard. Each person gets a 6-digit code to show at the gate.</p>
+        <p id="pickuppeople-status" role="status"></p>
+        <form id="pickuppeople-form">
+          <p><label>Student <select name="studentId"></select></label></p>
+          <p><label>Name <input name="name" type="text" maxlength="80" required></label></p>
+          <p><label>Relation <input name="relation" type="text" maxlength="40" required></label></p>
+          <p><label>Phone (optional) <input name="phone" type="text" maxlength="20" inputmode="tel"></label></p>
+
+          <button type="submit">Add person</button>
+        </form>
+        <ul id="pickuppeople-list"></ul>
+      </section>
+      <section id="pickupgate" aria-labelledby="pickupgate-title" hidden>
+        <h3 id="pickupgate-title">Pickup Gate Check</h3>
+        <p>Type the 6-digit code the person shows, or scan their QR code. The student and the person are shown; press Hand over to record it.</p>
+        <p id="pickupgate-status" role="status"></p>
+        <p><label>Code <input id="pickupgate-code" type="text" inputmode="numeric" maxlength="20" autocomplete="off"></label>
+          <button id="pickupgate-check" type="button">Check</button></p>
+        <div id="pickupgate-result" role="status"></div>
+        <h4>Recent hand-overs</h4>
+        <ul id="pickupgate-log"></ul>
+      </section>
+      <section id="riskboard" aria-labelledby="riskboard-title" hidden>
+        <h3 id="riskboard-title">Risk and Benchmarks</h3>
+        <p>Students who may need help, worked out from the last 30 days of attendance, exam marks and overdue fees. This is a pointer for a conversation, not a judgement. Class comparisons are hidden for any class with fewer than 5 students.</p>
+        <p id="riskboard-status" role="status"></p>
+        <p><button id="riskboard-run" type="button">Analyse</button> <button id="riskboard-csv" type="button">Download risk list (CSV)</button></p>
+        <table>
+          <thead><tr><th>Student</th><th>Class</th><th>Attendance (30 days)</th><th>Exam average</th><th>Fees overdue</th><th>Signals</th></tr></thead>
+          <tbody id="riskboard-body"></tbody>
+        </table>
+        <h4>Class comparison</h4>
+        <table>
+          <thead><tr><th>Class</th><th>Students</th><th>Attendance</th><th>Exam average</th><th>Fees overdue</th></tr></thead>
+          <tbody id="riskboard-classes"></tbody>
+        </table>
+      </section>
       <section id="assets" aria-labelledby="assets-title" hidden>
         <h3 id="assets-title">Assets Register</h3>
         <p id="assets-status" role="status"></p>
@@ -1560,6 +1712,30 @@
         <p id="portal-profile-status" role="status"></p>
         <ul id="portal-profile-list"></ul>
       </section>
+      <section id="portal-tests" aria-labelledby="portal-tests-title" hidden>
+        <h3 id="portal-tests-title">Online Tests</h3>
+        <p id="portal-tests-status" role="status"></p>
+        <ul id="portal-tests-list"></ul>
+        <div id="portal-test-run" hidden>
+          <h4 id="portal-test-title"></h4>
+          <p id="portal-test-timer" role="timer"></p>
+          <form id="portal-test-form"></form>
+          <button id="portal-test-submit" type="button">Submit answers</button>
+        </div>
+      </section>
+      <section id="portal-pickup" aria-labelledby="portal-pickup-title" hidden>
+        <h3 id="portal-pickup-title">Who Can Pick Up My Child</h3>
+        <p>Add the people allowed to collect your child. Each gets a 6-digit code and a QR code to show at the gate. Switch a person off or remove them at any time.</p>
+        <p id="portal-pickup-status" role="status"></p>
+        <form id="portal-pickup-form">
+          <p><label>Name <input name="name" type="text" maxlength="80" required></label></p>
+          <p><label>Relation <input name="relation" type="text" maxlength="40" required></label></p>
+          <p><label>Phone (optional) <input name="phone" type="text" maxlength="20" inputmode="tel"></label></p>
+          <button type="submit">Add person</button>
+        </form>
+        <ul id="portal-pickup-list"></ul>
+        <canvas id="portal-pickup-qr" width="200" height="200" hidden></canvas>
+      </section>
       <section id="portal-idcard" aria-labelledby="portal-idcard-title" hidden>
         <h3 id="portal-idcard-title">Digital ID Card</h3>
         <p id="portal-idcard-status" role="status"></p>
@@ -1750,14 +1926,14 @@
       box.focus();
     });
     try {
-      await import('./ui.mjs?v=batch-62');
-      await import('./i18n.mjs?v=batch-62');
+      await import('./ui.mjs?v=batch-63');
+      await import('./i18n.mjs?v=batch-63');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-62');
-      await import('./platform.mjs?v=batch-62');
+      await import('./sign-in.mjs?v=batch-63');
+      await import('./platform.mjs?v=batch-63');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

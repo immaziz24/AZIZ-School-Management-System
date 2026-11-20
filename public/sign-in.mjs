@@ -1167,6 +1167,8 @@ async function loadPortal(tools, request) {
     loadPortalLife(tools, request, studentId);
     loadPortalCommunity(tools, request, studentId);
     loadPortalConsents(tools, request, studentId);
+    loadPortalTests(tools, request, studentId);
+    loadPortalPickup(tools, request, studentId);
     loadPortalEvents(tools, request, studentId);
     loadPortalCoursework(tools, request, studentId);
     loadPortalLeave(tools, request, studentId);
@@ -2623,7 +2625,7 @@ async function postQrCode(request) {
     await setDoc(doc(tools.schoolRef, 'settings', 'qrCode'), { code, ...(qrLast ? { prev: qrLast } : {}), at: serverTimestamp() });
     qrLast = code;
     if (request !== schoolRequest || !qrTimer) return;
-    const { drawQr } = await import('./qr.mjs?v=batch-61');
+    const { drawQr } = await import('./qr.mjs?v=batch-63');
     drawQr(qrCanvas, 'AZIZ:' + code, 280);
     qrCanvas.hidden = false;
     qrCodeText.textContent = code.slice(0, 4) + ' ' + code.slice(4);
@@ -4537,8 +4539,23 @@ function renderLibrary() {
     button.addEventListener('click', () => runLibraryAction(() => academic.save('loans', record.id, { ...loan, returnedOn: localToday() }),
       'Book returned.'));
     const title = libBooks.find((book) => book.id === loan.bookId)?.data().title ?? loan.bookId;
+    const buttons = document.createDocumentFragment();
+    buttons.append(button);
+    // Renewal (feature 137): 14 more days, up to 3 times, unless someone is waiting for the book.
+    if ((loan.renewals ?? 0) < 3) {
+      const renew = document.createElement('button');
+      renew.type = 'button';
+      renew.textContent = 'Renew 14 days';
+      renew.addEventListener('click', () => {
+        const waiting = (lists.bookreservations?.items ?? []).some((found) => found.data().bookId === loan.bookId && ['waiting', 'ready'].includes(found.data().status));
+        if (waiting) { libraryStatus.textContent = 'Someone is waiting for this book, so it cannot be renewed.'; return; }
+        const from = loan.dueOn > today ? loan.dueOn : today;
+        runLibraryAction(() => academic.save('loans', record.id, { ...loan, dueOn: addDays(from, 14), renewals: (loan.renewals ?? 0) + 1 }), 'Renewed.');
+      });
+      buttons.append(renew);
+    }
     listItem(loanList, title + ' - ' + nameOfStudent(loan.studentId) + ' - due ' + loan.dueOn
-      + (loan.dueOn < today ? ' (OVERDUE)' : ''), button);
+      + (loan.renewals ? ' (renewed ' + loan.renewals + ' time' + (loan.renewals > 1 ? 's' : '') + ')' : '') + (loan.dueOn < today ? ' (OVERDUE)' : ''), buttons);
   }
   if (!libBooks.length) libraryStatus.textContent = 'No books yet. Add the first one above.';
 }
@@ -4801,9 +4818,11 @@ document.addEventListener('mod-open', (event) => {
 
 // Owner can change any saved record in these lists. Records that keep their number (like a payment receipt)
 // are not here: the rules only allow a payment to be voided, never edited.
-const NO_EDIT = new Set(['messages', 'enquiries', 'eventRegistrations', 'activityMembers', 'scholarshipApps', 'consentForms']);
+const NO_EDIT = new Set(['messages', 'enquiries', 'eventRegistrations', 'activityMembers', 'scholarshipApps', 'consentForms',
+  'hostelStays', 'canteenPlans', 'bookReservations', 'questionBank', 'onlineTests', 'pickupPeople']);
 const KEEP_ID = new Set(['routes', 'activities', 'inventory', 'expenses', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound',
-  'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'alumni', 'ptmSlots', 'storageRecords', 'scholarships']);
+  'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'alumni', 'ptmSlots', 'storageRecords', 'scholarships',
+  'hostelRooms', 'canteenMenu', 'workflowRules']);
 function ownerList(cfg) {
   const section = document.querySelector('#' + cfg.id);
   const status = document.querySelector('#' + cfg.id + '-status');
@@ -4939,7 +4958,8 @@ function ownerList(cfg) {
       return;
     }
     act(async () => {
-      await academic.save(cfg.collection, built.id, built.data);
+      if (built.also) await academic.commit([{ path: [cfg.collection, built.id], data: built.data }, ...built.also]);
+      else await academic.save(cfg.collection, built.id, built.data);
       form.reset();
     }, cfg.saved ?? 'Saved.');
   });
@@ -5180,7 +5200,8 @@ lists.expenses = ownerList({
     }
     return { id: newId('EX'), data: { date: text(fields, 'date'), category: text(fields, 'category'), amount, ...optional(fields, 'note', 'vendor'),
       ...(PAY_MODE[text(fields, 'payMode')] ? { payMode: text(fields, 'payMode') } : {}),
-      ...(['approved', 'pending'].includes(text(fields, 'status')) ? { status: text(fields, 'status') } : {}) } };
+      // An approval rule (feature 156) makes a large expense wait for the owner's approval.
+      ...(amount >= approvalThreshold() ? { status: 'pending' } : ['approved', 'pending'].includes(text(fields, 'status')) ? { status: text(fields, 'status') } : {}) } };
   },
   line: (item) => item.date + ' - ' + item.category + ' - ' + rupees(item.amount) + (item.vendor ? ' - paid to ' + item.vendor : '')
     + (item.payMode ? ' - ' + PAY_MODE[item.payMode] : '') + (item.status === 'pending' ? ' - WAITING FOR APPROVAL' : item.status === 'rejected' ? ' - REJECTED' : '')
@@ -5619,6 +5640,409 @@ lists.consents = ownerList({
     toggle.addEventListener('click', () => act(() => academic.save('consentForms', record.id, { ...item, status: item.status === 'open' ? 'closed' : 'open' }), 'Updated.'));
     return [answers, toggle];
   },
+});
+
+// ---------- Batch 63 ----------
+const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const MEAL_ORDER = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
+const actionButton = (label, onClick) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  return button;
+};
+
+// Hostel (feature 144).
+const stayingIn = (roomId) => (lists.hostelstays?.items ?? []).filter((record) => record.data().roomId === roomId && record.data().status === 'staying').length;
+lists.hostelrooms = ownerList({
+  id: 'hostelrooms', collection: 'hostelRooms', empty: 'No hostel rooms yet.', saved: 'Room saved.',
+  sort: (a, b) => a.data().name.localeCompare(b.data().name, undefined, { numeric: true }),
+  build: (fields) => {
+    const beds = wholeNumber(fields, 'beds');
+    const fee = text(fields, 'monthlyFee') ? wholeNumber(fields, 'monthlyFee') : undefined;
+    if (!text(fields, 'name') || !(beds >= 1 && beds <= 50) || (fee !== undefined && !(fee >= 0))) return { error: 'Enter the room, the number of beds and a whole-rupee fee if any.' };
+    return { id: newId('HR'), data: { name: text(fields, 'name'), beds, ...optional(fields, 'block'), ...(fee === undefined ? {} : { monthlyFee: fee }) } };
+  },
+  line: (item, record) => item.name + (item.block ? ' (' + item.block + ')' : '') + ' - ' + item.beds + ' beds'
+    + (lists.hostelstays?.loaded ? ' - ' + stayingIn(record.id) + ' in use' : '') + (item.monthlyFee ? ' - ' + rupees(item.monthlyFee) + ' a month' : ''),
+});
+lists.hostelstays = ownerList({
+  id: 'hostelstays', collection: 'hostelStays', empty: 'No one is allocated a bed yet.', saved: 'Bed allocated.', noEdit: true,
+  sort: (a, b) => (a.data().status === 'left') - (b.data().status === 'left') || a.data().roomName.localeCompare(b.data().roomName, undefined, { numeric: true }),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('roomId'), [...lists.hostelrooms.items].sort((a, b) => a.data().name.localeCompare(b.data().name, undefined, { numeric: true })),
+      (item) => item.name + ' (' + item.beds + ' beds' + (lists.hostelstays.loaded ? ', ' + (item.beds - stayingIn(item.id)) + ' free' : '') + ')');
+    fillSelect(form.elements.namedItem('studentId'), activeStudents(), studentOption);
+    if (!form.elements.namedItem('from').value) form.elements.namedItem('from').value = localToday();
+  },
+  build: (fields, items) => {
+    const room = lists.hostelrooms.items.find((record) => record.id === text(fields, 'roomId'));
+    const student = pickedStudent(fields);
+    if (!room || !student || !DATE_TEXT.test(text(fields, 'from'))) return { error: 'Choose the room, the student and the date.' };
+    if (items.some((record) => record.data().studentId === student.id && record.data().status === 'staying')) return { error: student.data().name + ' already has a bed. Mark them as moved out first.' };
+    const used = items.filter((record) => record.data().roomId === room.id && record.data().status === 'staying').length;
+    if (used >= room.data().beds) return { error: room.data().name + ' is full (' + room.data().beds + ' beds).' };
+    return { id: newId('HS'), data: { studentId: student.id, studentName: student.data().name, roomId: room.id, roomName: room.data().name, from: text(fields, 'from'), status: 'staying' } };
+  },
+  line: (item) => item.studentName + ' - ' + item.roomName + ' - from ' + item.from + (item.status === 'left' ? ' - left ' + (item.leftOn ?? '') : ' - staying'),
+  extra: (record, act) => {
+    if (record.data().status !== 'staying' || viewOnly) return [];
+    return [actionButton('Moved out', () => act(() => academic.save('hostelStays', record.id, { ...record.data(), status: 'left', leftOn: localToday() }), 'Marked as moved out.'))];
+  },
+});
+
+// Canteen (feature 145).
+lists.canteenmenu = ownerList({
+  id: 'canteenmenu', collection: 'canteenMenu', empty: 'No menu items yet.', saved: 'Menu item saved.',
+  sort: (a, b) => DAY_ORDER.indexOf(a.data().day) - DAY_ORDER.indexOf(b.data().day) || MEAL_ORDER.indexOf(a.data().meal) - MEAL_ORDER.indexOf(b.data().meal),
+  build: (fields) => {
+    const price = text(fields, 'price') ? wholeNumber(fields, 'price') : undefined;
+    if (!DAY_ORDER.includes(text(fields, 'day')) || !MEAL_ORDER.includes(text(fields, 'meal')) || !text(fields, 'items') || (price !== undefined && !(price >= 0))) {
+      return { error: 'Choose the day and the meal, enter the items, and a whole-rupee price if any.' };
+    }
+    return { id: newId('CM'), data: { day: text(fields, 'day'), meal: text(fields, 'meal'), items: text(fields, 'items'), ...(price === undefined ? {} : { price }) } };
+  },
+  line: (item) => item.day + ' ' + item.meal + ': ' + item.items + (item.price !== undefined ? ' - ' + rupees(item.price) : ''),
+});
+lists.canteenplans = ownerList({
+  id: 'canteenplans', collection: 'canteenPlans', empty: 'No meal plans yet.', saved: 'Meal plan added.', noEdit: true,
+  sort: (a, b) => (b.data().active === true) - (a.data().active === true) || a.data().studentName.localeCompare(b.data().studentName),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('studentId'), activeStudents(), studentOption);
+    if (!form.elements.namedItem('from').value) form.elements.namedItem('from').value = localToday();
+  },
+  build: (fields) => {
+    const student = pickedStudent(fields);
+    const fee = wholeNumber(fields, 'monthlyFee');
+    if (!student || !text(fields, 'plan') || !(fee >= 0) || !DATE_TEXT.test(text(fields, 'from'))) return { error: 'Choose the student, name the plan, and enter the fee in whole rupees.' };
+    return { id: newId('CP'), data: { studentId: student.id, studentName: student.data().name, plan: text(fields, 'plan'), monthlyFee: fee, from: text(fields, 'from'), active: true } };
+  },
+  line: (item) => item.studentName + ' - ' + item.plan + ' - ' + rupees(item.monthlyFee) + ' a month - from ' + item.from + (item.active ? '' : ' - STOPPED'),
+  extra: (record, act) => viewOnly ? [] : [actionButton(record.data().active ? 'Stop plan' : 'Restart plan',
+    () => act(() => academic.save('canteenPlans', record.id, { ...record.data(), active: !record.data().active }), 'Updated.'))],
+});
+
+// Book reservations (feature 137): a waiting list per book, first come first served.
+const reservationLine = (record) => {
+  const item = record.data();
+  const queue = (lists.bookreservations?.items ?? []).filter((other) => other.data().bookId === item.bookId && ['waiting', 'ready'].includes(other.data().status))
+    .sort((a, b) => a.data().createdOn.localeCompare(b.data().createdOn) || a.id.localeCompare(b.id));
+  const place = queue.findIndex((other) => other.id === record.id);
+  return place >= 0 ? ' - number ' + (place + 1) + ' in line' : '';
+};
+lists.bookreservations = ownerList({
+  id: 'bookreservations', collection: 'bookReservations', empty: 'No reservations.', saved: 'Reserved.', noEdit: true,
+  sort: (a, b) => (['waiting', 'ready'].includes(b.data().status)) - (['waiting', 'ready'].includes(a.data().status)) || a.data().createdOn.localeCompare(b.data().createdOn) || a.id.localeCompare(b.id),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('bookId'), [...libBooks].sort((a, b) => a.data().title.localeCompare(b.data().title)), (book) => book.title);
+    fillSelect(form.elements.namedItem('studentId'), activeStudents(), studentOption);
+  },
+  build: (fields, items) => {
+    const book = libBooks.find((record) => record.id === text(fields, 'bookId'));
+    const student = pickedStudent(fields);
+    if (!book || !student) return { error: 'Choose the book and the student.' };
+    if (items.some((record) => record.data().bookId === book.id && record.data().studentId === student.id && ['waiting', 'ready'].includes(record.data().status))) {
+      return { error: student.data().name + ' is already waiting for this book.' };
+    }
+    return { id: newId('BR'), data: { bookId: book.id, bookTitle: book.data().title, studentId: student.id, studentName: student.data().name, createdOn: localToday(), status: 'waiting' } };
+  },
+  line: (item, record) => item.createdOn + ' - ' + item.bookTitle + ' - ' + item.studentName + ' - ' + item.status.toUpperCase() + reservationLine(record),
+  canRemove: (record) => !['waiting', 'ready'].includes(record.data().status),
+  extra: (record, act) => {
+    const item = record.data();
+    if (viewOnly || !['waiting', 'ready'].includes(item.status)) return [];
+    const step = (label, status, message) => actionButton(label, () => act(() => academic.save('bookReservations', record.id, { ...item, status }), message));
+    return [...(item.status === 'waiting' ? [step('Book is ready', 'ready', 'Marked ready. Tell the student.')] : [step('Collected', 'collected', 'Marked collected.')]),
+      step('Cancel', 'cancelled', 'Cancelled.')];
+  },
+});
+
+// Approval rules (feature 156): an expense at or above the amount waits for the owner's approval.
+lists.workflowrules = ownerList({
+  id: 'workflowrules', collection: 'workflowRules', empty: 'No approval rules yet. Every expense counts at once.', saved: 'Rule saved.',
+  sort: (a, b) => a.data().over - b.data().over,
+  build: (fields) => {
+    const over = wholeNumber(fields, 'over');
+    if (!text(fields, 'name') || !(over >= 1 && over <= 100000000)) return { error: 'Name the rule and enter the amount in whole rupees.' };
+    return { id: newId('WR'), data: { name: text(fields, 'name'), over, kind: 'expense' } };
+  },
+  line: (item) => item.name + ' - an expense of ' + rupees(item.over) + ' or more waits for approval',
+});
+const approvalThreshold = () => Math.min(...(lists.workflowrules?.items ?? []).map((record) => record.data()).filter((rule) => rule.kind === 'expense').map((rule) => rule.over), Infinity);
+
+// Question bank and online tests (feature 139).
+lists.questionbank = ownerList({
+  id: 'questionbank', collection: 'questionBank', empty: 'No questions yet.', saved: 'Question saved.', noEdit: true,
+  sort: (a, b) => nameOfClass(a.data().classId).localeCompare(nameOfClass(b.data().classId)) || a.data().text.localeCompare(b.data().text),
+  prepare: (form) => fillSelect(form.elements.namedItem('classId'), [...examData.classes].sort(byClassOrder), (item) => item.name),
+  build: (fields) => {
+    const options = [1, 2, 3, 4].map((number) => text(fields, 'opt' + number));
+    const chosen = Number(text(fields, 'correct')) - 1;
+    const marks = wholeNumber(fields, 'marks');
+    if (!text(fields, 'classId') || !text(fields, 'text') || !(marks >= 1 && marks <= 20)) return { error: 'Choose the class, write the question and give marks from 1 to 20.' };
+    const used = options.filter(Boolean);
+    if (options.findIndex((option, index) => !option && options.slice(index + 1).some(Boolean)) >= 0 || used.length < 2) return { error: 'Fill the options in order, with at least two.' };
+    if (!options[chosen]) return { error: 'The right answer must be one of the options you filled.' };
+    return { id: newId('QB'), data: { classId: text(fields, 'classId'), text: text(fields, 'text'), options: used, correct: chosen, marks, ...optional(fields, 'subjectName') } };
+  },
+  line: (item) => '[' + nameOfClass(item.classId) + (item.subjectName ? ', ' + item.subjectName : '') + '] ' + item.text + ' - ' + item.options.map((option, index) => (index + 1) + ') ' + option).join('  ')
+    + ' - right: ' + (item.correct + 1) + ' - ' + item.marks + ' mark(s)',
+});
+const onlineDetail = document.querySelector('#onlinetests-detail');
+function fillQuestionPicker() {
+  const select = document.querySelector('#onlinetests-form').elements.namedItem('questionIds');
+  const chosen = new Set([...select.selectedOptions].map((option) => option.value));
+  select.replaceChildren();
+  for (const record of [...lists.questionbank.items].sort((a, b) => nameOfClass(a.data().classId).localeCompare(nameOfClass(b.data().classId)) || a.data().text.localeCompare(b.data().text))) {
+    const option = new Option('[' + nameOfClass(record.data().classId) + '] ' + record.data().text.slice(0, 70) + ' (' + record.data().marks + ')', record.id);
+    option.selected = chosen.has(record.id);
+    select.append(option);
+  }
+}
+const TEST_STAGE = { draft: 'draft, not visible to students', open: 'OPEN for students', closed: 'closed' };
+async function gradeTest(record) {
+  const request = schoolRequest;
+  const { collection, doc, getDocFromServer, getDocsFromServer, query, where } = firestoreTools;
+  onlineDetail.textContent = 'Reading answer sheets.';
+  try {
+    // The principal cannot read the answer key, so the principal only sees scores the owner has already recorded.
+    const [keyDoc, sheets] = await Promise.all([viewOnly ? null : getDocFromServer(doc(academic.schoolRef, 'onlineTestKeys', record.id)),
+      getDocsFromServer(query(collection(academic.schoolRef, 'onlineAttempts'), where('testId', '==', record.id)))]);
+    if (request !== schoolRequest) return;
+    if (!viewOnly && !keyDoc.exists()) { onlineDetail.textContent = 'The answer key for this test is missing.'; return; }
+    const key = keyDoc ? keyDoc.data().key.split(',').map(Number) : [];
+    const marks = keyDoc ? keyDoc.data().marks.split(',').map(Number) : [];
+    const total = record.data().totalMarks;
+    const scored = sheets.docs.map((sheet) => {
+      const answers = sheet.data().answers.split(',');
+      const score = sheet.data().score ?? (keyDoc ? key.reduce((sum, right, index) => sum + (answers[index] === String(right) ? marks[index] : 0), 0) : null);
+      return { sheet, score };
+    });
+    const pending = scored.filter(({ sheet, score }) => sheet.data().score === undefined && score !== null);
+    if (pending.length && !viewOnly) {
+      // The sheet is written back unchanged except for the score and the date, so the answers and the time stay as the student sent them.
+      await academic.commit(pending.map(({ sheet, score }) => ({ path: ['onlineAttempts', sheet.id], data: { ...sheet.data(), score, gradedOn: localToday() } })), true);
+    }
+    if (request !== schoolRequest) return;
+    onlineDetail.replaceChildren();
+    const done = scored.filter((item) => item.score !== null);
+    const head = document.createElement('p');
+    head.textContent = record.data().title + ' - ' + scored.length + ' answer sheet(s), out of ' + total + ' marks'
+      + (done.length ? '. Average ' + Math.round(done.reduce((sum, item) => sum + item.score, 0) / done.length * 10) / 10 : '') + '.';
+    onlineDetail.append(head);
+    for (const { sheet, score } of scored.sort((a, b) => (b.score ?? -1) - (a.score ?? -1))) {
+      const row = document.createElement('p');
+      row.textContent = nameOfStudent(sheet.data().studentId) + ' - ' + (score === null ? 'not graded yet' : score + ' of ' + total);
+      onlineDetail.append(row);
+    }
+  } catch {
+    if (request === schoolRequest) onlineDetail.textContent = 'Could not grade the test. Try again.';
+  }
+}
+lists.onlinetests = ownerList({
+  id: 'onlinetests', collection: 'onlineTests', empty: 'No online tests yet.', saved: 'Test created as a draft. Open it when students may start.', noEdit: true,
+  sort: (a, b) => b.id.localeCompare(a.id),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('classId'), [...examData.classes].sort(byClassOrder), (item) => item.name);
+    fillQuestionPicker();
+  },
+  build: (fields) => {
+    const ids = fields.getAll('questionIds');
+    const minutes = wholeNumber(fields, 'durationMin');
+    if (!text(fields, 'title') || !text(fields, 'classId') || !(minutes >= 5 && minutes <= 180)) return { error: 'Enter a title, choose the class and a time from 5 to 180 minutes.' };
+    if (!lists.questionbank.loaded) return { error: 'Open Question Bank once so the questions load, then try again.' };
+    const questions = ids.map((id) => lists.questionbank.items.find((record) => record.id === id)?.data()).filter(Boolean);
+    if (!questions.length || questions.length > 60) return { error: 'Choose from 1 to 60 questions.' };
+    if (questions.some((item) => item.classId !== text(fields, 'classId'))) return { error: 'Every question must be for the class you chose.' };
+    const paper = JSON.stringify(questions.map((item) => ({ q: item.text, o: item.options, m: item.marks })));
+    if (paper.length > 30000) return { error: 'That is too much text for one test. Choose fewer questions.' };
+    const id = newId('OT');
+    return { id, data: { title: text(fields, 'title'), classId: text(fields, 'classId'), className: nameOfClass(text(fields, 'classId')).slice(0, 40), durationMin: minutes, status: 'draft',
+      paper, count: questions.length, totalMarks: questions.reduce((sum, item) => sum + item.marks, 0), createdOn: localToday() },
+    also: [{ path: ['onlineTestKeys', id], data: { key: questions.map((item) => item.correct).join(','), marks: questions.map((item) => item.marks).join(',') } }] };
+  },
+  line: (item) => item.createdOn + ' - ' + item.title + ' - ' + item.className + ' - ' + item.count + ' question(s), ' + item.totalMarks + ' marks, ' + item.durationMin + ' min - ' + TEST_STAGE[item.status],
+  canRemove: (record) => record.data().status === 'draft',
+  extra: (record, act) => {
+    const item = record.data();
+    const buttons = [];
+    if (!viewOnly) {
+      if (item.status === 'draft') buttons.push(actionButton('Open for students', () => act(() => academic.save('onlineTests', record.id, { ...item, status: 'open' }), 'Test is open.')));
+      if (item.status === 'open') buttons.push(actionButton('Close test', () => act(() => academic.save('onlineTests', record.id, { ...item, status: 'closed' }), 'Test closed.')));
+      if (item.status === 'closed') buttons.push(actionButton('Open again', () => act(() => academic.save('onlineTests', record.id, { ...item, status: 'open' }), 'Test is open again.')));
+    }
+    if (item.status !== 'draft') buttons.push(actionButton(viewOnly ? 'See results' : 'Grade and see results', () => gradeTest(record)));
+    return buttons;
+  },
+});
+document.querySelector('#onlinetests').addEventListener('mod-open', async () => { await lists.questionbank.ensure(); fillQuestionPicker(); });
+
+// Student pickup (feature 146). The code is 6 random digits; the parent's QR code carries "PICK:" and the code.
+const newPickupCode = () => {
+  const bytes = crypto.getRandomValues(new Uint32Array(1));
+  return String(bytes[0] % 1000000).padStart(6, '0');
+};
+lists.pickuppeople = ownerList({
+  id: 'pickuppeople', collection: 'pickupPeople', empty: 'No pickup people yet.', saved: 'Person added. Give them the code.', noEdit: true,
+  sort: (a, b) => studentName(a.data().studentId).localeCompare(studentName(b.data().studentId)) || a.data().name.localeCompare(b.data().name),
+  prepare: (form) => fillSelect(form.elements.namedItem('studentId'), activeStudents(), studentOption),
+  build: (fields, items) => {
+    const student = pickedStudent(fields);
+    const phone = text(fields, 'phone');
+    if (!student || !text(fields, 'name') || !text(fields, 'relation')) return { error: 'Choose the student and enter the name and relation.' };
+    if (phone && !/^[0-9+() -]{1,20}$/.test(phone)) return { error: 'The phone number can have only digits, spaces and + ( ) -.' };
+    let code = newPickupCode();
+    while (items.some((record) => record.data().code === code)) code = newPickupCode();
+    return { id: newId('PK'), data: { studentId: student.id, name: text(fields, 'name'), relation: text(fields, 'relation'), ...(phone ? { phone } : {}), code, active: true, createdBy: schoolUid } };
+  },
+  line: (item) => studentName(item.studentId) + ' - ' + item.name + ' (' + item.relation + ')' + (item.phone ? ' - ' + item.phone : '') + ' - code ' + item.code + (item.active ? '' : ' - SWITCHED OFF'),
+  extra: (record, act) => viewOnly ? [] : [actionButton(record.data().active ? 'Switch off' : 'Switch on',
+    () => act(() => academic.save('pickupPeople', record.id, { ...record.data(), active: !record.data().active }), 'Updated.'))],
+});
+const studentName = (id) => studentRecords.find((record) => record.id === id)?.data().name ?? id;
+
+const gateCode = document.querySelector('#pickupgate-code');
+const gateStatus = document.querySelector('#pickupgate-status');
+const gateResult = document.querySelector('#pickupgate-result');
+const gateLog = document.querySelector('#pickupgate-log');
+async function loadGateLog() {
+  const request = schoolRequest;
+  const { collection, getDocsFromServer } = firestoreTools;
+  try {
+    const saved = await getDocsFromServer(collection(academic.schoolRef, 'pickupLogs'));
+    if (request !== schoolRequest) return;
+    gateLog.replaceChildren();
+    for (const record of saved.docs.sort((a, b) => (b.data().at?.toMillis?.() ?? 0) - (a.data().at?.toMillis?.() ?? 0)).slice(0, 25)) {
+      const item = record.data();
+      listItem(gateLog, new Date(item.at?.toMillis?.() ?? 0).toLocaleString() + ' - ' + item.studentName + ' collected by ' + item.personName + ' (' + item.relation + ')');
+    }
+  } catch {
+    if (request === schoolRequest) gateStatus.textContent = 'Could not load the hand-over log.';
+  }
+}
+document.querySelector('#pickupgate').addEventListener('mod-open', async () => { await lists.pickuppeople.ensure(); loadGateLog(); });
+document.querySelector('#pickupgate-check').addEventListener('click', async () => {
+  gateResult.replaceChildren();
+  const code = (gateCode.value.match(/[0-9]{6}/) ?? [])[0];
+  if (!code) { gateStatus.textContent = 'Enter the 6-digit code.'; return; }
+  await lists.pickuppeople.ensure();
+  const matches = lists.pickuppeople.items.filter((found) => found.data().code === code);
+  if (!matches.length) { gateStatus.textContent = 'No one has this code. Do not hand the child over.'; return; }
+  const live = matches.filter((found) => found.data().active);
+  if (!live.length) { gateStatus.textContent = matches[0].data().name + ' has been switched off for ' + studentName(matches[0].data().studentId) + '. Do not hand the child over.'; return; }
+  gateStatus.textContent = live.length > 1 ? 'More than one person has this code. Pick the student who is being collected.' : '';
+  for (const record of live) {
+  const item = record.data();
+  const line = document.createElement('p');
+  line.textContent = 'OK: ' + studentName(item.studentId) + ' may go with ' + item.name + ' (' + item.relation + ')' + (item.phone ? ', phone ' + item.phone : '') + '.';
+  const button = actionButton('Hand over', async () => {
+    button.disabled = true;
+    const request = schoolRequest;
+    try {
+      const { doc, setDoc, serverTimestamp } = firestoreTools;
+      await setDoc(doc(academic.schoolRef, 'pickupLogs', newId('PL')), { studentId: item.studentId, studentName: studentName(item.studentId), personName: item.name,
+        relation: item.relation, at: serverTimestamp(), by: schoolUid });
+      if (request !== schoolRequest) return;
+      gateResult.replaceChildren();
+      gateCode.value = '';
+      gateStatus.textContent = 'Recorded.';
+      loadGateLog();
+    } catch {
+      button.disabled = false;
+      if (request === schoolRequest) gateStatus.textContent = 'That was not recorded. Try again.';
+    }
+  });
+  gateResult.append(line, button);
+  }
+});
+
+// Risk and benchmarks (features 153, 155): signals worked out from attendance, marks and fees already in the system.
+const riskBody = document.querySelector('#riskboard-body');
+const riskClasses = document.querySelector('#riskboard-classes');
+const riskStatus = document.querySelector('#riskboard-status');
+let riskRows = [];
+const percentText = (value) => value === null ? 'not enough data' : Math.round(value) + '%';
+document.querySelector('#riskboard-run').addEventListener('click', async () => {
+  const request = schoolRequest;
+  const year = activeYearRecord();
+  if (!academic || !year) { riskStatus.textContent = 'Set an active academic year first.'; return; }
+  riskStatus.textContent = 'Reading attendance and marks.';
+  try {
+    const { collection, getDocsFromServer, query, where } = firestoreTools;
+    const since = addDays(localToday(), -30);
+    const middle = addDays(localToday(), -15);
+    const [attendance, marks] = await Promise.all([
+      getDocsFromServer(query(collection(academic.schoolRef, 'attendance'), where('date', '>=', since))),
+      getDocsFromServer(query(collection(academic.schoolRef, 'marks'), where('yearId', '==', year.id))),
+    ]);
+    if (request !== schoolRequest) return;
+    const classOf = new Map(placementData.enrollments.filter((record) => record.data().yearId === year.id).map((record) => [record.data().studentId, record.data().classId]));
+    const att = new Map();
+    for (const record of attendance.docs) {
+      const item = record.data();
+      const entry = att.get(item.studentId) ?? { all: 0, here: 0, early: 0, earlyHere: 0, late: 0, lateHere: 0 };
+      const here = item.status === 'absent' ? 0 : 1;
+      entry.all += 1; entry.here += here;
+      if (item.date < middle) { entry.early += 1; entry.earlyHere += here; } else { entry.late += 1; entry.lateHere += here; }
+      att.set(item.studentId, entry);
+    }
+    const score = new Map();
+    for (const record of marks.docs) {
+      const item = record.data();
+      if (item.draft === true) continue;
+      const entry = score.get(item.studentId) ?? { got: 0, max: 0 };
+      entry.got += item.score; entry.max += item.maxMarks;
+      score.set(item.studentId, entry);
+    }
+    const haveFees = feeData.structures.length > 0;
+    const students = studentRecords.filter((record) => record.data().status === 'active');
+    riskRows = [];
+    const byClass = new Map();
+    for (const record of students) {
+      const classId = classOf.get(record.id) ?? '';
+      const a = att.get(record.id);
+      const attPct = a && a.all >= 5 ? a.here / a.all * 100 : null;
+      const trend = a && a.early >= 3 && a.late >= 3 ? a.lateHere / a.late * 100 - a.earlyHere / a.early * 100 : null;
+      const s = score.get(record.id);
+      const marksPct = s && s.max > 0 ? s.got / s.max * 100 : null;
+      const overdue = haveFees && classId ? feeSummaryFor(record.id, year.id, classId).overdue : 0;
+      const signals = [];
+      if (attPct !== null && attPct < 75) signals.push('attendance below 75%');
+      if (trend !== null && trend <= -20 && !(attPct !== null && attPct < 75)) signals.push('attendance falling');
+      if (marksPct !== null && marksPct < 40) signals.push('exam average below 40%');
+      if (overdue > 0) signals.push('fees overdue ' + rupees(overdue));
+      riskRows.push({ id: record.id, name: record.data().name, classId, attPct, marksPct, overdue, signals });
+      const group = byClass.get(classId) ?? { n: 0, att: [], marks: [], overdueCount: 0 };
+      group.n += 1;
+      if (attPct !== null) group.att.push(attPct);
+      if (marksPct !== null) group.marks.push(marksPct);
+      if (overdue > 0) group.overdueCount += 1;
+      byClass.set(classId, group);
+    }
+    riskBody.replaceChildren();
+    const flagged = riskRows.filter((row) => row.signals.length).sort((a, b) => b.signals.length - a.signals.length || (a.attPct ?? 101) - (b.attPct ?? 101));
+    for (const row of flagged) {
+      addRow(riskBody, [row.name, row.classId ? nameOfClass(row.classId) : '-', percentText(row.attPct), percentText(row.marksPct), row.overdue ? rupees(row.overdue) : '-',
+        (row.signals.length >= 2 ? 'HIGH: ' : 'Watch: ') + row.signals.join('; ')]);
+    }
+    riskClasses.replaceChildren();
+    const average = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    for (const [classId, group] of [...byClass].sort((a, b) => nameOfClass(a[0]).localeCompare(nameOfClass(b[0])))) {
+      if (group.n < 5) { addRow(riskClasses, [classId ? nameOfClass(classId) : 'Not placed', group.n, 'hidden', 'hidden', 'hidden']); continue; }
+      addRow(riskClasses, [classId ? nameOfClass(classId) : 'Not placed', group.n, percentText(average(group.att)), percentText(average(group.marks)), Math.round(group.overdueCount / group.n * 100) + '% of students']);
+    }
+    riskStatus.textContent = flagged.length ? flagged.length + ' of ' + students.length + ' active students show a signal.' : 'No student shows a signal in the last 30 days.'
+      + (haveFees ? '' : ' Fee data was not loaded, so fees are not part of this check.');
+  } catch {
+    if (request === schoolRequest) riskStatus.textContent = 'Could not analyse. Try again.';
+  }
+});
+document.querySelector('#riskboard-csv').addEventListener('click', () => {
+  if (!riskRows.length) { riskStatus.textContent = 'Press Analyse first.'; return; }
+  downloadCsv('student-risk', [['Student', 'Class', 'Attendance 30 days %', 'Exam average %', 'Fees overdue', 'Signals'],
+    ...riskRows.filter((row) => row.signals.length).map((row) => [row.name, row.classId ? nameOfClass(row.classId) : '', row.attPct === null ? '' : Math.round(row.attPct),
+      row.marksPct === null ? '' : Math.round(row.marksPct), row.overdue, row.signals.join('; ')])]);
 });
 
 lists.assets = ownerList({
@@ -7167,6 +7591,177 @@ async function loadPortalConsents(tools, request, studentId) {
   }
 }
 
+// Parent and student: online tests (feature 139).
+const portalTestsSection = document.querySelector('#portal-tests');
+const portalTestsStatus = document.querySelector('#portal-tests-status');
+const portalTestsList = document.querySelector('#portal-tests-list');
+const portalTestRun = document.querySelector('#portal-test-run');
+const portalTestForm = document.querySelector('#portal-test-form');
+const portalTestTimer = document.querySelector('#portal-test-timer');
+const portalTestSubmit = document.querySelector('#portal-test-submit');
+let portalTestState; // { tools, studentId, test, questions, endsAt, timer, busy }
+const stopPortalTest = () => {
+  if (portalTestState?.timer) clearInterval(portalTestState.timer);
+  portalTestState = undefined;
+  portalTestRun.hidden = true;
+  portalTestForm.replaceChildren();
+  portalTestTimer.textContent = '';
+};
+async function submitPortalTest(request) {
+  const state = portalTestState;
+  if (!state || state.busy) return;
+  state.busy = true;
+  clearInterval(state.timer);
+  const form = new FormData(portalTestForm);
+  const answers = state.questions.map((_, index) => (['0', '1', '2', '3'].includes(String(form.get('q' + index))) ? String(form.get('q' + index)) : 'x')).join(',');
+  try {
+    const { doc, setDoc, serverTimestamp } = firestoreTools;
+    await setDoc(doc(state.tools.schoolRef, 'onlineAttempts', state.test.id + '_' + state.studentId),
+      { testId: state.test.id, studentId: state.studentId, answers, by: state.tools.user.uid, at: serverTimestamp() });
+    const { tools, studentId } = state;
+    stopPortalTest();
+    if (request === schoolRequest) { portalTestsStatus.textContent = 'Your answers are submitted.'; await loadPortalTests(tools, schoolRequest, studentId); }
+  } catch {
+    state.busy = false;
+    if (request === schoolRequest) portalTestsStatus.textContent = 'Your answers could not be submitted. The test may have been closed, or you may have already submitted.';
+  }
+}
+function startPortalTest(tools, studentId, test) {
+  let questions;
+  try { questions = JSON.parse(test.data.paper); } catch { portalTestsStatus.textContent = 'This test could not be opened.'; return; }
+  stopPortalTest();
+  portalTestState = { tools, studentId, test, questions, endsAt: Date.now() + test.data.durationMin * 60000, timer: 0, busy: false };
+  document.querySelector('#portal-test-title').textContent = test.data.title + ' - ' + test.data.totalMarks + ' marks';
+  portalTestForm.replaceChildren();
+  questions.forEach((question, index) => {
+    const box = document.createElement('fieldset');
+    const legend = document.createElement('legend');
+    legend.textContent = (index + 1) + '. ' + question.q + ' (' + question.m + ' mark' + (question.m > 1 ? 's' : '') + ')';
+    box.append(legend);
+    question.o.forEach((option, number) => {
+      const label = document.createElement('label');
+      const radio = document.createElement('input');
+      radio.type = 'radio'; radio.name = 'q' + index; radio.value = String(number);
+      label.append(radio, ' ' + option);
+      box.append(label, document.createElement('br'));
+    });
+    portalTestForm.append(box);
+  });
+  portalTestRun.hidden = false;
+  const request = schoolRequest;
+  const tick = () => {
+    const left = Math.max(0, portalTestState ? portalTestState.endsAt - Date.now() : 0);
+    portalTestTimer.textContent = 'Time left: ' + Math.floor(left / 60000) + ':' + String(Math.floor(left / 1000) % 60).padStart(2, '0');
+    if (left === 0) submitPortalTest(request);
+  };
+  tick();
+  portalTestState.timer = setInterval(tick, 1000);
+}
+portalTestSubmit.addEventListener('click', () => submitPortalTest(schoolRequest));
+async function loadPortalTests(tools, request, studentId) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalTestsSection.hidden = false;
+  portalTestsStatus.textContent = 'Loading.';
+  try {
+    const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId)));
+    const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
+    const [open, closed, sheets] = await Promise.all([
+      getDocsFromServer(query(collection(schoolRef, 'onlineTests'), where('status', '==', 'open'))),
+      getDocsFromServer(query(collection(schoolRef, 'onlineTests'), where('status', '==', 'closed'))),
+      getDocsFromServer(query(collection(schoolRef, 'onlineAttempts'), where('by', '==', tools.user.uid))),
+    ]);
+    if (request !== schoolRequest) return;
+    const mine = new Map(sheets.docs.filter((record) => record.data().studentId === studentId).map((record) => [record.data().testId, record.data()]));
+    const tests = [...open.docs, ...closed.docs].filter((record) => latest && record.data().classId === latest.classId)
+      .filter((record) => record.data().status === 'open' || mine.has(record.id)).sort((a, b) => b.id.localeCompare(a.id));
+    portalTestsList.replaceChildren();
+    for (const record of tests) {
+      const item = record.data();
+      const sheet = mine.get(record.id);
+      let button;
+      let state;
+      if (sheet) state = sheet.score !== undefined ? 'Your score: ' + sheet.score + ' of ' + item.totalMarks : 'Submitted. The score will appear after your teacher checks it.';
+      else { state = 'Not attempted'; button = actionButton('Start test (' + item.durationMin + ' min)', () => {
+        if (confirm('Start "' + item.title + '"? The timer starts now and you can submit only once.')) startPortalTest(tools, studentId, { id: record.id, data: item });
+      }); }
+      listItem(portalTestsList, item.title + ' - ' + item.count + ' question(s), ' + item.totalMarks + ' marks - ' + state, button);
+    }
+    portalTestsStatus.textContent = tests.length ? '' : 'There are no online tests for your class right now.';
+  } catch {
+    if (request === schoolRequest) portalTestsStatus.textContent = 'Could not load the tests. Try again.';
+  }
+}
+
+// Parent: people allowed to pick up the child (feature 146).
+const portalPickupSection = document.querySelector('#portal-pickup');
+const portalPickupStatus = document.querySelector('#portal-pickup-status');
+const portalPickupList = document.querySelector('#portal-pickup-list');
+const portalPickupForm = document.querySelector('#portal-pickup-form');
+const portalPickupQr = document.querySelector('#portal-pickup-qr');
+let portalPickup; // { tools, studentId, busy }
+async function loadPortalPickup(tools, request, studentId) {
+  if (portalRole === 'student') { portalPickupSection.hidden = true; return; }
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalPickup = { tools, studentId, busy: false };
+  portalPickupSection.hidden = false;
+  portalPickupStatus.textContent = 'Loading.';
+  try {
+    const saved = await getDocsFromServer(query(collection(schoolRef, 'pickupPeople'), where('createdBy', '==', tools.user.uid)));
+    if (request !== schoolRequest) return;
+    portalPickupList.replaceChildren();
+    const mine = saved.docs.filter((record) => record.data().studentId === studentId).sort((a, b) => a.data().name.localeCompare(b.data().name));
+    for (const record of mine) {
+      const item = record.data();
+      const row = document.createElement('li');
+      row.append(item.name + ' (' + item.relation + ')' + (item.phone ? ' - ' + item.phone : '') + ' - code ' + item.code + (item.active ? '' : ' - SWITCHED OFF') + ' ');
+      row.append(actionButton('Show QR', async () => {
+        const { drawQr } = await import('./qr.mjs?v=batch-63');
+        portalPickupQr.hidden = false;
+        drawQr(portalPickupQr, 'PICK:' + item.code, 200);
+        portalPickupStatus.textContent = 'QR code for ' + item.name + '. Show it at the gate.';
+      }));
+      row.append(actionButton(item.active ? 'Switch off' : 'Switch on', async () => {
+        const { doc, setDoc } = firestoreTools;
+        try { await setDoc(doc(schoolRef, 'pickupPeople', record.id), { ...item, active: !item.active }); await loadPortalPickup(tools, schoolRequest, studentId); }
+        catch { portalPickupStatus.textContent = 'That did not save. Try again.'; }
+      }));
+      row.append(actionButton('Remove', async () => {
+        if (!confirm('Remove ' + item.name + '?')) return;
+        const { doc, deleteDoc } = firestoreTools;
+        try { await deleteDoc(doc(schoolRef, 'pickupPeople', record.id)); portalPickupQr.hidden = true; await loadPortalPickup(tools, schoolRequest, studentId); }
+        catch { portalPickupStatus.textContent = 'That did not remove. Try again.'; }
+      }));
+      portalPickupList.append(row);
+    }
+    portalPickupStatus.textContent = mine.length ? '' : 'No one is added yet.';
+  } catch {
+    if (request === schoolRequest) portalPickupStatus.textContent = 'Could not load. Try again.';
+  }
+}
+portalPickupForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = portalPickup;
+  if (!context || context.busy) return;
+  const fields = new FormData(portalPickupForm);
+  const phone = text(fields, 'phone');
+  if (!text(fields, 'name') || !text(fields, 'relation')) { portalPickupStatus.textContent = 'Enter the name and the relation.'; return; }
+  if (phone && !/^[0-9+() -]{1,20}$/.test(phone)) { portalPickupStatus.textContent = 'The phone number can have only digits, spaces and + ( ) -.'; return; }
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  try {
+    await setDoc(doc(context.tools.schoolRef, 'pickupPeople', newId('PK')), { studentId: context.studentId, name: text(fields, 'name'), relation: text(fields, 'relation'),
+      ...(phone ? { phone } : {}), code: newPickupCode(), active: true, createdBy: context.tools.user.uid });
+    portalPickupForm.reset();
+    context.busy = false;
+    await loadPortalPickup(context.tools, request, context.studentId);
+  } catch {
+    if (request === schoolRequest) portalPickupStatus.textContent = 'That did not save. Try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+
 // Payslip for one salary record.
 function printPayslip(item) {
   const body = document.querySelector('#payslip-body');
@@ -7335,7 +7930,8 @@ const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'members', 'stud
   'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
   'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
-  'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog', 'scholarships', 'scholarshipApps', 'consentForms', 'consentResponses', 'staffProfiles'];
+  'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog', 'scholarships', 'scholarshipApps', 'consentForms', 'consentResponses', 'staffProfiles',
+  'hostelRooms', 'hostelStays', 'canteenMenu', 'canteenPlans', 'bookReservations', 'workflowRules', 'questionBank', 'onlineTests', 'onlineTestKeys', 'onlineAttempts', 'pickupPeople', 'pickupLogs'];
 
 // School data pack: every list as a CSV file inside one ZIP (stored, not compressed) built here in the browser.
 const CRC_TABLE = (() => {
@@ -7493,11 +8089,13 @@ const resetInsights = () => {
 };
 
 async function loadOwnerLists(request) {
-  const names = ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage', 'vehicles', 'appraisals', 'scholarships', 'scholarshipapps', 'consents'];
+  const names = ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage', 'vehicles', 'appraisals', 'scholarships', 'scholarshipapps', 'consents',
+    'hostelrooms', 'hostelstays', 'canteenmenu', 'canteenplans', 'bookreservations', 'workflowrules', 'questionbank', 'onlinetests', 'pickuppeople'];
   // These lists feed no other screen, so they are read only when the owner opens them. The rest are needed at once by the
   // Needs Attention list, fee balances, finance summaries and the staff and activity screens.
   const lazyNames = new Set(['substitutions', 'alumni', 'certificates', 'vendors', 'minutes', 'achievements', 'assets', 'sales', 'trainings',
-    'diary', 'health', 'lessons', 'ptm', 'eventregs', 'appraisals', 'scholarships', 'scholarshipapps', 'consents']);
+    'diary', 'health', 'lessons', 'ptm', 'eventregs', 'appraisals', 'scholarships', 'scholarshipapps', 'consents',
+    'hostelstays', 'canteenmenu', 'canteenplans', 'bookreservations', 'questionbank', 'onlinetests', 'pickuppeople']);
   for (const name of names) {
     if (!lazyNames.has(name)) continue;
     lists[name].lazy = true;
@@ -8311,6 +8909,16 @@ onAuthStateChanged(auth, async (user) => {
   portalMessagesList.replaceChildren();
   messageForm.reset();
   portalMessaging = undefined;
+  stopPortalTest();
+  portalTestsSection.hidden = true;
+  portalTestsStatus.textContent = '';
+  portalTestsList.replaceChildren();
+  portalPickup = undefined;
+  portalPickupSection.hidden = true;
+  portalPickupStatus.textContent = '';
+  portalPickupList.replaceChildren();
+  portalPickupQr.hidden = true;
+  portalPickupForm.reset();
   portalConsentsSection.hidden = true;
   portalConsentsStatus.textContent = '';
   portalConsentsList.replaceChildren();
@@ -8981,9 +9589,9 @@ const PORTAL_PLAN = {
   student: {
     title: 'Student Dashboard', tagline: 'Learn \u2022 Track \u2022 Achieve \u2022 All in One Place',
     order: ['portal-profile', 'portal-attendance', 'portal-timetable', 'portal-homework', 'portal-submit', 'portal-results', 'portal-assessments',
-      'portal-materials', 'portal-notices', 'portal-calendar', 'portal-events', 'portal-leave', 'portal-life', 'portal-idcard'],
+      'portal-materials', 'portal-tests', 'portal-notices', 'portal-calendar', 'portal-events', 'portal-leave', 'portal-life', 'portal-idcard'],
     names: { 'portal-profile': 'My Profile', 'portal-attendance': 'My Attendance', 'portal-timetable': 'My Timetable', 'portal-homework': 'Homework & Assignments',
-      'portal-submit': 'Submit Homework', 'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-materials': 'Study Materials',
+      'portal-submit': 'Submit Homework', 'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-materials': 'Study Materials', 'portal-tests': 'Online Tests',
       'portal-notices': 'Notices & Notifications', 'portal-calendar': 'School Calendar', 'portal-events': 'School Events', 'portal-leave': 'Apply for Leave',
       'portal-life': 'My Bus & Activities', 'portal-idcard': 'Digital ID Card' },
     quick: [['Homework', 'portal-homework'], ['Exams & Results', 'portal-results'], ['My Timetable', 'portal-timetable'], ['Study Materials', 'portal-materials']],
@@ -8991,10 +9599,10 @@ const PORTAL_PLAN = {
   parent: {
     title: 'Parent Dashboard', tagline: 'Stay Connected \u2022 Monitor Progress \u2022 Support Your Child',
     order: ['portal-profile', 'portal-attendance', 'portal-homework', 'portal-timetable', 'portal-results', 'portal-assessments', 'portal-fees',
-      'portal-materials', 'portal-life', 'portal-leave', 'portal-messages', 'portal-consents', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
+      'portal-materials', 'portal-life', 'portal-leave', 'portal-messages', 'portal-consents', 'portal-tests', 'portal-pickup', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
     names: { 'portal-profile': 'My Child', 'portal-attendance': 'Attendance', 'portal-homework': 'Homework & Assignments', 'portal-timetable': 'Timetable',
       'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-fees': 'Fees & Payments', 'portal-materials': 'Study Materials',
-      'portal-life': 'Bus & Route', 'portal-leave': 'Leave Application', 'portal-messages': 'Messages & Communication', 'portal-consents': 'Consent Forms', 'portal-ptm': 'Parent-Teacher Meetings',
+      'portal-life': 'Bus & Route', 'portal-leave': 'Leave Application', 'portal-messages': 'Messages & Communication', 'portal-consents': 'Consent Forms', 'portal-tests': 'Online Tests', 'portal-pickup': 'Pickup Authorisation', 'portal-ptm': 'Parent-Teacher Meetings',
       'portal-notices': 'Notices', 'portal-calendar': 'School Calendar', 'portal-events': 'School Events' },
     quick: [['Exams & Results', 'portal-results'], ['Fees & Payments', 'portal-fees'], ['Bus & Route', 'portal-life'], ['Apply for Leave', 'portal-leave']],
   },

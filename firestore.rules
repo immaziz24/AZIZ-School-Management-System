@@ -566,7 +566,24 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['returnedOn'])
           && request.resource.data.returnedOn >= resource.data.issuedOn
           && request.resource.data.returnedOn <= latestAttendanceDate();
+        // A renewal (feature 137): the due date moves later, at most 3 times, and only while the book is still out.
+        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && validLoan(request.resource.data)
+          && !resource.data.keys().hasAny(['returnedOn']) && !request.resource.data.keys().hasAny(['returnedOn'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dueOn', 'renewals'])
+          && request.resource.data.dueOn > resource.data.dueOn
+          && request.resource.data.renewals == resource.data.get('renewals', 0) + 1;
         allow delete: if false;
+      }
+
+      // Book reservations (feature 137). bookReservations/{id}: bookId, bookTitle, studentId, studentName, createdOn, status.
+      match /bookReservations/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validReservation(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/books/$(request.resource.data.bookId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
       // Behaviour notes. behaviour/{noteId}: studentId, date, kind (positive or concern), note,
@@ -811,6 +828,112 @@ service cloud.firestore {
         allow list: if request.auth != null && isSchoolViewer(schoolId);
         allow create, update: if request.auth != null && isActiveTeacher() && request.auth.uid == uid
           && validStaffProfile(request.resource.data);
+        allow delete: if false;
+      }
+
+      // Hostel (feature 144). hostelRooms/{id}: name, beds, optional block and monthlyFee. hostelStays/{id}: who sleeps where.
+      match /hostelRooms/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validHostelRoom(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+      match /hostelStays/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validHostelStay(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/hostelRooms/$(request.resource.data.roomId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Canteen (feature 145). canteenMenu/{id}: day, meal, items, optional price. canteenPlans/{id}: a student's meal plan.
+      match /canteenMenu/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validCanteenMenu(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+      match /canteenPlans/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validCanteenPlan(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Approval rules (feature 156). workflowRules/{id}: an expense at or above `over` rupees waits for approval.
+      match /workflowRules/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validWorkflowRule(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Student pickup (feature 146). pickupPeople/{id}: a person allowed to collect a student, with a 6-digit code the
+      // person shows at the gate. A family adds and changes its own student's people; the school sees them all.
+      // pickupLogs/{id}: one record each time a child is handed over (owner or principal), written once with the server time.
+      match /pickupPeople/{docId} {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.createdBy == request.auth.uid && familyActive()));
+        allow list: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.createdBy == request.auth.uid && familyActive()));
+        allow create: if request.auth != null && validPickupPerson(request.resource.data)
+          && docId.matches('[A-Za-z0-9-]{1,30}')
+          && request.resource.data.createdBy == request.auth.uid
+          && (isSchoolOwner(schoolId) || familyOwns(request.resource.data.studentId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow update: if request.auth != null && validPickupPerson(request.resource.data)
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.studentId == resource.data.studentId
+          && (isSchoolOwner(schoolId) || (resource.data.createdBy == request.auth.uid && familyOwns(request.resource.data.studentId)));
+        allow delete: if request.auth != null && (isSchoolOwner(schoolId)
+          || (resource.data.createdBy == request.auth.uid && familyActive()));
+      }
+      match /pickupLogs/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create: if request.auth != null && isSchoolViewer(schoolId) && validPickupLog(request.resource.data)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && request.resource.data.by == request.auth.uid
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+        allow update, delete: if false;
+      }
+
+      // Question bank and online tests (feature 139). questionBank/{id}: one multiple-choice question.
+      // onlineTests/{id}: the paper WITHOUT answers (a JSON text). onlineTestKeys/{id}: the answers, owner only, so a
+      // student never receives them. onlineAttempts/{testId_studentId}: one answer sheet per student, made once while the
+      // test is open; the owner then grades it (score and gradedOn are the only things that can change).
+      match /questionBank/{docId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('[A-Za-z0-9-]{1,30}') && validQuestion(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+      match /onlineTests/{docId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.status in ['open', 'closed'] && familyActive()));
+        allow create: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('OT-[A-Za-z0-9-]{1,27}') && validOnlineTest(request.resource.data);
+        allow update: if request.auth != null && isSchoolOwner(schoolId) && validOnlineTest(request.resource.data)
+          && (resource.data.status == 'draft'
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+      match /onlineTestKeys/{docId} {
+        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('OT-[A-Za-z0-9-]{1,27}') && validOnlineKey(request.resource.data)
+          && existsAfter(/databases/$(database)/documents/schools/$(schoolId)/onlineTests/$(docId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+      match /onlineAttempts/{docId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.by == request.auth.uid && familyActive()));
+        allow create: if request.auth != null && validAttempt(request.resource.data)
+          && request.resource.data.by == request.auth.uid
+          && !request.resource.data.keys().hasAny(['score', 'gradedOn'])
+          && request.resource.data.at == request.time
+          && familyOwns(request.resource.data.studentId)
+          && docId == request.resource.data.testId + '_' + request.resource.data.studentId
+          && get(/databases/$(database)/documents/schools/$(schoolId)/onlineTests/$(request.resource.data.testId)).data.status == 'open';
+        allow update: if request.auth != null && isSchoolOwner(schoolId) && validAttempt(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['score', 'gradedOn'])
+          && request.resource.data.keys().hasAll(['score', 'gradedOn']);
         allow delete: if false;
       }
 
@@ -1632,6 +1755,133 @@ service cloud.firestore {
         && (!item.keys().hasAny(['emergencyPhone']) || (item.emergencyPhone is string && item.emergencyPhone.matches('[0-9+() -]{0,20}')));
     }
 
+    function validReservation(item) {
+      return item.keys().hasOnly(['bookId', 'bookTitle', 'studentId', 'studentName', 'createdOn', 'status'])
+        && item.keys().hasAll(['bookId', 'bookTitle', 'studentId', 'studentName', 'createdOn', 'status'])
+        && item.bookId is string && item.bookId.matches('[a-z0-9-]{1,20}')
+        && item.bookTitle is string && item.bookTitle.size() >= 1 && item.bookTitle.size() <= 120
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
+        && dateText(item.createdOn)
+        && item.status in ['waiting', 'ready', 'collected', 'cancelled'];
+    }
+
+    function validHostelRoom(item) {
+      return item.keys().hasOnly(['name', 'block', 'beds', 'monthlyFee'])
+        && item.keys().hasAll(['name', 'beds'])
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 40
+        && item.beds is int && item.beds >= 1 && item.beds <= 50
+        && (!item.keys().hasAny(['block']) || (item.block is string && item.block.size() <= 40))
+        && (!item.keys().hasAny(['monthlyFee']) || (item.monthlyFee is int && item.monthlyFee >= 0 && item.monthlyFee <= 1000000));
+    }
+
+    function validHostelStay(item) {
+      return item.keys().hasOnly(['studentId', 'studentName', 'roomId', 'roomName', 'from', 'status', 'leftOn'])
+        && item.keys().hasAll(['studentId', 'studentName', 'roomId', 'roomName', 'from', 'status'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
+        && item.roomId is string && item.roomId.matches('[A-Za-z0-9-]{1,30}')
+        && item.roomName is string && item.roomName.size() >= 1 && item.roomName.size() <= 40
+        && dateText(item.from)
+        && item.status in ['staying', 'left']
+        && (!item.keys().hasAny(['leftOn']) || dateText(item.leftOn));
+    }
+
+    function validCanteenMenu(item) {
+      return item.keys().hasOnly(['day', 'meal', 'items', 'price'])
+        && item.keys().hasAll(['day', 'meal', 'items'])
+        && item.day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        && item.meal in ['Breakfast', 'Lunch', 'Snacks', 'Dinner']
+        && item.items is string && item.items.size() >= 1 && item.items.size() <= 300
+        && (!item.keys().hasAny(['price']) || (item.price is int && item.price >= 0 && item.price <= 100000));
+    }
+
+    function validCanteenPlan(item) {
+      return item.keys().hasOnly(['studentId', 'studentName', 'plan', 'monthlyFee', 'from', 'active'])
+        && item.keys().hasAll(['studentId', 'studentName', 'plan', 'monthlyFee', 'from', 'active'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
+        && item.plan is string && item.plan.size() >= 1 && item.plan.size() <= 40
+        && item.monthlyFee is int && item.monthlyFee >= 0 && item.monthlyFee <= 1000000
+        && dateText(item.from) && item.active is bool;
+    }
+
+    function validWorkflowRule(item) {
+      return item.keys().hasOnly(['name', 'over', 'kind'])
+        && item.keys().hasAll(['name', 'over', 'kind'])
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 80
+        && item.kind == 'expense'
+        && item.over is int && item.over >= 1 && item.over <= 100000000;
+    }
+
+    function validPickupPerson(item) {
+      return item.keys().hasOnly(['studentId', 'name', 'relation', 'phone', 'code', 'active', 'createdBy'])
+        && item.keys().hasAll(['studentId', 'name', 'relation', 'code', 'active', 'createdBy'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 80
+        && item.relation is string && item.relation.size() >= 1 && item.relation.size() <= 40
+        && item.code is string && item.code.matches('[0-9]{6}')
+        && item.active is bool && item.createdBy is string
+        && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')));
+    }
+
+    function validPickupLog(item) {
+      return item.keys().hasOnly(['studentId', 'studentName', 'personName', 'relation', 'at', 'by'])
+        && item.keys().hasAll(['studentId', 'studentName', 'personName', 'relation', 'at', 'by'])
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
+        && item.personName is string && item.personName.size() >= 1 && item.personName.size() <= 80
+        && item.relation is string && item.relation.size() <= 40
+        && item.at == request.time && item.by is string;
+    }
+
+    function validQuestion(item) {
+      return item.keys().hasOnly(['classId', 'subjectName', 'text', 'options', 'correct', 'marks'])
+        && item.keys().hasAll(['classId', 'text', 'options', 'correct', 'marks'])
+        && item.classId is string && item.classId.matches('[A-Za-z0-9-]{1,30}')
+        && item.text is string && item.text.size() >= 1 && item.text.size() <= 300
+        && item.options is list && item.options.size() >= 2 && item.options.size() <= 4
+        && item.options[0] is string && item.options[0].size() >= 1 && item.options[0].size() <= 120
+        && item.options[1] is string && item.options[1].size() >= 1 && item.options[1].size() <= 120
+        && (item.options.size() < 3 || (item.options[2] is string && item.options[2].size() >= 1 && item.options[2].size() <= 120))
+        && (item.options.size() < 4 || (item.options[3] is string && item.options[3].size() >= 1 && item.options[3].size() <= 120))
+        && item.correct is int && item.correct >= 0 && item.correct < item.options.size()
+        && item.marks is int && item.marks >= 1 && item.marks <= 20
+        && (!item.keys().hasAny(['subjectName']) || (item.subjectName is string && item.subjectName.size() <= 60));
+    }
+
+    function validOnlineTest(item) {
+      return item.keys().hasOnly(['title', 'classId', 'className', 'durationMin', 'status', 'paper', 'count', 'totalMarks', 'createdOn'])
+        && item.keys().hasAll(['title', 'classId', 'className', 'durationMin', 'status', 'paper', 'count', 'totalMarks', 'createdOn'])
+        && item.title is string && item.title.size() >= 1 && item.title.size() <= 120
+        && item.classId is string && item.classId.matches('[A-Za-z0-9-]{1,30}')
+        && item.className is string && item.className.size() >= 1 && item.className.size() <= 40
+        && item.durationMin is int && item.durationMin >= 5 && item.durationMin <= 180
+        && item.status in ['draft', 'open', 'closed']
+        && item.paper is string && item.paper.size() >= 2 && item.paper.size() <= 30000
+        && item.count is int && item.count >= 1 && item.count <= 60
+        && item.totalMarks is int && item.totalMarks >= 1 && item.totalMarks <= 1200
+        && dateText(item.createdOn);
+    }
+
+    function validOnlineKey(item) {
+      return item.keys().hasOnly(['key', 'marks'])
+        && item.keys().hasAll(['key', 'marks'])
+        && item.key is string && item.key.matches('[0-3](,[0-3]){0,59}')
+        && item.marks is string && item.marks.matches('[0-9]{1,2}(,[0-9]{1,2}){0,59}');
+    }
+
+    function validAttempt(item) {
+      return item.keys().hasOnly(['testId', 'studentId', 'answers', 'by', 'at', 'score', 'gradedOn'])
+        && item.keys().hasAll(['testId', 'studentId', 'answers', 'by', 'at'])
+        && item.testId is string && item.testId.matches('OT-[A-Za-z0-9-]{1,27}')
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.answers is string && item.answers.matches('[0-3x](,[0-3x]){0,59}')
+        && item.by is string && item.at is timestamp
+        && (!item.keys().hasAny(['score']) || (item.score is int && item.score >= 0 && item.score <= 1200))
+        && (!item.keys().hasAny(['gradedOn']) || dateText(item.gradedOn));
+    }
+
     function pad2(n) {
       return n < 10 ? '0' + string(n) : string(n);
     }
@@ -1924,8 +2174,9 @@ service cloud.firestore {
     }
 
     function validLoan(item) {
-      return item.keys().hasOnly(['bookId', 'studentId', 'issuedOn', 'dueOn', 'returnedOn', 'issuedBy'])
+      return item.keys().hasOnly(['bookId', 'studentId', 'issuedOn', 'dueOn', 'returnedOn', 'issuedBy', 'renewals'])
         && item.keys().hasAll(['bookId', 'studentId', 'issuedOn', 'dueOn', 'issuedBy'])
+        && (!item.keys().hasAny(['renewals']) || (item.renewals is int && item.renewals >= 1 && item.renewals <= 3))
         && item.bookId is string && item.bookId.matches('[a-z0-9-]{1,20}')
         && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
         && item.issuedOn is string && item.issuedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.issuedOn >= '2020-01-01'
