@@ -1,0 +1,159 @@
+﻿ID,Feature,Phase,Status,Note
+001,"Premium responsive homepage, navigation and footer",A,Built,"Menu closes on tap, skip link, focus outlines, no-JS fallback, current-page marker (batch 57)"
+002,"School profile, history, vision, mission and leadership information",A,Built,
+003,"Academic programmes, classes and subject information",A,Built,
+004,Admissions information and enquiry form,A,Built,
+005,Faculty and staff profiles with approved qualifications,A,Built,Faculty lines shown as Name - qualification - subject on the public page
+006,"Facilities, campus information and photo gallery",A,Built,Facilities text and photo gallery from image links
+007,"Events, notices, news and public announcements",A,Built,
+008,"Contact details, map embed and enquiry routing",A,Built,
+009,"SEO metadata, accessible headings, optimized images and mobile navigation",A,Built,"Canonical, share tags, structured data, sitemap dates (batch 57); site has no images to optimise"
+010,Secure login and logout using server-side PHP sessions,B,Built,Firebase sign-in/sign-out (not PHP sessions)
+011,Owner-created user accounts and account activation/deactivation,B,Built,Owner invites by email and switches members on or off; invited person accepts
+012,Separate Owner and Principal permission sets,B,Built,"Principal login with on/off switches for payroll, fees and admissions (batch 52)"
+013,"Teacher, Office Staff/Accountant, Student and Parent role access",B,Built,"Fee office (accountant) role: fees only; teacher, student, parent, principal also done"
+014,"Password hashing, reset workflow and session expiry",B,Built,Firebase hashing and reset; idle sign-out after 30 minutes with warning
+015,Protected routes and server-side authorization checks,B,Built,"Enforced by Firestore rules, 116 tests"
+016,Parent-to-child linking and account recovery process,B,Built,Owner links a parent/student login to one child; recovery is manual
+017,Audit trail for sensitive account and permission changes,B,Built,Activity log: owner changes plus teacher marks/attendance saves
+018,"Academic year creation, activation and closure",C,Built,"Create, activate, close year"
+019,Class and section creation and management,C,Built,Classes and sections
+020,Subject setup and class/section subject mapping,C,Built,Subjects and class-subject mapping
+021,"Teacher assignment to classes, sections and subjects",C,Built,Teacher assigned to class and subject
+022,Timetable and school calendar foundation,C,Built,Class timetable and school calendar
+023,Class promotion and academic-year rollover with validation,C,Built,Promotion/rollover not built
+024,School-wide academic settings and grading configuration,C,Built,Owner sets pass mark and grade bands
+025,Student admission and registration form,D,Built,Full student form plus transfer certificate number and documents-received checklist (batch 52)
+026,Unique admission number and roll-number management,D,Built,Unique admission and roll numbers
+027,"Student profile, photograph and guardian details",D,Built,"Name, guardian, date of birth, address and a small photo"
+028,"Class, section and academic-year assignment",D,Built,Placement into class/section/year
+029,"Student search, filters, status and profile history",D,Built,"Search, status filter and a profile history of dated notes"
+030,Teacher and staff profiles with permitted record management,D,Built,"Employee ID, department, subjects, employment type, date of birth, gender, blood group, left-on date (batch 57)"
+031,"Bulk student/staff import with preview, validation and error report",D,Built,
+032,Parent/guardian records and multi-child relationship management,D,Built,A parent login can link up to 5 children (extra students/classes)
+033,Class-wise daily student attendance,E,Built,Class teacher marks daily; owner reviews
+034,"Present, absent, late and approved-leave statuses as per school policy",E,Built,"Present, absent, late and approved leave"
+035,Teacher/staff attendance as a separately permissioned extension,E,Built,Owner marks teachers; teacher sees own; monthly report
+036,Duplicate attendance prevention for the same class/date/session,E,Built,One record per student/class/date
+037,Authorized attendance correction with reason and audit log,E,Built,Attendance corrections ask for a reason; saves are logged
+038,"Daily, monthly and class-wise attendance reports",E,Built,"Daily review, class monthly student report, staff monthly report"
+039,Student and parent attendance views with privacy restrictions,E,Built,Parent/student sees own child only
+040,"Exam creation by academic year, class and exam type",F,Built,"Exams by year, class, subject"
+041,Subject-wise maximum marks and pass marks configuration,F,Built,"Pass marks per exam, locked when the principal approves"
+042,Teacher marks entry restricted to assigned subjects/classes,F,Built,Teachers enter marks for their assigned class/subject
+043,"Marks validation and draft, save and submit states",F,Built,"Draft, submit, lock and approve states with pass marks"
+044,"Automatic total, percentage and grade calculation using approved rules",F,Built,"Total, percent and grade"
+045,"Principal/admin review, correction and approval workflow",F,Built,"Owner review, reopen and approve"
+046,Result publication control; families see published results only,F,Built,Published results only to families
+047,"Class, student and subject performance reports",F,Built,"Class ranks, toppers, performance by exam and a per-student progress view by subject"
+048,Branded marksheets and report cards,G,Built,"Report card with school logo and name, grades and Pass/Fail; bulk printing"
+049,Admit-card template and eligibility checks,G,Built,Admit card with minimum-attendance eligibility check
+050,Individual and bulk PDF generation and downloads,G,Built,Single and whole-class report cards via print / Save as PDF
+051,Student ID cards and certificates using approved templates,G,Built,ID card with photo; certificates register with printable certificates
+052,"Fee heads, class-wise fee structures and due schedules",G,Built,Fee amounts per class and year with due dates and overdue flags
+053,"Full/partial payments, concessions and outstanding balances",G,Built,"Partial payments, concessions and outstanding balances; parent portal does not show concessions"
+054,Numbered receipts and payment history,G,Built,Numbered receipts and payment history; void supported
+055,Financial summaries and controlled exports,G,Built,"Monthly fees, expenses, salaries report with CSV; payment CSV export"
+056,"Student dashboard with own profile, timetable, attendance and published results",H,Built,"Student portal: results, attendance, fees, homework, timetable, calendar, events, messages"
+057,Parent dashboard with linked children and permitted school records,H,Built,Parent portal has a child picker for up to 5 children
+058,"Notices targeted by role, class or section",H,Built,"Notice board by everyone, teachers, families or class"
+059,Homework and study-material access where school policy permits,H,Built,Homework by class and subject; no study-material files
+060,Messages and communication workflow with permissions and moderation,H,Built,"Parent messages with reply, flag, hide and restore by the owner"
+061,Leave applications and approval status,H,Built,Staff leave requests with owner approve/reject
+062,Dashboard summaries and operational reports,H,Built,"School summary: counts, attendance today, fees"
+063,Exports and activity logs for authorized staff,H,Built,"CSV exports of students, payments, activity log"
+064,AZIZ Super Admin Dashboard,I,Built,"Platform section for the AZIZ administrator: schools, billing, tickets, flags, templates"
+065,Automatic school registration and tenant provisioning,I,Built,"Self-service school signup creates the school, owner and trial billing in one step"
+066,Automatic public school website generator,I,Built,Every school has a public page at school.html?school=<id>
+067,Custom domain mapping and verification,I,Built,"Domain lookup, Check domain button, .htaccess rule (batch 53). Each real domain still needs Hostinger parked domain + SSL and school DNS"
+068,Website theme marketplace,I,Partial,36 fixed themes incl. 20 luxury/premium/aesthetic (batch 58); no marketplace (product decision)
+069,School website content manager,I,Built,"Owner edits public website text, map and contacts"
+070,Subscription and plan entitlement control,J,Built,"Plan limits for students, staff; checked against the last usage count (soft limit)"
+071,Automated SaaS billing and renewals,J,Partial,"Billing records, invoices, renewal dates; no automatic charging"
+072,Free trial management,J,Built,Trial with end date; read-only after trial and grace
+073,Multi-school data isolation,J,Built,School-scoped data and rules; two-school tests
+074,Bulk school data import and migration,K,Built,"CSV import for students, subjects, classes with sample file"
+075,School-specific academic settings and board policies,K,Built,"Working days, hours, grading rules, terms, low-attendance level per school"
+076,Custom admission form builder,K,Built,Six custom admission form fields per school
+077,Parent mobile-friendly portal,K,Partial,"Installable offline app plus portal for results, fees, events, messages; no native app"
+078,Approved WhatsApp notification integration,K,Not started,
+079,Student promotion automation,K,Built,
+080,Teacher workload dashboard,K,Built,
+081,Digital homework submission,K,Built,Families submit homework once; teachers give feedback
+082,School transport GPS tracking integration,K,Not started,
+083,School-specific configurable reports,K,Built,"Report builder: choose list, columns and date range; fixed lists only"
+084,Per-school storage quotas,L,Partial,Storage records counted against the plan; new records stop at the limit; files themselves are not stored here
+085,Per-school usage monitoring,L,Built,Usage counts recounted automatically and shown to owner and platform
+086,Automated backups and tested restoration,L,Partial,Manual backup and data pack with reminder; no scheduled backups or tested restore
+087,Customer support ticket system,L,Built,"Support tickets from schools, answered by the platform administrator"
+088,Guided school onboarding checklist,L,Built,
+089,Subscription renewal grace periods,J,Built,Grace days after trial or renewal before read-only
+090,School data export on cancellation,J,Built,"Data pack (ZIP of CSV files) works any time, including after cancellation"
+091,Audit logs and security monitoring,L,Partial,"Activity log plus warnings for removals, night-time changes, principal payroll access; no live monitoring"
+092,Multi-school uptime and performance monitoring,L,Not started,
+093,AZIZ revenue and subscription analytics,J,Built,SVG bar chart of invoices by month plus plan and status counts (batch 52)
+094,School privacy and consent center,J,Built,"Policy consent per person, shown to the owner, plus data export and deletion requests"
+095,Progressive Web App support,J,Built,"Installable app, opens offline"
+096,Multilingual English/Bengali/Hindi interface,K,Built,"Hindi and Bengali for about 620 fixed texts, language picker on app and public page (batch 53). Text built while running stays English"
+097,Online school-fee payment gateway and reconciliation,K,Not started,
+098,AI-assisted school content drafting with approval,K,Not started,
+099,School slug and subdomain uniqueness / reservation,M,Built,School slug rules and reserved names enforced at signup
+100,Domain ownership challenge and automatic TLS lifecycle,M,Not started,
+101,"School suspension, reactivation and safe read-only access",M,Built,Suspended or cancelled schools become read-only
+102,"Tenant-aware background jobs, queues and retries",M,Not started,
+103,"Subscription usage limits for students, staff and storage",M,Built,"Student, staff and storage limits; counted from the last usage recount (soft)"
+104,School admin invitation and verified ownership transfer,M,Built,Email invitations and ownership transfer by invite
+105,SaaS-wide feature flags and gradual rollout,M,Built,Switches per feature plus a rollout percentage per feature
+106,Central template versioning and safe theme upgrades,M,Built,Template versions with upgrade and rollback
+107,Automated onboarding health checks and launch checklist,M,Built,Launch checklist and onboarding checks
+108,Tenant-scoped API rate limits and abuse protection,M,Partial,Browser-side limits on public forms; real protection needs App Check
+109,Disaster recovery drills and recovery objectives,M,Built,Platform recovery drill log with dates and results
+110,"School data retention, deletion and legal-hold workflow",M,Built,"Export and deletion requests with approve, hold and complete; legal hold blocks deletion"
+111,Library Management System,N,Built,
+112,Complete Transport Management,N,Built,"Transport months set per student, charged on the fee balance for owner, fee office and parent (batch 52). GPS is item 082"
+113,Student Health & Medical Management,N,Built,Health records with vaccinations and checkup due dates
+114,Student Discipline & Behaviour Management,N,Built,
+115,Extracurricular & Activity Management,N,Built,
+116,Lesson Planning & Learning Management,N,Built,
+117,Continuous Assessment System,N,Built,Assessments with scores per class and subject
+118,Complete Admission Workflow,N,Built,Enquiry stages new to admitted plus documents checklist
+119,Staff HR & Payroll Management,N,Built,"Payroll, payslips, PF, professional tax and income tax estimate (new regime) (batch 52)"
+120,Inventory & Procurement Management,N,Built,
+121,Visitor & Campus Security Management,N,Built,
+122,Parent-Teacher Meeting Management,N,Built,
+123,Alumni Management,N,Built,
+124,Substitute Teacher Management,N,Built,
+125,School Event & Competition Registration,N,Built,
+126,Fingerprint / Biometric Attendance for Teaching & Non-Teaching Staff,E,Not started,Fingerprint devices not started; builds on 035
+127,"Tenant Cloud Storage Management (new, from your image)",L,Not started,"New. Overlaps 084, 085, 103; needs file uploads and payment gateway (097) first"
+128,Selfie Attendance with GPS Check-in/Check-out,O,Built,Live selfie from the camera (small JPEG with date and time) saved before the check-in; the school can require it; owner and principal view it (batch 61)
+129,QR Code Staff & Student Attendance,O,Partial,Staff QR check-in built (batch 61); student QR attendance not yet
+130,Attendance Geofencing & Location Accuracy Controls,O,Partial,"School map location, distance (30 m or more) and GPS accuracy set by Super Admin; database rules check each check-in (batch 60). Supervisor review of exceptions built."
+131,"Selfie Verification, Liveness & Anti-Spoofing",O,Partial,"Live camera only, with GPS, rotating QR and owner review of the photo (batch 61); no face matching or liveness detection"
+132,"Shift Scheduling, Overtime & Break Tracking",O,Built,"Shift start, end, grace and break; late days, hours and overtime worked out from check-ins (batch 61)"
+133,"Attendance Disputes, Missed Punches & Approval",O,Built,Teachers send missed check-in or check-out times; the owner approves or rejects; approved times count in the monthly hours (batch 61)
+134,Attendance-to-Payroll Reconciliation,O,Built,"Monthly table sets check-in days, principal marks, hours and the salary record side by side and flags differences (batch 61)"
+135,Library Barcode/QR Circulation & Stock Audit,P,Not started,Library (111) built without barcodes
+136,"Digital Library, E-Books & Access Licensing",P,Not started,Needs file storage (Blaze)
+137,"Book Reservation, Renewal & Waiting List",P,Not started,Issue/return and fines exist
+138,Online Live Classes & Recording Management,P,Not started,Needs video service; storage
+139,Question Bank & Online Examination Engine,P,Not started,
+140,Assignment Plagiarism and Similarity Review,P,Not started,Needs external service
+141,Staff Document Vault & Expiry Alerts,Q,Not started,Needs file storage (Blaze)
+142,Staff Performance Appraisal & Training Records,Q,Partial,Appraisals and training log built; review cycles/goals/approvals not
+143,Employee Self-Service HR Portal,Q,Partial,Teachers see own attendance and request leave; payslips/profile updates not
+144,Campus Hostel & Boarding Management,Q,Not started,
+145,School Canteen & Meal Management,Q,Not started,
+146,Student Pickup Authorization with QR Verification,Q,Not started,
+147,"School Complaint, Grievance & Resolution Desk",Q,Partial,Complaints list built; case assignment/escalation/SLA not
+148,Automated Fee Reminders & Collection Campaigns,R,Not started,Needs Blaze (scheduled jobs) and messaging
+149,"Accounting Ledger, Expense Approval & Bank Reconciliation",R,Partial,"Expenses and sales ledger built; general ledger, approvals, bank matching not"
+150,Parent Mobile Push Notifications & Acknowledgements,R,Not started,Needs Blaze (push messaging)
+151,"Parent Consent, Permissions & Digital Forms",R,Partial,Privacy-policy consent built; trip/photo consent forms not
+152,Scholarship Eligibility & Award Management,R,Partial,Scholarship concession type exists; eligibility rules/applications not
+153,Predictive Attendance & Dropout Risk Indicators,S,Not started,
+154,AI Academic Intervention Suggestions with Teacher Review,S,Not started,Needs Blaze
+155,School Performance Benchmarking with Privacy Controls,S,Not started,
+156,Configurable Workflow & Approval Automation,S,Not started,
+157,"Advanced Tenant Storage Billing, Reconciliation & Lifecycle Controls",S,Not started,Needs Blaze and payment gateway
+158,School-Posted QR Teacher Check-in / Check-out,O,Built,"School QR screen posts a code that changes every minute; the teacher scans or types it, and the database rules check code, distance and GPS accuracy (batch 61)"

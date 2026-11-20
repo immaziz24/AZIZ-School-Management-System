@@ -125,7 +125,8 @@ test('payroll: closed to the principal until the owner switches it on', async ()
   await allowed(query('prin', A, 'payroll', []), 'list when switched on');
   await denied(set('prin', P('payroll', 't1_2026-12'), { staffUid: 't1', month: '2026-12', basic: 1, allowances: 0, deductions: 0 }), 'still cannot write payroll');
   await denied(remove('prin', payroll), 'still cannot delete payroll');
-  for (const who of ['prin-off', 'prin-b', 'acc', 't1', 'parent-1', null]) await denied(get(who, payroll), 'payroll by ' + who);
+  // A teacher reads only their own salary records (batch 62, feature 143); tests/batch62.rules.test.mjs covers that.
+  for (const who of ['prin-off', 'prin-b', 'acc', 'parent-1', null]) await denied(get(who, payroll), 'payroll by ' + who);
   await allowed(get('owner-a', payroll), 'owner always reads payroll');
 });
 

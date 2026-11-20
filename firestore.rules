@@ -760,6 +760,60 @@ service cloud.firestore {
         allow delete: if request.auth != null && isSchoolOwner(schoolId);
       }
 
+      // Scholarships (feature 152). scholarships/{SC-...}: a scheme. scholarshipApps/{SA-...}: one student's application, decided
+      // once by the owner. Approving one also writes a fee concession in the same batch. Owner writes; the principal reads.
+      match /scholarships/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('SC-[A-Za-z0-9-]{1,30}') && validScholarship(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      match /scholarshipApps/{docId} {
+        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('SA-[A-Za-z0-9-]{1,30}') && validScholarshipApp(request.resource.data)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId))
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/scholarships/$(request.resource.data.schemeId));
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      // Parent consent forms (feature 151). consentForms/{CF-...}: a trip, photo or other permission the school asks for. The
+      // owner writes them. consentResponses/{formId}_{studentId}: a linked parent says yes or no for their own child while the
+      // form is open, and may change the answer. The owner and principal read every answer; a parent reads their own.
+      match /consentForms/{docId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyActive());
+        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+          && docId.matches('CF-[A-Za-z0-9-]{1,30}') && validConsentForm(request.resource.data);
+        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+      }
+
+      match /consentResponses/{docId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
+          || (resource.data.by == request.auth.uid && familyActive()));
+        allow create: if request.auth != null && validConsentResponse(request.resource.data)
+          && request.resource.data.by == request.auth.uid
+          && familyOwns(request.resource.data.studentId)
+          && docId == request.resource.data.formId + '_' + request.resource.data.studentId
+          && get(/databases/$(database)/documents/schools/$(schoolId)/consentForms/$(request.resource.data.formId)).data.status == 'open';
+        allow update: if request.auth != null && validConsentResponse(request.resource.data)
+          && resource.data.by == request.auth.uid
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.formId == resource.data.formId && request.resource.data.studentId == resource.data.studentId
+          && familyOwns(request.resource.data.studentId)
+          && get(/databases/$(database)/documents/schools/$(schoolId)/consentForms/$(request.resource.data.formId)).data.status == 'open';
+        allow delete: if false;
+      }
+
+      // Staff self-service (feature 143). staffProfiles/{teacherUid}: a teacher's own phone, address and emergency contact.
+      match /staffProfiles/{uid} {
+        allow get: if request.auth != null && (isSchoolViewer(schoolId) || (isActiveTeacher() && request.auth.uid == uid));
+        allow list: if request.auth != null && isSchoolViewer(schoolId);
+        allow create, update: if request.auth != null && isActiveTeacher() && request.auth.uid == uid
+          && validStaffProfile(request.resource.data);
+        allow delete: if false;
+      }
+
       // Assets register. assets/{id}: name, place, cost, condition, boughtOn. Owner only.
       match /assets/{docId} {
         allow get, list: if request.auth != null && isSchoolViewer(schoolId);
@@ -907,7 +961,8 @@ service cloud.firestore {
       // Payroll. payroll/{staffUid}_{YYYY-MM}: staffUid, month, basic, allowances, deductions (whole
       // rupees), optional paidOn and note. Salary details are for the owner only: nobody else can read them.
       match /payroll/{payrollId} {
-        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || principalAllows(schoolId, 'payroll', false));
+        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || principalAllows(schoolId, 'payroll', false)
+          || (isActiveTeacher() && resource.data.staffUid == request.auth.uid));
         allow create, update: if request.auth != null && isSchoolOwner(schoolId)
           && validPayroll(request.resource.data)
           && payrollId == request.resource.data.staffUid + '_' + request.resource.data.month
@@ -1516,6 +1571,67 @@ service cloud.firestore {
         && mark.score is int && mark.score >= 0 && mark.score <= mark.maxMarks;
     }
 
+    // Scholarships (feature 152). A scheme says how much, how many seats and the lowest marks percent; an application
+    // belongs to one scheme and one student and is decided once.
+    function validScholarship(item) {
+      return item.keys().hasOnly(['name', 'criteria', 'amount', 'seats', 'minPercent', 'active'])
+        && item.keys().hasAll(['name', 'amount', 'seats', 'minPercent', 'active'])
+        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
+        && (!item.keys().hasAny(['criteria']) || (item.criteria is string && item.criteria.size() <= 300))
+        && item.amount is int && item.amount >= 1 && item.amount <= 10000000
+        && item.seats is int && item.seats >= 1 && item.seats <= 10000
+        && item.minPercent is int && item.minPercent >= 0 && item.minPercent <= 100
+        && item.active is bool;
+    }
+
+    function validScholarshipApp(item) {
+      return item.keys().hasOnly(['schemeId', 'schemeName', 'studentId', 'studentName', 'percent', 'status', 'appliedOn', 'decidedOn', 'note'])
+        && item.keys().hasAll(['schemeId', 'schemeName', 'studentId', 'studentName', 'percent', 'status', 'appliedOn'])
+        && item.schemeId is string && item.schemeId.matches('SC-[A-Za-z0-9-]{1,30}')
+        && item.schemeName is string && item.schemeName.size() <= 60
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
+        && item.percent is int && item.percent >= 0 && item.percent <= 100
+        && item.status in ['applied', 'approved', 'rejected']
+        && dateText(item.appliedOn)
+        && (!item.keys().hasAny(['decidedOn']) || dateText(item.decidedOn))
+        && (item.status == 'applied' || item.keys().hasAny(['decidedOn']))
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+    }
+
+    // Parent consent forms (feature 151).
+    function validConsentForm(item) {
+      return item.keys().hasOnly(['title', 'text', 'kind', 'status', 'dueOn', 'createdOn'])
+        && item.keys().hasAll(['title', 'text', 'kind', 'status', 'createdOn'])
+        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
+        && item.text is string && item.text.size() <= 1000 && item.text.matches('.*[^[:space:]].*')
+        && item.kind in ['trip', 'photo', 'other']
+        && item.status in ['open', 'closed']
+        && (!item.keys().hasAny(['dueOn']) || dateText(item.dueOn))
+        && dateText(item.createdOn);
+    }
+
+    function validConsentResponse(item) {
+      return item.keys().hasOnly(['formId', 'studentId', 'decision', 'by', 'at'])
+        && item.keys().hasAll(['formId', 'studentId', 'decision', 'by', 'at'])
+        && item.formId is string && item.formId.matches('CF-[A-Za-z0-9-]{1,30}')
+        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && item.decision in ['yes', 'no']
+        && item.by is string
+        && item.at == request.time;
+    }
+
+    // Staff self-service (feature 143): a teacher's own contact details.
+    function validStaffProfile(item) {
+      return item.keys().hasOnly(['phone', 'address', 'emergencyName', 'emergencyPhone', 'updatedOn'])
+        && item.keys().hasAll(['updatedOn'])
+        && dateText(item.updatedOn)
+        && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')))
+        && (!item.keys().hasAny(['address']) || (item.address is string && item.address.size() <= 200))
+        && (!item.keys().hasAny(['emergencyName']) || (item.emergencyName is string && item.emergencyName.size() <= 80))
+        && (!item.keys().hasAny(['emergencyPhone']) || (item.emergencyPhone is string && item.emergencyPhone.matches('[0-9+() -]{0,20}')));
+    }
+
     function pad2(n) {
       return n < 10 ? '0' + string(n) : string(n);
     }
@@ -1891,8 +2007,12 @@ service cloud.firestore {
     }
 
     function validExpense(item) {
-      return item.keys().hasOnly(['date', 'category', 'amount', 'note'])
+      return item.keys().hasOnly(['date', 'category', 'amount', 'note', 'status', 'payMode', 'vendor', 'decidedOn'])
         && item.keys().hasAll(['date', 'category', 'amount'])
+        && (!item.keys().hasAny(['status']) || item.status in ['pending', 'approved', 'rejected'])
+        && (!item.keys().hasAny(['payMode']) || item.payMode in ['cash', 'bank', 'upi', 'cheque'])
+        && (!item.keys().hasAny(['vendor']) || (item.vendor is string && item.vendor.size() <= 80))
+        && (!item.keys().hasAny(['decidedOn']) || dateText(item.decidedOn))
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
         && item.category is string && item.category.size() <= 40 && item.category.matches('.*[^[:space:]].*')
         && item.amount is int && item.amount >= 1 && item.amount <= 100000000
@@ -1954,8 +2074,11 @@ service cloud.firestore {
     }
 
     function validAppraisal(item) {
-      return item.keys().hasOnly(['staffName', 'date', 'rating', 'remarks'])
+      return item.keys().hasOnly(['staffName', 'date', 'rating', 'remarks', 'cycle', 'goals', 'status'])
         && item.keys().hasAll(['staffName', 'date', 'rating'])
+        && (!item.keys().hasAny(['cycle']) || (item.cycle is string && item.cycle.size() <= 40))
+        && (!item.keys().hasAny(['goals']) || (item.goals is string && item.goals.size() <= 300))
+        && (!item.keys().hasAny(['status']) || item.status in ['draft', 'submitted', 'approved'])
         && item.staffName is string && item.staffName.size() <= 80 && item.staffName.matches('.*[^[:space:]].*')
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
         && item.rating is int && item.rating >= 1 && item.rating <= 5
@@ -2010,13 +2133,18 @@ service cloud.firestore {
     }
 
     function validComplaint(item) {
-      return item.keys().hasOnly(['title', 'raisedBy', 'date', 'status', 'note'])
+      return item.keys().hasOnly(['title', 'raisedBy', 'date', 'status', 'note', 'assignedTo', 'priority', 'dueOn', 'response', 'respondedOn'])
         && item.keys().hasAll(['title', 'raisedBy', 'date', 'status'])
         && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
         && item.raisedBy is string && item.raisedBy.size() <= 80 && item.raisedBy.matches('.*[^[:space:]].*')
-        && item.status in ['open', 'resolved']
+        && item.status in ['open', 'in-progress', 'escalated', 'resolved']
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 500));
+        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 500))
+        && (!item.keys().hasAny(['assignedTo']) || (item.assignedTo is string && item.assignedTo.size() <= 80))
+        && (!item.keys().hasAny(['priority']) || item.priority in ['low', 'normal', 'high'])
+        && (!item.keys().hasAny(['dueOn']) || dateText(item.dueOn))
+        && (!item.keys().hasAny(['response']) || (item.response is string && item.response.size() <= 500))
+        && (!item.keys().hasAny(['respondedOn']) || dateText(item.respondedOn));
     }
 
     function validAsset(item) {
@@ -2050,8 +2178,9 @@ service cloud.firestore {
     }
 
     function validTraining(item) {
-      return item.keys().hasOnly(['staffName', 'course', 'date', 'hours'])
+      return item.keys().hasOnly(['staffName', 'course', 'date', 'hours', 'status'])
         && item.keys().hasAll(['staffName', 'course', 'date', 'hours'])
+        && (!item.keys().hasAny(['status']) || item.status in ['planned', 'completed'])
         && item.staffName is string && item.staffName.size() <= 80 && item.staffName.matches('.*[^[:space:]].*')
         && item.course is string && item.course.size() <= 120 && item.course.matches('.*[^[:space:]].*')
         && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')

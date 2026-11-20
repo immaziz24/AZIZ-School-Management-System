@@ -137,10 +137,11 @@ test('payroll: owner only, one record per person per month', async () => {
   await denied(set('owner-a', P('payroll', 'ghost_2026-12'), pay({ staffUid: 'ghost' })), 'not a member');
   await denied(set('owner-a', P('payroll', 't1_2026-12'), { ...pay(), extra: 1 }), 'extra field');
   for (const who of ['t1', 'parent-1', 't-off', 'owner-b', null]) {
-    await denied(get(who, P('payroll', 't1_2026-11')), 'read by ' + who);
+    if (who !== 't1') await denied(get(who, P('payroll', 't1_2026-11')), 'read by ' + who); // a teacher may read their own pay (batch 62)
     await denied(set(who, P('payroll', 't1_2027-01'), pay({ month: '2027-01' })), 'write by ' + who);
     await denied(remove(who, P('payroll', 't1_2026-11')), 'remove by ' + who);
   }
+  await allowed(get('t1', P('payroll', 't1_2026-11')), 'a teacher reads their own pay');
   await allowed(get('owner-a', P('payroll', 't1_2026-11')), 'owner reads');
   await allowed(remove('owner-a', P('payroll', 't1_2026-11')), 'owner removes');
 });

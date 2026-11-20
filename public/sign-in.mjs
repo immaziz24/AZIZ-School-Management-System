@@ -1166,6 +1166,7 @@ async function loadPortal(tools, request) {
     loadPortalSchoolwork(tools, request, studentId);
     loadPortalLife(tools, request, studentId);
     loadPortalCommunity(tools, request, studentId);
+    loadPortalConsents(tools, request, studentId);
     loadPortalEvents(tools, request, studentId);
     loadPortalCoursework(tools, request, studentId);
     loadPortalLeave(tools, request, studentId);
@@ -4800,9 +4801,9 @@ document.addEventListener('mod-open', (event) => {
 
 // Owner can change any saved record in these lists. Records that keep their number (like a payment receipt)
 // are not here: the rules only allow a payment to be voided, never edited.
-const NO_EDIT = new Set(['messages', 'enquiries', 'eventRegistrations', 'activityMembers']);
+const NO_EDIT = new Set(['messages', 'enquiries', 'eventRegistrations', 'activityMembers', 'scholarshipApps', 'consentForms']);
 const KEEP_ID = new Set(['routes', 'activities', 'inventory', 'expenses', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound',
-  'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'alumni', 'ptmSlots', 'storageRecords']);
+  'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'alumni', 'ptmSlots', 'storageRecords', 'scholarships']);
 function ownerList(cfg) {
   const section = document.querySelector('#' + cfg.id);
   const status = document.querySelector('#' + cfg.id + '-status');
@@ -5061,6 +5062,17 @@ lists.vehicles = ownerList({
     + expiryNote('insurance', item.insuranceExpiry) + expiryNote('fitness', item.fitnessExpiry) + expiryNote('driver licence', item.licenseExpiry),
 });
 
+// Training hours per staff member, for the appraisal summary. Planned training does not count.
+const trainingHoursByStaff = () => {
+  const hours = new Map();
+  for (const record of lists.trainings?.items ?? []) {
+    const item = record.data();
+    if (item.status === 'planned') continue;
+    hours.set(item.staffName, (hours.get(item.staffName) ?? 0) + item.hours);
+  }
+  return hours;
+};
+const APPRAISAL_STAGE = { draft: 'draft', submitted: 'submitted, waiting for approval', approved: 'approved' };
 lists.appraisals = ownerList({
   id: 'appraisals', collection: 'appraisals', empty: 'No appraisals yet.', saved: 'Appraisal saved.',
   sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
@@ -5068,22 +5080,34 @@ lists.appraisals = ownerList({
     document.querySelector('#appraisal-staff').replaceChildren(...lists.staffdir.items.map((record) => new Option(record.data().name)));
     const byStaff = new Map();
     for (const record of items) {
+      if (record.data().status && record.data().status !== 'approved') continue; // only approved reviews count towards the average
       const entry = byStaff.get(record.data().staffName) ?? { total: 0, n: 0 };
       entry.total += record.data().rating; entry.n += 1;
       byStaff.set(record.data().staffName, entry);
     }
+    const hours = lists.trainings?.loaded ? trainingHoursByStaff() : null;
     document.querySelector('#appraisals-summary').textContent = byStaff.size
-      ? 'Average ratings: ' + [...byStaff].map(([name, entry]) => name + ' ' + (Math.round(entry.total / entry.n * 10) / 10)).join(', ') + '.' : '';
+      ? 'Average ratings (approved reviews only): ' + [...byStaff].map(([name, entry]) => name + ' ' + (Math.round(entry.total / entry.n * 10) / 10)
+        + (hours?.has(name) ? ' (' + hours.get(name) + ' training hours)' : '')).join(', ') + '.' : '';
   },
   build: (fields) => {
     const rating = wholeNumber(fields, 'rating');
     if (!text(fields, 'staffName') || !DATE_TEXT.test(text(fields, 'date'))) return { error: 'Enter the staff member and the date.' };
     if (!(rating >= 1 && rating <= 5)) return { error: 'Rating must be a whole number from 1 to 5.' };
-    return { id: newId('AP'), data: { staffName: text(fields, 'staffName'), date: text(fields, 'date'), rating, ...optional(fields, 'remarks') } };
+    return { id: newId('AP'), data: { staffName: text(fields, 'staffName'), date: text(fields, 'date'), rating, ...optional(fields, 'remarks', 'cycle', 'goals'),
+      status: ['draft', 'submitted', 'approved'].includes(text(fields, 'status')) ? text(fields, 'status') : 'submitted' } };
   },
-  line: (item) => item.date + ' - ' + item.staffName + ' - rating ' + item.rating + ' of 5' + (item.remarks ? ' - ' + item.remarks : ''),
+  line: (item) => item.date + ' - ' + item.staffName + (item.cycle ? ' - ' + item.cycle : '') + ' - rating ' + item.rating + ' of 5'
+    + ' - ' + (APPRAISAL_STAGE[item.status] ?? 'approved') + (item.goals ? ' - goals: ' + item.goals : '') + (item.remarks ? ' - ' + item.remarks : ''),
+  extra: (record, act) => {
+    if (!record.data().status || record.data().status === 'approved' || viewOnly) return [];
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Approve';
+    button.addEventListener('click', () => act(() => academic.save('appraisals', record.id, { ...record.data(), status: 'approved' }), 'Approved.'));
+    return [button];
+  },
 });
-
 lists.activities = ownerList({
   id: 'activities', collection: 'activities', empty: 'No activities yet.', saved: 'Activity added.',
   sort: (a, b) => a.data().name.localeCompare(b.data().name),
@@ -5143,6 +5167,9 @@ lists.inventory = ownerList({
   }),
 });
 
+// An expense waiting for approval or rejected does not count in totals, the ledger or the finance summary.
+const expenseCounts = (item) => item.status !== 'pending' && item.status !== 'rejected';
+const PAY_MODE = { cash: 'cash', bank: 'bank', upi: 'UPI', cheque: 'cheque' };
 lists.expenses = ownerList({
   id: 'expenses', collection: 'expenses', empty: 'No expenses yet.', saved: 'Expense added.',
   sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
@@ -5151,27 +5178,42 @@ lists.expenses = ownerList({
     if (!DATE_TEXT.test(text(fields, 'date')) || !text(fields, 'category') || !(amount >= 1 && amount <= 100000000)) {
       return { error: 'Enter the date, the category and the amount in whole rupees.' };
     }
-    return { id: newId('EX'), data: { date: text(fields, 'date'), category: text(fields, 'category'), amount, ...optional(fields, 'note') } };
+    return { id: newId('EX'), data: { date: text(fields, 'date'), category: text(fields, 'category'), amount, ...optional(fields, 'note', 'vendor'),
+      ...(PAY_MODE[text(fields, 'payMode')] ? { payMode: text(fields, 'payMode') } : {}),
+      ...(['approved', 'pending'].includes(text(fields, 'status')) ? { status: text(fields, 'status') } : {}) } };
   },
-  line: (item) => item.date + ' - ' + item.category + ' - ' + rupees(item.amount) + (item.note ? ' (' + item.note + ')' : ''),
-  extra: () => {
+  line: (item) => item.date + ' - ' + item.category + ' - ' + rupees(item.amount) + (item.vendor ? ' - paid to ' + item.vendor : '')
+    + (item.payMode ? ' - ' + PAY_MODE[item.payMode] : '') + (item.status === 'pending' ? ' - WAITING FOR APPROVAL' : item.status === 'rejected' ? ' - REJECTED' : '')
+    + (item.note ? ' (' + item.note + ')' : ''),
+  summary: (items) => {
     const month = localToday().slice(0, 7);
-    const total = lists.expenses.items.filter((record) => record.data().date.startsWith(month))
-      .reduce((sum, record) => sum + record.data().amount, 0);
+    const mine = items.filter((record) => record.data().date.startsWith(month) && expenseCounts(record.data()));
+    const total = mine.reduce((sum, record) => sum + record.data().amount, 0);
     const byCategory = new Map();
-    for (const record of lists.expenses.items) {
-      if (record.data().date.startsWith(month)) byCategory.set(record.data().category, (byCategory.get(record.data().category) ?? 0) + record.data().amount);
-    }
+    for (const record of mine) byCategory.set(record.data().category, (byCategory.get(record.data().category) ?? 0) + record.data().amount);
     const parts = [...byCategory].sort((a, b) => b[1] - a[1]).map(([name, amount]) => name + ' ' + rupees(amount));
+    const waiting = items.filter((record) => record.data().status === 'pending');
     document.querySelector('#expenses-total').textContent = 'Spent this month (' + month + '): ' + rupees(total)
-      + (parts.length ? ' - ' + parts.join(', ') : '');
-    return [];
+      + (parts.length ? ' - ' + parts.join(', ') : '')
+      + (waiting.length ? '. Waiting for approval: ' + waiting.length + ' (' + rupees(waiting.reduce((sum, record) => sum + record.data().amount, 0)) + ').' : '');
+  },
+  extra: (record, act) => {
+    if (record.data().status !== 'pending' || viewOnly) return [];
+    return [['Approve', 'approved'], ['Reject', 'rejected']].map(([label, next]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => act(() => academic.save('expenses', record.id, { ...record.data(), status: next, decidedOn: localToday() }),
+        next === 'approved' ? 'Expense approved.' : 'Expense rejected.'));
+      return button;
+    });
   },
 });
 document.querySelector('#expenses-csv').addEventListener('click', () => {
-  downloadCsv('expenses.csv', [['Date', 'Category', 'Amount', 'Note'],
+  downloadCsv('expenses', [['Date', 'Category', 'Amount', 'Note', 'Paid to', 'How paid', 'Stage'],
     ...[...lists.expenses.items].sort((a, b) => a.data().date.localeCompare(b.data().date))
-      .map((record) => [record.data().date, record.data().category, record.data().amount, record.data().note ?? ''])]);
+      .map((record) => [record.data().date, record.data().category, record.data().amount, record.data().note ?? '', record.data().vendor ?? '',
+        PAY_MODE[record.data().payMode] ?? '', record.data().status ?? 'approved'])]);
 });
 
 let storagePlanMb = null;
@@ -5387,22 +5429,195 @@ lists.achievements = ownerList({
   line: (item) => item.date + ' - ' + item.studentName + ' - ' + item.title + ' (' + item.level + ' level)',
 });
 
+// Complaints desk (feature 147): who has it, how urgent, the date to answer by, escalation and a written response.
+const complaintOverdue = (item) => item.status !== 'resolved' && Boolean(item.dueOn) && item.dueOn < localToday();
+const withoutBlank = (data) => Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined && value !== ''));
 lists.complaints = ownerList({
-  id: 'complaints', collection: 'complaints', empty: 'No complaints logged.', saved: 'Complaint logged.',
-  sort: (a, b) => (a.data().status === 'resolved') - (b.data().status === 'resolved') || b.id.localeCompare(a.id),
+  id: 'complaints', collection: 'complaints', empty: 'No complaints logged.', saved: 'Complaint logged.', noEdit: true,
+  sort: (a, b) => (a.data().status === 'resolved') - (b.data().status === 'resolved') || complaintOverdue(b.data()) - complaintOverdue(a.data())
+    || (b.data().status === 'escalated') - (a.data().status === 'escalated') || b.id.localeCompare(a.id),
   build: (fields) => {
     if (!text(fields, 'title') || !text(fields, 'raisedBy')) return { error: 'Enter the complaint and who raised it.' };
-    return { id: newId('CP'), data: { title: text(fields, 'title'), raisedBy: text(fields, 'raisedBy'), date: localToday(), status: 'open', ...optional(fields, 'note') } };
+    if (text(fields, 'dueOn') && !DATE_TEXT.test(text(fields, 'dueOn'))) return { error: 'Choose a valid date to answer by.' };
+    return { id: newId('CP'), data: { title: text(fields, 'title'), raisedBy: text(fields, 'raisedBy'), date: localToday(), status: 'open',
+      priority: ['low', 'normal', 'high'].includes(text(fields, 'priority')) ? text(fields, 'priority') : 'normal', ...optional(fields, 'note', 'assignedTo', 'dueOn') } };
   },
-  line: (item) => '[' + item.status + '] ' + item.date + ' - ' + item.title + ' - by ' + item.raisedBy + (item.note ? ' (' + item.note + ')' : ''),
+  line: (item) => '[' + item.status + (item.priority === 'high' ? ', HIGH' : '') + (complaintOverdue(item) ? ', OVERDUE' : '') + '] ' + item.date + ' - ' + item.title
+    + ' - by ' + item.raisedBy + (item.assignedTo ? ' - with ' + item.assignedTo : '') + (item.dueOn ? ' - answer by ' + item.dueOn : '')
+    + (item.note ? ' (' + item.note + ')' : '') + (item.response ? ' | Response (' + item.respondedOn + '): ' + item.response : ''),
   extra: (record, act) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    const resolved = record.data().status === 'resolved';
-    button.textContent = resolved ? 'Reopen' : 'Mark resolved';
-    button.addEventListener('click', () => act(() => academic.save('complaints', record.id,
-      { ...record.data(), status: resolved ? 'open' : 'resolved' }), 'Updated.'));
-    return [button];
+    const item = record.data();
+    const buttons = [];
+    const add = (label, changes, message, ask) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => {
+        const extra = ask?.();
+        if (extra === null) return;
+        act(() => academic.save('complaints', record.id, withoutBlank({ ...item, ...changes, ...extra })), message);
+      });
+      buttons.push(button);
+    };
+    if (item.status !== 'resolved') {
+      add('Assign', {}, 'Assigned.', () => {
+        const who = prompt('Give this complaint to (name):', item.assignedTo ?? '');
+        return who === null ? null : { assignedTo: who.trim().slice(0, 80) };
+      });
+      if (item.status === 'open') add('Start work', { status: 'in-progress' }, 'Marked in progress.');
+      if (item.status !== 'escalated') add('Escalate', { status: 'escalated' }, 'Escalated.');
+      add('Respond and resolve', { status: 'resolved', respondedOn: localToday() }, 'Resolved.', () => {
+        const reply = prompt('Write the response given to ' + item.raisedBy + ':', '');
+        if (reply === null) return null;
+        return reply.trim() ? { response: reply.trim().slice(0, 500) } : null;
+      });
+    } else {
+      add('Reopen', { status: 'open' }, 'Reopened.');
+    }
+    return buttons;
+  },
+});
+
+// Scholarships (feature 152). A scheme has an amount, seats and a lowest marks percent. Approving an application saves the
+// application and a fee concession together in one batch, so a scholarship cannot be approved without reaching the student's fees.
+const approvedSeats = (schemeId) => (lists.scholarshipapps?.items ?? []).filter((record) => record.data().schemeId === schemeId && record.data().status === 'approved').length;
+lists.scholarships = ownerList({
+  id: 'scholarships', collection: 'scholarships', empty: 'No scholarship schemes yet.', saved: 'Scheme saved.',
+  sort: (a, b) => a.data().name.localeCompare(b.data().name),
+  build: (fields) => {
+    const amount = wholeNumber(fields, 'amount');
+    const seats = wholeNumber(fields, 'seats');
+    const minPercent = wholeNumber(fields, 'minPercent');
+    if (!text(fields, 'name') || !(amount >= 1 && amount <= 10000000) || !(seats >= 1 && seats <= 10000) || !(minPercent >= 0 && minPercent <= 100)) {
+      return { error: 'Enter the name, the amount in whole rupees, the seats and a marks percent from 0 to 100.' };
+    }
+    return { id: newId('SC'), data: { name: text(fields, 'name'), amount, seats, minPercent, active: text(fields, 'active') !== 'false', ...optional(fields, 'criteria') } };
+  },
+  line: (item, record) => item.name + ' - ' + rupees(item.amount) + ' each - ' + (lists.scholarshipapps?.loaded ? approvedSeats(record.id) + ' of ' + item.seats + ' seats taken' : item.seats + ' seat(s)')
+    + ' - lowest marks ' + item.minPercent + '%' + (item.active ? '' : ' - CLOSED') + (item.criteria ? ' (' + item.criteria + ')' : ''),
+  canRemove: (record) => !(lists.scholarshipapps?.items ?? []).some((app) => app.data().schemeId === record.id),
+});
+lists.scholarshipapps = ownerList({
+  id: 'scholarshipapps', collection: 'scholarshipApps', empty: 'No applications yet.', saved: 'Application recorded.', noEdit: true,
+  sort: (a, b) => b.data().appliedOn.localeCompare(a.data().appliedOn) || b.id.localeCompare(a.id),
+  prepare: (form) => {
+    fillSelect(form.elements.namedItem('schemeId'), lists.scholarships.items.filter((record) => record.data().active), (item) => item.name + ' (min ' + item.minPercent + '%)');
+    fillSelect(form.elements.namedItem('studentId'), studentRecords.filter((item) => item.data().status === 'active').sort(byStudentName), studentOption);
+  },
+  build: (fields, items) => {
+    const scheme = lists.scholarships.items.find((record) => record.id === text(fields, 'schemeId'));
+    const student = pickedStudent(fields);
+    const percent = wholeNumber(fields, 'percent');
+    if (!scheme || !student || !(percent >= 0 && percent <= 100)) return { error: 'Choose the scheme and the student, and enter a marks percent from 0 to 100.' };
+    if (!scheme.data().active) return { error: 'This scheme is closed for applications.' };
+    if (percent < scheme.data().minPercent) return { error: 'This scheme needs at least ' + scheme.data().minPercent + '% marks.' };
+    if (items.some((record) => record.data().schemeId === scheme.id && record.data().studentId === student.id && record.data().status !== 'rejected')) {
+      return { error: 'This student already has an application for this scheme.' };
+    }
+    return { id: newId('SA'), data: { schemeId: scheme.id, schemeName: scheme.data().name, studentId: student.id, studentName: student.data().name, percent,
+      status: 'applied', appliedOn: localToday(), ...optional(fields, 'note') } };
+  },
+  line: (item) => item.appliedOn + ' - ' + item.studentName + ' - ' + item.schemeName + ' - ' + item.percent + '% - ' + item.status.toUpperCase()
+    + (item.decidedOn ? ' on ' + item.decidedOn : '') + (item.note ? ' (' + item.note + ')' : ''),
+  canRemove: (record) => record.data().status !== 'approved',
+  extra: (record) => {
+    const item = record.data();
+    if (item.status !== 'applied' || viewOnly) return [];
+    const approve = document.createElement('button');
+    approve.type = 'button';
+    approve.textContent = 'Approve and add concession';
+    approve.addEventListener('click', async () => {
+      const tools = academic;
+      const scheme = lists.scholarships.items.find((found) => found.id === item.schemeId);
+      if (!tools || tools.busy || !scheme) return;
+      if (approvedSeats(item.schemeId) >= scheme.data().seats) { document.querySelector('#scholarshipapps-status').textContent = 'All seats of this scheme are taken.'; return; }
+      if (!confirm('Approve ' + item.studentName + ' for ' + item.schemeName + '? A scholarship of ' + rupees(scheme.data().amount) + ' is added to their fee concessions.')) return;
+      const request = schoolRequest;
+      tools.busy = true;
+      try {
+        await tools.commit([
+          { path: ['scholarshipApps', record.id], data: { ...item, status: 'approved', decidedOn: localToday() } },
+          { path: ['concessions', 'CN-' + record.id], data: { studentId: item.studentId, studentName: item.studentName, kind: 'Scholarship', amount: scheme.data().amount,
+            givenOn: localToday(), note: item.schemeName } },
+        ]);
+        tools.busy = false;
+        await Promise.all([lists.scholarshipapps.load(request), lists.concessions.load(request)]);
+        if (request === schoolRequest) document.querySelector('#scholarshipapps-status').textContent = 'Approved. The scholarship is in Fee Concessions.';
+      } catch {
+        if (request === schoolRequest) document.querySelector('#scholarshipapps-status').textContent = 'That did not work. Check the details and try again.';
+      } finally {
+        tools.busy = false;
+      }
+    });
+    const reject = document.createElement('button');
+    reject.type = 'button';
+    reject.textContent = 'Reject';
+    reject.addEventListener('click', async () => {
+      const tools = academic;
+      if (!tools || tools.busy) return;
+      const request = schoolRequest;
+      tools.busy = true;
+      try {
+        await tools.save('scholarshipApps', record.id, { ...item, status: 'rejected', decidedOn: localToday() });
+        tools.busy = false;
+        await lists.scholarshipapps.load(request);
+      } catch {
+        if (request === schoolRequest) document.querySelector('#scholarshipapps-status').textContent = 'That did not work. Try again.';
+      } finally {
+        tools.busy = false;
+      }
+    });
+    return [approve, reject];
+  },
+});
+
+// Parent consent forms (feature 151). The owner sends a form; each linked parent answers Yes or No for their own child.
+const CONSENT_KIND = { trip: 'trip', photo: 'photo or media', other: 'other' };
+const consentsDetail = document.querySelector('#consents-detail');
+lists.consents = ownerList({
+  id: 'consents', collection: 'consentForms', empty: 'No consent forms yet.', saved: 'Form sent. Parents can answer from their dashboard.', noEdit: true,
+  sort: (a, b) => (a.data().status === 'closed') - (b.data().status === 'closed') || b.id.localeCompare(a.id),
+  build: (fields) => {
+    if (!text(fields, 'title') || !text(fields, 'text')) return { error: 'Enter a title and what you are asking.' };
+    if (text(fields, 'dueOn') && !DATE_TEXT.test(text(fields, 'dueOn'))) return { error: 'Choose a valid date.' };
+    return { id: newId('CF'), data: { title: text(fields, 'title'), text: text(fields, 'text'), kind: ['trip', 'photo', 'other'].includes(text(fields, 'kind')) ? text(fields, 'kind') : 'other',
+      status: 'open', createdOn: localToday(), ...optional(fields, 'dueOn') } };
+  },
+  line: (item) => '[' + item.status + '] ' + item.createdOn + ' - ' + item.title + ' (' + CONSENT_KIND[item.kind] + ')' + (item.dueOn ? ' - answer by ' + item.dueOn : ''),
+  extra: (record, act) => {
+    const item = record.data();
+    const answers = document.createElement('button');
+    answers.type = 'button';
+    answers.textContent = 'See answers';
+    answers.addEventListener('click', async () => {
+      const request = schoolRequest;
+      consentsDetail.textContent = 'Loading answers.';
+      try {
+        const { collection, getDocsFromServer, query, where } = firestoreTools;
+        const saved = await getDocsFromServer(query(collection(academic.schoolRef, 'consentResponses'), where('formId', '==', record.id)));
+        if (request !== schoolRequest) return;
+        const decided = new Map(saved.docs.map((found) => [found.data().studentId, found.data().decision]));
+        const pupils = studentRecords.filter((student) => student.data().status === 'active');
+        const names = (test) => pupils.filter((student) => test(decided.get(student.id))).map((student) => student.data().name).sort().join(', ') || 'none';
+        consentsDetail.replaceChildren();
+        for (const line of [item.title + ' - answers from ' + decided.size + ' of ' + pupils.length + ' active students',
+          'Yes (' + pupils.filter((student) => decided.get(student.id) === 'yes').length + '): ' + names((value) => value === 'yes'),
+          'No (' + pupils.filter((student) => decided.get(student.id) === 'no').length + '): ' + names((value) => value === 'no'),
+          'Not answered (' + pupils.filter((student) => !decided.has(student.id)).length + '): ' + names((value) => value === undefined)]) {
+          const row = document.createElement('p');
+          row.textContent = line;
+          consentsDetail.append(row);
+        }
+      } catch {
+        if (request === schoolRequest) consentsDetail.textContent = 'Could not load the answers. Try again.';
+      }
+    });
+    if (viewOnly) return [answers];
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.textContent = item.status === 'open' ? 'Close form' : 'Reopen form';
+    toggle.addEventListener('click', () => act(() => academic.save('consentForms', record.id, { ...item, status: item.status === 'open' ? 'closed' : 'open' }), 'Updated.'));
+    return [answers, toggle];
   },
 });
 
@@ -5462,9 +5677,18 @@ lists.trainings = ownerList({
     if (!text(fields, 'staffName') || !text(fields, 'course') || !DATE_TEXT.test(text(fields, 'date')) || !(hours >= 1 && hours <= 1000)) {
       return { error: 'Enter the staff member, the course, the date and the hours.' };
     }
-    return { id: newId('TR'), data: { staffName: text(fields, 'staffName'), course: text(fields, 'course'), date: text(fields, 'date'), hours } };
+    return { id: newId('TR'), data: { staffName: text(fields, 'staffName'), course: text(fields, 'course'), date: text(fields, 'date'), hours,
+      status: text(fields, 'status') === 'planned' ? 'planned' : 'completed' } };
   },
-  line: (item) => item.date + ' - ' + item.staffName + ' - ' + item.course + ' (' + item.hours + ' h)',
+  line: (item) => item.date + ' - ' + item.staffName + ' - ' + item.course + ' (' + item.hours + ' h)' + (item.status === 'planned' ? ' - PLANNED' : ''),
+  extra: (record, act) => {
+    if (record.data().status !== 'planned' || viewOnly) return [];
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Mark completed';
+    button.addEventListener('click', () => act(() => academic.save('trainings', record.id, { ...record.data(), status: 'completed' }), 'Marked completed.'));
+    return [button];
+  },
 });
 
 lists.diary = ownerList({
@@ -5548,7 +5772,11 @@ function refreshAttention() {
     [count(lists.enquiries, (item) => item.status === 'new'), 'new admission enquiry(ies) not yet handled'],
     [count(lists.inbox, (item) => !item.reply), 'parent message(s) waiting for a reply'],
     [count(lists.tickets, (item) => item.status === 'open'), 'open maintenance ticket(s)'],
-    [count(lists.complaints, (item) => item.status === 'open'), 'open complaint(s)'],
+    [count(lists.complaints, (item) => item.status !== 'resolved'), 'open complaint(s)'],
+    [count(lists.complaints, (item) => item.status === 'escalated'), 'escalated complaint(s)'],
+    [count(lists.complaints, complaintOverdue), 'complaint(s) past the date to answer'],
+    [count(lists.expenses, (item) => item.status === 'pending'), 'expense(s) waiting for approval'],
+    [count(lists.scholarshipapps, (item) => item.status === 'applied'), 'scholarship application(s) waiting for a decision'],
     [count(lists.lostfound, (item) => item.status === 'open'), 'lost and found item(s) still open'],
     [count(lists.syllabus, (item) => item.status !== 'Done'), 'syllabus chapter(s) not finished'],
   ].filter(([number]) => number > 0);
@@ -5589,7 +5817,7 @@ document.querySelector('#finance-show').addEventListener('click', async () => {
       const payment = record.data();
       if (!payment.voided) slot(payment.date.slice(0, 7)).fees += payment.amount;
     }
-    for (const record of lists.expenses.items) slot(record.data().date.slice(0, 7)).spent += record.data().amount;
+    for (const record of lists.expenses.items) if (expenseCounts(record.data())) slot(record.data().date.slice(0, 7)).spent += record.data().amount;
     financeList.replaceChildren();
     for (const [month, figures] of [...months].sort((a, b) => b[0].localeCompare(a[0]))) {
       const item = document.createElement('li');
@@ -6512,7 +6740,7 @@ document.querySelector('#fin-run').addEventListener('click', () => {
     const p = record.data();
     if (p.voided !== true) { const row = slot(p.date.slice(0, 7)); if (row) row.fees += p.amount; }
   }
-  for (const record of lists.expenses.items) { const row = slot(record.data().date.slice(0, 7)); if (row) row.spent += record.data().amount; }
+  for (const record of lists.expenses.items) { const row = expenseCounts(record.data()) ? slot(record.data().date.slice(0, 7)) : null; if (row) row.spent += record.data().amount; }
   for (const record of lists.payroll.items) {
     const p = record.data();
     if (!p.paidOn) continue;
@@ -6721,6 +6949,224 @@ document.querySelector('#bulk-run').addEventListener('click', async () => {
   }
 });
 
+// Accounts ledger (feature 149): fees received, approved expenses and salaries paid, in date order with a running balance.
+const ledgerBody = document.querySelector('#ledger-body');
+const ledgerStatus = document.querySelector('#ledger-status');
+const ledgerSummary = document.querySelector('#ledger-summary');
+let ledgerRows = [];
+function buildLedger() {
+  const from = document.querySelector('#ledger-from').value;
+  const to = document.querySelector('#ledger-to').value;
+  const opening = Number.parseInt(document.querySelector('#ledger-opening').value || '0', 10);
+  const bankText = document.querySelector('#ledger-bank').value.trim();
+  if (Number.isNaN(opening) || (from && !DATE_TEXT.test(from)) || (to && !DATE_TEXT.test(to)) || (from && to && from > to)) {
+    ledgerStatus.textContent = 'Check the dates and the opening balance.';
+    return;
+  }
+  const entries = [];
+  for (const record of feeData.payments) {
+    const p = record.data();
+    if (p.voided !== true) entries.push([p.date, 'Fee received', 'Receipt ' + p.receiptNo + ' - ' + nameOfStudent(p.studentId) + ' (' + (METHOD_LABEL[p.method] ?? p.method) + ')', p.amount, 0]);
+  }
+  for (const record of lists.expenses.items) {
+    const e = record.data();
+    if (expenseCounts(e)) entries.push([e.date, 'Expense', e.category + (e.vendor ? ' - ' + e.vendor : '') + (e.note ? ' (' + e.note + ')' : ''), 0, e.amount]);
+  }
+  for (const record of lists.payroll.items) {
+    const p = record.data();
+    if (p.paidOn) entries.push([p.paidOn, 'Salary', staffLabel(p.staffUid) + ' - ' + p.month, 0, p.basic + p.allowances - p.deductions]);
+  }
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  // Entries before the start date change the opening balance; later ones are left out.
+  let balance = opening;
+  ledgerRows = [];
+  ledgerBody.replaceChildren();
+  let moneyIn = 0;
+  let moneyOut = 0;
+  for (const [date, type, details, inAmount, outAmount] of entries) {
+    if (from && date < from) { balance += inAmount - outAmount; continue; }
+    if (to && date > to) continue;
+    balance += inAmount - outAmount;
+    moneyIn += inAmount;
+    moneyOut += outAmount;
+    ledgerRows.push([date, type, details, inAmount || '', outAmount || '', balance]);
+    addRow(ledgerBody, [date, type, details, inAmount ? rupees(inAmount) : '', outAmount ? rupees(outAmount) : '', rupees(balance)]);
+  }
+  let note = ledgerRows.length ? '' : 'Nothing recorded in this period. ';
+  note += 'Money in ' + rupees(moneyIn) + ', money out ' + rupees(moneyOut) + ', closing balance ' + rupees(balance) + '.';
+  if (bankText) {
+    const bank = Number.parseInt(bankText, 10);
+    if (Number.isNaN(bank)) { ledgerStatus.textContent = 'The bank balance must be a whole number.'; return; }
+    note += bank === balance ? ' Matches the bank statement.' : ' Differs from the bank statement by ' + rupees(Math.abs(bank - balance)) + ' (' + (bank > balance ? 'bank is higher' : 'ledger is higher') + ').';
+  }
+  ledgerStatus.textContent = '';
+  ledgerSummary.textContent = note;
+}
+document.querySelector('#ledger-run').addEventListener('click', buildLedger);
+document.querySelector('#ledger-csv').addEventListener('click', () => {
+  if (!ledgerRows.length) { ledgerStatus.textContent = 'Build the ledger first.'; return; }
+  downloadCsv('ledger', [['Date', 'Type', 'Details', 'Money in', 'Money out', 'Balance'], ...ledgerRows]);
+});
+document.querySelector('#ledger').addEventListener('mod-open', () => {
+  if (!document.querySelector('#ledger-from').value) document.querySelector('#ledger-from').value = localToday().slice(0, 4) + '-04-01';
+});
+
+// Staff contact details (feature 143). The owner reads them; each teacher keeps their own up to date.
+const staffProfilesBody = document.querySelector('#staff-profiles-body');
+const staffProfilesStatus = document.querySelector('#staff-profiles-status');
+document.querySelector('#staff-profiles').addEventListener('mod-open', async () => {
+  if (!academic) return;
+  const request = schoolRequest;
+  staffProfilesStatus.textContent = 'Loading.';
+  try {
+    const saved = await academic.list('staffProfiles');
+    if (request !== schoolRequest) return;
+    const byUid = new Map(saved.docs.map((record) => [record.id, record.data()]));
+    staffProfilesBody.replaceChildren();
+    for (const uid of staffRoster) {
+      const item = byUid.get(uid);
+      addRow(staffProfilesBody, [staffLabel(uid), item?.phone ?? '', item?.address ?? '',
+        item?.emergencyName || item?.emergencyPhone ? [item.emergencyName, item.emergencyPhone].filter(Boolean).join(' - ') : '', item?.updatedOn ?? 'Not added yet']);
+    }
+    staffProfilesStatus.textContent = staffRoster.length ? '' : 'No teachers yet.';
+  } catch {
+    if (request === schoolRequest) staffProfilesStatus.textContent = 'Could not load the details. Try again.';
+  }
+});
+
+// Teacher: my payslips and my own contact details.
+const myPaySection = document.querySelector('#my-pay');
+const myPayStatus = document.querySelector('#my-pay-status');
+const myPayList = document.querySelector('#my-pay-list');
+const myProfileForm = document.querySelector('#my-profile-form');
+const myProfileStatus = document.querySelector('#my-profile-status');
+let myPayContext; // { schoolRef, uid, name, busy }
+const PHONE_TEXT = /^[0-9+() -]{0,20}$/;
+async function loadMyPay(request, schoolRef, user) {
+  const { collection, doc, getDocFromServer, getDocsFromServer, query, where } = firestoreTools;
+  myPayContext = { schoolRef, uid: user.uid, name: user.displayName || user.email || 'Staff member', busy: false };
+  myPaySection.hidden = false;
+  myPayStatus.textContent = 'Loading.';
+  try {
+    const [pay, profile] = await Promise.all([
+      getDocsFromServer(query(collection(schoolRef, 'payroll'), where('staffUid', '==', user.uid))).catch(() => null),
+      getDocFromServer(doc(schoolRef, 'staffProfiles', user.uid)).catch(() => null),
+    ]);
+    if (request !== schoolRequest) return;
+    myPayList.replaceChildren();
+    for (const record of (pay?.docs ?? []).sort((a, b) => b.data().month.localeCompare(a.data().month))) {
+      const item = record.data();
+      const row = document.createElement('li');
+      row.append(item.month + ' - net ' + rupees(item.basic + item.allowances - item.deductions) + (item.paidOn ? ' - paid ' + item.paidOn : ' - not paid yet') + ' ');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Print payslip';
+      button.addEventListener('click', () => {
+        const body = document.querySelector('#my-payslip-body');
+        body.replaceChildren();
+        for (const line of [['Staff member', myPayContext?.name ?? ''], ['Month', item.month], ['Basic pay', rupees(item.basic)], ['Allowances', rupees(item.allowances)],
+          ['Deductions', rupees(item.deductions)], ['Net pay', rupees(item.basic + item.allowances - item.deductions)], ['Paid on', item.paidOn ?? 'Not paid yet']]) addRow(body, line);
+        const slip = document.querySelector('#my-payslip');
+        slip.hidden = false;
+        printCard('#my-payslip-head', 'Payslip - ' + (myPayContext?.name ?? '') + ' - ' + item.month, () => { slip.hidden = true; body.replaceChildren(); });
+      });
+      row.append(button);
+      myPayList.append(row);
+    }
+    myPayStatus.textContent = pay ? (pay.docs.length ? '' : 'No salary records yet.') : 'Could not load your salary records.';
+    const data = profile?.exists() ? profile.data() : {};
+    for (const name of ['phone', 'address', 'emergencyName', 'emergencyPhone']) myProfileForm.elements.namedItem(name).value = data[name] ?? '';
+  } catch {
+    if (request === schoolRequest) myPayStatus.textContent = 'Could not load. Try again.';
+  }
+}
+myProfileForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = myPayContext;
+  if (!context || context.busy) return;
+  const fields = new FormData(myProfileForm);
+  if (!PHONE_TEXT.test(text(fields, 'phone')) || !PHONE_TEXT.test(text(fields, 'emergencyPhone'))) {
+    myProfileStatus.textContent = 'Phone numbers can have only digits, spaces and + ( ) -, up to 20 characters.';
+    return;
+  }
+  const { doc, setDoc } = firestoreTools;
+  const request = schoolRequest;
+  context.busy = true;
+  myProfileStatus.textContent = 'Saving.';
+  try {
+    await setDoc(doc(context.schoolRef, 'staffProfiles', context.uid), { ...optional(fields, 'phone', 'address', 'emergencyName', 'emergencyPhone'), updatedOn: localToday() });
+    if (request === schoolRequest) myProfileStatus.textContent = 'Saved.';
+  } catch {
+    if (request === schoolRequest) myProfileStatus.textContent = 'That did not save. Try again.';
+  } finally {
+    context.busy = false;
+  }
+});
+const resetMyPay = () => {
+  myPayContext = undefined;
+  myPaySection.hidden = true;
+  myPayStatus.textContent = '';
+  myPayList.replaceChildren();
+  myProfileForm.reset();
+  myProfileStatus.textContent = '';
+  document.querySelector('#my-payslip').hidden = true;
+  document.querySelector('#my-payslip-body').replaceChildren();
+};
+
+// Parent: consent forms (feature 151). A parent answers Yes or No for their own child; the answer can be changed while the form is open.
+const portalConsentsSection = document.querySelector('#portal-consents');
+const portalConsentsStatus = document.querySelector('#portal-consents-status');
+const portalConsentsList = document.querySelector('#portal-consents-list');
+let portalConsentBusy = false;
+async function loadPortalConsents(tools, request, studentId) {
+  if (portalRole === 'student') { portalConsentsSection.hidden = true; return; }
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  portalConsentsSection.hidden = false;
+  portalConsentsStatus.textContent = 'Loading.';
+  try {
+    const [forms, answers] = await Promise.all([
+      getDocsFromServer(collection(schoolRef, 'consentForms')),
+      getDocsFromServer(query(collection(schoolRef, 'consentResponses'), where('by', '==', tools.user.uid))),
+    ]);
+    if (request !== schoolRequest) return;
+    const mine = new Map(answers.docs.filter((record) => record.data().studentId === studentId).map((record) => [record.data().formId, record.data().decision]));
+    portalConsentsList.replaceChildren();
+    for (const record of forms.docs.sort((a, b) => b.id.localeCompare(a.id))) {
+      const item = record.data();
+      const row = document.createElement('li');
+      const answer = mine.get(record.id);
+      row.append(item.title + ' (' + CONSENT_KIND[item.kind] + ')' + (item.dueOn ? ' - answer by ' + item.dueOn : '') + ': ' + item.text
+        + ' - ' + (answer ? 'Your answer: ' + answer.toUpperCase() : 'Not answered') + (item.status === 'closed' ? ' (form closed)' : ' '));
+      if (item.status === 'open') {
+        for (const [label, decision] of [['Yes', 'yes'], ['No', 'no']]) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = label;
+          button.addEventListener('click', async () => {
+            if (portalConsentBusy) return;
+            portalConsentBusy = true;
+            try {
+              const { doc, setDoc, serverTimestamp } = firestoreTools;
+              await setDoc(doc(schoolRef, 'consentResponses', record.id + '_' + studentId), { formId: record.id, studentId, decision, by: tools.user.uid, at: serverTimestamp() });
+              portalConsentBusy = false;
+              await loadPortalConsents(tools, schoolRequest, studentId);
+            } catch {
+              portalConsentsStatus.textContent = 'That did not save. The form may have been closed.';
+            } finally {
+              portalConsentBusy = false;
+            }
+          });
+          row.append(button);
+        }
+      }
+      portalConsentsList.append(row);
+    }
+    portalConsentsStatus.textContent = forms.docs.length ? '' : 'There are no consent forms.';
+  } catch {
+    if (request === schoolRequest) portalConsentsStatus.textContent = 'Could not load the forms. Try again.';
+  }
+}
+
 // Payslip for one salary record.
 function printPayslip(item) {
   const body = document.querySelector('#payslip-body');
@@ -6889,7 +7335,7 @@ const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'members', 'stud
   'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
   'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
-  'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog'];
+  'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog', 'scholarships', 'scholarshipApps', 'consentForms', 'consentResponses', 'staffProfiles'];
 
 // School data pack: every list as a CSV file inside one ZIP (stored, not compressed) built here in the browser.
 const CRC_TABLE = (() => {
@@ -7047,11 +7493,11 @@ const resetInsights = () => {
 };
 
 async function loadOwnerLists(request) {
-  const names = ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage', 'vehicles', 'appraisals'];
+  const names = ['routes', 'riders', 'activities', 'members', 'substitutions', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffdir', 'vendors', 'minutes', 'lostfound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'health', 'lessons', 'ptm', 'payroll', 'inbox', 'enquiries', 'eventregs', 'storage', 'vehicles', 'appraisals', 'scholarships', 'scholarshipapps', 'consents'];
   // These lists feed no other screen, so they are read only when the owner opens them. The rest are needed at once by the
   // Needs Attention list, fee balances, finance summaries and the staff and activity screens.
   const lazyNames = new Set(['substitutions', 'alumni', 'certificates', 'vendors', 'minutes', 'achievements', 'assets', 'sales', 'trainings',
-    'diary', 'health', 'lessons', 'ptm', 'eventregs', 'appraisals']);
+    'diary', 'health', 'lessons', 'ptm', 'eventregs', 'appraisals', 'scholarships', 'scholarshipapps', 'consents']);
   for (const name of names) {
     if (!lazyNames.has(name)) continue;
     lists[name].lazy = true;
@@ -7067,6 +7513,9 @@ const resetOwnerLists = () => {
   backupLog = null;
   auditItems = [];
   for (const api of ownerLists) api.reset();
+  ledgerBody.replaceChildren(); ledgerRows = []; ledgerSummary.textContent = ''; ledgerStatus.textContent = '';
+  staffProfilesBody.replaceChildren(); staffProfilesStatus.textContent = '';
+  consentsDetail.replaceChildren();
   financeList.replaceChildren();
   financeStatus.textContent = '';
   attentionList.replaceChildren();
@@ -7862,6 +8311,9 @@ onAuthStateChanged(auth, async (user) => {
   portalMessagesList.replaceChildren();
   messageForm.reset();
   portalMessaging = undefined;
+  portalConsentsSection.hidden = true;
+  portalConsentsStatus.textContent = '';
+  portalConsentsList.replaceChildren();
   portalChoice = '';
   portalTools = undefined;
   viewOnly = false;
@@ -7971,6 +8423,7 @@ onAuthStateChanged(auth, async (user) => {
   resetQrScreen();
   resetDisputes();
   resetHours();
+  resetMyPay();
   myAttSection.hidden = true;
   myAttStatus.textContent = '';
   myAttTotal.textContent = '';
@@ -8150,6 +8603,7 @@ onAuthStateChanged(auth, async (user) => {
         isClassTeacher ? loadStudentLeaveBoard(request, schoolRef, user.uid, { status: teacherStudentLeaveStatus, list: teacherStudentLeaveList }, myClassIds) : undefined,
         examsLoader?.(),
         loadMyAttendance(request, schoolRef, user.uid),
+        loadMyPay(request, schoolRef, user),
         loadMyCheckin(request, schoolRef, user.uid),
         loadMyDispute(request, schoolRef, user.uid),
         loadMyLeave(request, schoolRef, user.uid),
@@ -8537,10 +8991,10 @@ const PORTAL_PLAN = {
   parent: {
     title: 'Parent Dashboard', tagline: 'Stay Connected \u2022 Monitor Progress \u2022 Support Your Child',
     order: ['portal-profile', 'portal-attendance', 'portal-homework', 'portal-timetable', 'portal-results', 'portal-assessments', 'portal-fees',
-      'portal-materials', 'portal-life', 'portal-leave', 'portal-messages', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
+      'portal-materials', 'portal-life', 'portal-leave', 'portal-messages', 'portal-consents', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
     names: { 'portal-profile': 'My Child', 'portal-attendance': 'Attendance', 'portal-homework': 'Homework & Assignments', 'portal-timetable': 'Timetable',
       'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-fees': 'Fees & Payments', 'portal-materials': 'Study Materials',
-      'portal-life': 'Bus & Route', 'portal-leave': 'Leave Application', 'portal-messages': 'Messages & Communication', 'portal-ptm': 'Parent-Teacher Meetings',
+      'portal-life': 'Bus & Route', 'portal-leave': 'Leave Application', 'portal-messages': 'Messages & Communication', 'portal-consents': 'Consent Forms', 'portal-ptm': 'Parent-Teacher Meetings',
       'portal-notices': 'Notices', 'portal-calendar': 'School Calendar', 'portal-events': 'School Events' },
     quick: [['Exams & Results', 'portal-results'], ['Fees & Payments', 'portal-fees'], ['Bus & Route', 'portal-life'], ['Apply for Leave', 'portal-leave']],
   },

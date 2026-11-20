@@ -1,10 +1,10 @@
 // App shell: turns each dashboard into a launcher of module tiles. Only the chosen module is shown, so
 // every role gets a clean home screen instead of one very long page. The modules keep working as before.
 const $ = (s, r = document) => r.querySelector(s);
-const ICONS = [[/qr/, '🔳'], [/shift|hours/, '⏰'], [/check-in|check in/, '📍'], [/fee|payment|defaulter|concession|sales/, '💳'], [/attend/, '🗓️'], [/exam|mark|assess|result/, '📝'], [/report|card|certificate/, '📄'],
+const ICONS = [[/qr/, '🔳'], [/shift|hours/, '⏰'], [/check-in|check in/, '📍'], [/fee|payment|defaulter|concession|sales|scholarship|ledger/, '💳'], [/attend/, '🗓️'], [/exam|mark|assess|result/, '📝'], [/report|card|certificate/, '📄'],
   [/student|roster|profile|alumni|family/, '🎓'], [/library|book/, '📚'], [/timetable|cover|workload/, '⏱️'], [/homework|lesson|syllabus|diary|submit/, '📒'],
-  [/calendar|event|ptm|meeting/, '📅'], [/notice|inbox|message|enquir|complaint/, '📣'], [/payroll|expense|finance|vendor/, '💰'], [/website|public/, '🌐'],
-  [/staff|teacher|training|leave|class|assign/, '🧑‍🏫'], [/route|rider|transport|activit/, '🚌'], [/health|behaviour|visitor|lost|achieve/, '🛡️'],
+  [/calendar|event|ptm|meeting/, '📅'], [/notice|inbox|message|enquir|complaint|consent/, '📣'], [/payroll|expense|finance|vendor/, '💰'], [/website|public/, '🌐'],
+  [/staff|teacher|training|leave|class|assign|appraisal|my pay/, '🧑‍🏫'], [/route|rider|transport|activit/, '🚌'], [/health|behaviour|visitor|lost|achieve/, '🛡️'],
   [/inventory|asset|stock/, '📦'], [/backup|audit|log|import|export/, '💾'], [/plan|billing|support|ticket/, '💎'], [/platform|school/, '🏛️'],
   [/grading|setup|academic|promotion|summary|insight|attention|checklist/, '⚙️'], [/member|people/, '👥']];
 const iconFor = (text) => (ICONS.find(([re]) => re.test(text.toLowerCase())) ?? [0, '✦'])[1];

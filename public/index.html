@@ -814,6 +814,9 @@
           <p><label>Date <input name="date" type="date" required></label></p>
           <p><label>Rating (1 to 5) <input name="rating" type="number" min="1" max="5" step="1" required></label></p>
           <p><label>Remarks (optional) <input name="remarks" type="text" maxlength="300"></label></p>
+          <p><label>Review period (optional), e.g. 2026-27 Term 1 <input name="cycle" type="text" maxlength="40"></label></p>
+          <p><label>Goals for the next period (optional) <input name="goals" type="text" maxlength="300"></label></p>
+          <p><label>Stage <select name="status"><option value="submitted">Submitted</option><option value="draft">Draft</option><option value="approved">Approved</option></select></label></p>
           <button type="submit">Save appraisal</button>
         </form>
         <ul id="appraisals-list"></ul>
@@ -860,6 +863,9 @@
           <p><label>Category, e.g. Electricity <input name="category" type="text" maxlength="40" required></label></p>
           <p><label>Amount (Rs) <input name="amount" type="number" min="1" max="100000000" step="1" required></label></p>
           <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <p><label>Paid to (optional) <input name="vendor" type="text" maxlength="80"></label></p>
+          <p><label>How paid <select name="payMode"><option value="">Not stated</option><option value="cash">Cash</option><option value="bank">Bank</option><option value="upi">UPI</option><option value="cheque">Cheque</option></select></label></p>
+          <p><label>Stage <select name="status"><option value="approved">Approved</option><option value="pending">Waiting for approval</option></select></label></p>
           <button type="submit">Add expense</button>
         </form>
         <p id="expenses-total" role="status"></p>
@@ -975,6 +981,72 @@
         </form>
         <ul id="concessions-list"></ul>
       </section>
+      <section id="scholarships" aria-labelledby="scholarships-title" hidden>
+        <h3 id="scholarships-title">Scholarship Schemes</h3>
+        <p>Create a scheme with the amount for each student, the number of seats and the lowest marks percent. Applications are recorded in Scholarship Applications.</p>
+        <p id="scholarships-status" role="status"></p>
+        <form id="scholarships-form">
+          <p><label>Scheme name <input name="name" type="text" maxlength="60" required></label></p>
+          <p><label>Who can apply (optional) <input name="criteria" type="text" maxlength="300"></label></p>
+          <p><label>Amount for each student (Rs) <input name="amount" type="number" min="1" max="10000000" step="1" required></label></p>
+          <p><label>Seats <input name="seats" type="number" min="1" max="10000" step="1" required></label></p>
+          <p><label>Lowest marks percent <input name="minPercent" type="number" min="0" max="100" step="1" value="0" required></label></p>
+          <p><label>Open for applications <select name="active"><option value="true">Yes</option><option value="false">No</option></select></label></p>
+          <button type="submit">Save scheme</button>
+        </form>
+        <ul id="scholarships-list"></ul>
+      </section>
+      <section id="scholarshipapps" aria-labelledby="scholarshipapps-title" hidden>
+        <h3 id="scholarshipapps-title">Scholarship Applications</h3>
+        <p>Record each student's application. Approving one saves a Scholarship in Fee Concessions for the scheme's amount, in one step. A student below the lowest marks percent cannot be recorded.</p>
+        <p id="scholarshipapps-status" role="status"></p>
+        <form id="scholarshipapps-form">
+          <p><label>Scheme <select name="schemeId" required></select></label></p>
+          <p><label>Student <select name="studentId" required></select></label></p>
+          <p><label>Marks percent <input name="percent" type="number" min="0" max="100" step="1" required></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <button type="submit">Record application</button>
+        </form>
+        <ul id="scholarshipapps-list"></ul>
+      </section>
+      <section id="consents" aria-labelledby="consents-title" hidden>
+        <h3 id="consents-title">Parent Consent Forms</h3>
+        <p>Ask parents for permission, for a trip or for photos. Parents answer Yes or No for their own child from the Parent Dashboard. Close a form when you have the answers you need.</p>
+        <p id="consents-status" role="status"></p>
+        <form id="consents-form">
+          <p><label>Title <input name="title" type="text" maxlength="120" required></label></p>
+          <p><label>What you are asking <textarea name="text" rows="4" maxlength="1000" required></textarea></label></p>
+          <p><label>Kind <select name="kind"><option value="trip">Trip</option><option value="photo">Photo or media</option><option value="other">Other</option></select></label></p>
+          <p><label>Answer by (optional) <input name="dueOn" type="date"></label></p>
+          <button type="submit">Send form to parents</button>
+        </form>
+        <ul id="consents-list"></ul>
+        <div id="consents-detail" role="status"></div>
+      </section>
+      <section id="ledger" aria-labelledby="ledger-title" hidden>
+        <h3 id="ledger-title">Accounts Ledger</h3>
+        <p>Fees received, approved expenses and salaries paid in one list, with a running balance. Enter your bank statement balance to see the difference.</p>
+        <p id="ledger-status" role="status"></p>
+        <p><label>From <input id="ledger-from" type="date"></label>
+          <label>To <input id="ledger-to" type="date"></label>
+          <label>Opening balance (Rs) <input id="ledger-opening" type="number" step="1" value="0"></label></p>
+        <p><label>Bank statement closing balance (Rs, optional) <input id="ledger-bank" type="number" step="1"></label></p>
+        <p><button id="ledger-run" type="button">Build ledger</button> <button id="ledger-csv" type="button">Download ledger (CSV)</button></p>
+        <p id="ledger-summary" role="status"></p>
+        <table>
+          <thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Money in</th><th>Money out</th><th>Balance</th></tr></thead>
+          <tbody id="ledger-body"></tbody>
+        </table>
+      </section>
+      <section id="staff-profiles" aria-labelledby="staff-profiles-title" hidden>
+        <h3 id="staff-profiles-title">Staff Contact Details</h3>
+        <p>The phone number, address and emergency contact that teachers keep up to date themselves from their own page.</p>
+        <p id="staff-profiles-status" role="status"></p>
+        <table>
+          <thead><tr><th>Teacher</th><th>Phone</th><th>Address</th><th>Emergency contact</th><th>Updated</th></tr></thead>
+          <tbody id="staff-profiles-body"></tbody>
+        </table>
+      </section>
       <section id="achievements" aria-labelledby="achievements-title" hidden>
         <h3 id="achievements-title">Student Achievements</h3>
         <p id="achievements-status" role="status"></p>
@@ -989,11 +1061,15 @@
       </section>
       <section id="complaints" aria-labelledby="complaints-title" hidden>
         <h3 id="complaints-title">Complaints</h3>
+        <p>Give each complaint to someone, set how urgent it is and the date to answer by. A complaint past its date and not resolved is marked OVERDUE and shows in Needs Attention. Use Escalate when it needs the owner's attention.</p>
         <p id="complaints-status" role="status"></p>
         <form id="complaints-form">
           <p><label>Complaint <input name="title" type="text" maxlength="120" required></label></p>
           <p><label>Raised by <input name="raisedBy" type="text" maxlength="80" required></label></p>
           <p><label>Note (optional) <input name="note" type="text" maxlength="500"></label></p>
+          <p><label>Give it to (optional) <input name="assignedTo" type="text" maxlength="80"></label></p>
+          <p><label>How urgent <select name="priority"><option value="normal">Normal</option><option value="high">High</option><option value="low">Low</option></select></label></p>
+          <p><label>Answer by (optional) <input name="dueOn" type="date"></label></p>
           <button type="submit">Log complaint</button>
         </form>
         <ul id="complaints-list"></ul>
@@ -1042,6 +1118,7 @@
           <p><label>Course <input name="course" type="text" maxlength="120" required></label></p>
           <p><label>Date <input name="date" type="date" required></label></p>
           <p><label>Hours <input name="hours" type="number" min="1" max="1000" step="1" required></label></p>
+          <p><label>Stage <select name="status"><option value="completed">Completed</option><option value="planned">Planned</option></select></label></p>
           <button type="submit">Record training</button>
         </form>
         <ul id="trainings-list"></ul>
@@ -1230,6 +1307,26 @@
           <button type="submit">Send request</button>
         </form>
         <ul id="dispute-list"></ul>
+      </section>
+      <section id="my-pay" aria-labelledby="my-pay-title" hidden>
+        <h3 id="my-pay-title">My Pay and Details</h3>
+        <p>See and print your payslips, and keep your own contact details up to date.</p>
+        <p id="my-pay-status" role="status"></p>
+        <ul id="my-pay-list"></ul>
+        <h4>My contact details</h4>
+        <p id="my-profile-status" role="status"></p>
+        <form id="my-profile-form">
+          <p><label>Phone <input name="phone" type="text" maxlength="20" inputmode="tel"></label></p>
+          <p><label>Address <input name="address" type="text" maxlength="200"></label></p>
+          <p><label>Emergency contact name <input name="emergencyName" type="text" maxlength="80"></label></p>
+          <p><label>Emergency contact phone <input name="emergencyPhone" type="text" maxlength="20" inputmode="tel"></label></p>
+          <button type="submit">Save my details</button>
+        </form>
+        <div id="my-payslip" class="print-target" hidden>
+          <p id="my-payslip-head" class="print-only"></p>
+          <h4>Payslip</h4>
+          <table><tbody id="my-payslip-body"></tbody></table>
+        </div>
       </section>
       <section id="my-attendance" aria-labelledby="my-attendance-title" hidden>
         <h3 id="my-attendance-title">My Attendance</h3>
@@ -1437,6 +1534,11 @@
           <button type="submit">Send message</button>
         </form>
         <ul id="portal-messages-list"></ul>
+      </section>
+      <section id="portal-consents" aria-labelledby="portal-consents-title" hidden>
+        <h3 id="portal-consents-title">Consent Forms</h3>
+        <p id="portal-consents-status" role="status"></p>
+        <ul id="portal-consents-list"></ul>
       </section>
       <section id="portal-events" aria-labelledby="portal-events-title" hidden>
         <h3 id="portal-events-title">Register for Events</h3>
@@ -1648,14 +1750,14 @@
       box.focus();
     });
     try {
-      await import('./ui.mjs?v=batch-61');
-      await import('./i18n.mjs?v=batch-61');
+      await import('./ui.mjs?v=batch-62');
+      await import('./i18n.mjs?v=batch-62');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-61');
-      await import('./platform.mjs?v=batch-61');
+      await import('./sign-in.mjs?v=batch-62');
+      await import('./platform.mjs?v=batch-62');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
