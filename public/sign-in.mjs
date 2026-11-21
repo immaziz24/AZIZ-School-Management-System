@@ -197,6 +197,28 @@ function listItem(list, text, button) {
   list.append(item);
 }
 
+// Long lists: show the first few rows and a button that opens or closes the rest.
+function collapseList(list, limit, noun) {
+  list.nextElementSibling?.matches('.list-toggle') && list.nextElementSibling.remove();
+  const rows = [...list.children];
+  if (rows.length <= limit) return;
+  let open = false;
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'list-toggle';
+  const apply = () => {
+    rows.forEach((row, index) => { row.hidden = !open && index >= limit; });
+    toggle.textContent = open ? 'Hide the list' : 'Show all ' + rows.length + ' ' + noun;
+  };
+  toggle.addEventListener('click', () => { open = !open; apply(); });
+  list.after(toggle);
+  apply();
+}
+// Scrolling the page with the mouse over a number box must not change the number.
+document.addEventListener('wheel', (event) => {
+  if (event.target instanceof HTMLInputElement && event.target.type === 'number' && document.activeElement === event.target) event.target.blur();
+}, { passive: true });
+
 function fillSelect(select, records, label) {
   const previous = select.value;
   select.replaceChildren();
@@ -6066,6 +6088,7 @@ async function loadReminderHistory() {
     for (const item of [...reminderSent].sort((a, b) => b.createdOn.localeCompare(a.createdOn)).slice(0, 30)) {
       listItem(reminderHistory, item.createdOn + ' - ' + item.studentName + ' - ' + rupees(item.amount) + (item.message ? ' (' + item.message + ')' : ''));
     }
+    collapseList(reminderHistory, 5, 'recent reminders');
   } catch {
     if (request === schoolRequest) reminderStatus.textContent = 'Could not load the reminders already sent.';
   }
@@ -6094,6 +6117,7 @@ document.querySelector('#feereminders-find').addEventListener('click', async () 
   reminderPlan.sort((a, b) => b.amount - a.amount);
   reminderList.replaceChildren();
   for (const item of reminderPlan) listItem(reminderList, item.studentName + ' - ' + rupees(item.amount) + ' overdue');
+  collapseList(reminderList, 8, 'students');
   reminderStatus.textContent = reminderPlan.length ? reminderPlan.length + ' student(s) will get a reminder' + (skipped ? ' (' + skipped + ' skipped, reminded recently)' : '') + '. Press Send reminders.'
     : 'No student needs a reminder' + (skipped ? ' (' + skipped + ' reminded recently)' : '') + '.';
 });
@@ -6119,7 +6143,7 @@ document.querySelector('#feereminders-send').addEventListener('click', async () 
       if (request === schoolRequest) reminderStatus.textContent = 'Sent ' + sent + ' reminder(s)...';
     }
     reminderPlan = [];
-    if (request === schoolRequest) { reminderList.replaceChildren(); reminderStatus.textContent = 'Sent ' + sent + ' reminder(s).'; await loadReminderHistory(); }
+    if (request === schoolRequest) { reminderList.replaceChildren(); collapseList(reminderList, 8, 'students'); reminderStatus.textContent = 'Sent ' + sent + ' reminder(s).'; await loadReminderHistory(); }
   } catch (error) {
     if (request === schoolRequest) reminderStatus.textContent = 'Some reminders were not sent (' + (error && error.code ? error.code : 'error') + '). Press Find students with dues again to see who is left.';
   } finally {

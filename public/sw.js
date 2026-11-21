@@ -1,6 +1,6 @@
 // Service worker: keeps the page shell so the app opens without a connection.
 // School data always comes live from Firebase; nothing private is stored here.
-const CACHE = 'aziz-shell-v3';
+const CACHE = 'aziz-shell-v4';
 const SHELL = ['./', './index.html', './sign-in.css', './sign-in.mjs', './platform.mjs', './ui.mjs', './i18n.mjs', './firebase-client.mjs',
   './school.html', './school.mjs', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 

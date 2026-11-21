@@ -9,6 +9,33 @@ const ICONS = [[/hostel/, '🛏️'], [/canteen|meal/, '🍽️'], [/pickup/, '�
   [/grading|setup|academic|promotion|summary|insight|attention|checklist/, '⚙️'], [/member|people/, '👥']];
 const iconFor = (text) => (ICONS.find(([re]) => re.test(text.toLowerCase())) ?? [0, '✦'])[1];
 
+// Categories for the module home screen. Each list is in the order the modules should appear; a module that is not listed
+// goes to the last group, so a new module is never lost. Keys are section ids, or a lowercase title for loose headings.
+const OWNER_CATS = [
+  ['Daily work', ['attention', 'summary', 'checklist', 'attendance-review', 'student-leave', 'notices', 'inbox', 'calendar', 'timetable', 'substitutions', 'visitors', 'pickupgate', 'attendance-report']],
+  ['Students and admissions', ['student-roster', 'roster', 'profile360', 'family-access', 'enquiries', 'bulk-import', 'promotion', 'cards', 'certificates', 'health', 'behaviour', 'achievements', 'alumni', 'hostelrooms', 'hostelstays', 'canteenmenu', 'canteenplans', 'pickuppeople']],
+  ['Classes and exams', ['academic-setup', 'class-teachers', 'exam-setup', 'marks-review', 'report-card', 'grading', 'homework-owner', 'lessons-owner', 'syllabus', 'onlinetests', 'questionbank', 'riskboard', 'library', 'bookreservations', 'diary']],
+  ['Fees and accounts', ['fees', 'defaulters', 'feereminders', 'concessions', 'scholarships', 'scholarshipapps', 'expenses', 'ledger', 'finance', 'sales', 'workflowrules', 'reports']],
+  ['Staff', ['staffdir', 'staff-profiles', 'teacher assignment', 'staff directory', 'staff-attendance', 'checkins', 'qr-screen', 'disputes', 'hours', 'leave-review', 'payroll', 'bulk-cards', 'payslip', 'appraisals', 'trainings', 'workload']],
+  ['Transport and campus', ['routes', 'riders', 'vehicles', 'activities', 'members', 'inventory', 'assets', 'tickets', 'vendors', 'lostfound', 'storage']],
+  ['Parents and website', ['website', 'siteextras', 'ptm', 'eventregs', 'consents', 'complaints', 'minutes']],
+  ['Settings and data', ['school profile', 'prefs', 'principal-access', 'backup', 'audit-log', 'plan-section', 'invite-accept']],
+];
+const TEACHER_CATS = [
+  ['Teaching', ['attendance-mark', 'exam-marks', 'teacher-homework', 'teacher-assessments', 'teacher-submissions', 'teacher-lessons', 'teacher-materials', 'teacher-studentleave']],
+  ['My work', ['checkin', 'dispute', 'my-attendance', 'leave-request', 'my-pay']],
+  ['School', ['teacher-timetable', 'teacher-cover', 'teacher-calendar', 'teacher-notices']],
+];
+const PORTAL_CATS = [
+  ['Study', ['portal-results', 'portal-attendance', 'portal-homework', 'portal-submit', 'portal-assessments', 'portal-tests', 'portal-materials', 'portal-timetable']],
+  ['Fees and safety', ['portal-fees', 'portal-reminders', 'portal-push', 'portal-pickup', 'portal-idcard', 'portal-life']],
+  ['School and messages', ['portal-notices', 'portal-calendar', 'portal-ptm', 'portal-events', 'portal-consents', 'portal-messages', 'portal-leave', 'portal-profile']],
+];
+const REST_NAME = 'More';
+const COLLAPSE_KEY = 'aziz-collapsed-groups';
+const readCollapsed = () => { try { return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch { return {}; } };
+const saveCollapsed = (value) => { try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(value)); } catch { /* storage may be blocked */ } };
+
 const owner = $('#owner-dashboard');
 const teacher = $('#teacher-dashboard');
 const portal = $('#portal-dashboard');
@@ -48,7 +75,7 @@ function prepare(dash, label) {
   }
   const launcher = document.createElement('div');
   launcher.className = 'launcher';
-  launcher.innerHTML = '<div class="launch-head"><h3></h3><input type="search" placeholder="Search modules" aria-label="Search modules" autocomplete="off"></div><div class="tiles"></div>';
+  launcher.innerHTML = '<div class="launch-head"><h3></h3><input type="search" placeholder="Search modules" aria-label="Search modules" autocomplete="off"></div><div class="cats"></div>';
   launcher.querySelector('h3').textContent = label;
   const bar = document.createElement('div');
   bar.className = 'launcher-bar';
@@ -56,7 +83,19 @@ function prepare(dash, label) {
   const first = dash.querySelector(':scope > .mod');
   (first ?? dash).before(bar, launcher);
   const search = launcher.querySelector('input');
-  const tiles = launcher.querySelector('.tiles');
+  const tiles = launcher.querySelector('.cats');
+  const catList = dash === owner ? OWNER_CATS : dash === teacher ? TEACHER_CATS : dash === portal ? PORTAL_CATS : null;
+  const groupOf = (section) => {
+    if (!catList) return '';
+    const keys = [section.id, titleOf(section).toLowerCase()];
+    const found = catList.find(([, ids]) => keys.some((k) => ids.includes(k)));
+    return found ? found[0] : REST_NAME;
+  };
+  const orderIn = (section) => {
+    const keys = [section.id, titleOf(section).toLowerCase()];
+    for (const [, ids] of catList) { const at = ids.findIndex((id) => keys.includes(id)); if (at >= 0) return at; }
+    return 999;
+  };
   const titleOf = (section) => (section.querySelector('h1,h2,h3')?.textContent ?? '').trim();
   const close = () => { dash.removeAttribute('data-open'); for (const m of dash.querySelectorAll(':scope > .mod-open')) m.classList.remove('mod-open'); scrollTo({ top: 0 }); };
   bar.querySelector('button').addEventListener('click', close);
@@ -77,9 +116,9 @@ function prepare(dash, label) {
     if (openNow && openNow.hidden) close();
     const words = search.value.trim().toLowerCase();
     tiles.replaceChildren();
-    for (const section of modules) {
+    const made = new Map();
+    const makeTile = (section) => {
       const title = titleOf(section);
-      if (words && !title.toLowerCase().includes(words)) continue;
       const tile = document.createElement('button');
       tile.type = 'button';
       tile.className = 'tile';
@@ -87,7 +126,51 @@ function prepare(dash, label) {
       const name = document.createElement('span'); name.className = 'tt'; name.textContent = title;
       tile.append(icon, name);
       tile.addEventListener('click', () => open(section));
-      tiles.append(tile);
+      return tile;
+    };
+    const shown = modules.filter((section) => !words || titleOf(section).toLowerCase().includes(words));
+    if (!catList || modules.length <= 8) {
+      const grid = document.createElement('div'); grid.className = 'tiles';
+      for (const section of shown) grid.append(makeTile(section));
+      if (grid.children.length) tiles.append(grid);
+    } else {
+      const collapsed = readCollapsed();
+      const names = [...catList.map(([name]) => name), REST_NAME];
+      for (const section of shown) {
+        const name = groupOf(section);
+        if (!made.has(name)) made.set(name, []);
+        made.get(name).push(section);
+      }
+      const bar = document.createElement('div'); bar.className = 'cat-tools';
+      const expandAll = document.createElement('button'); expandAll.type = 'button'; expandAll.textContent = 'Expand all';
+      const collapseAll = document.createElement('button'); collapseAll.type = 'button'; collapseAll.textContent = 'Collapse all';
+      const setAll = (value) => { const next = readCollapsed(); for (const name of names) next[dash.id + ':' + name] = value; saveCollapsed(next); rebuild(); };
+      expandAll.addEventListener('click', () => setAll(false));
+      collapseAll.addEventListener('click', () => setAll(true));
+      if (!words) bar.append(expandAll, collapseAll);
+      if (bar.children.length) tiles.append(bar);
+      let firstGroup = true;
+      for (const name of names) {
+        const list = made.get(name);
+        if (!list || !list.length) continue;
+        list.sort((a, b) => orderIn(a) - orderIn(b));
+        const stateKey = dash.id + ':' + name;
+        // A group nobody has touched opens only when it is the first one; searching opens every group that has a match.
+        const closed = words ? false : (stateKey in collapsed ? collapsed[stateKey] : !firstGroup);
+        firstGroup = false;
+        const block = document.createElement('section'); block.className = 'cat' + (closed ? ' cat-closed' : '');
+        const head = document.createElement('button'); head.type = 'button'; head.className = 'cat-head';
+        head.setAttribute('aria-expanded', String(!closed));
+        const arrow = document.createElement('span'); arrow.className = 'cat-arrow'; arrow.textContent = closed ? '▸' : '▾';
+        const label = document.createElement('span'); label.className = 'cat-name'; label.textContent = name;
+        const count = document.createElement('span'); count.className = 'cat-count'; count.textContent = String(list.length);
+        head.append(arrow, label, count);
+        const grid = document.createElement('div'); grid.className = 'tiles';
+        for (const section of list) grid.append(makeTile(section));
+        if (!words) head.addEventListener('click', () => { const next = readCollapsed(); next[stateKey] = !block.classList.contains('cat-closed'); saveCollapsed(next); rebuild(); });
+        block.append(head, grid);
+        tiles.append(block);
+      }
     }
     if (!tiles.children.length) { const none = document.createElement('p'); none.textContent = words ? 'No module matches.' : 'Loading your modules.'; none.style.color = 'var(--mut)'; tiles.append(none); }
     refreshShell();
