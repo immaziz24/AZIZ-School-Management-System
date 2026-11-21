@@ -6108,17 +6108,20 @@ document.querySelector('#feereminders-send').addEventListener('click', async () 
   try {
     const today = localToday();
     let sent = 0;
-    for (let start = 0; start < reminderPlan.length; start += 100) {
-      const group = reminderPlan.slice(start, start + 100);
+    // The rules look up each student once, and one batch may make only 20 such lookups, so each batch stays small.
+    for (let start = 0; start < reminderPlan.length; start += 15) {
+      const group = reminderPlan.slice(start, start + 15);
       await academic.commit(group.map((item) => ({ path: ['feeReminders', newId('FR')], data: { studentId: item.studentId, studentName: item.studentName, amount: item.amount,
         createdOn: today, ...(message ? { message } : {}), by: schoolUid } })));
       sent += group.length;
-      if (request === schoolRequest) reminderStatus.textContent = 'Sent ' + sent + ' of ' + reminderPlan.length + '.';
+      reminderPlan = reminderPlan.filter((item) => !group.includes(item));
+      start -= group.length;
+      if (request === schoolRequest) reminderStatus.textContent = 'Sent ' + sent + ' reminder(s)...';
     }
     reminderPlan = [];
     if (request === schoolRequest) { reminderList.replaceChildren(); reminderStatus.textContent = 'Sent ' + sent + ' reminder(s).'; await loadReminderHistory(); }
-  } catch {
-    if (request === schoolRequest) reminderStatus.textContent = 'Some reminders were not sent. Press Find students with dues again to see who is left.';
+  } catch (error) {
+    if (request === schoolRequest) reminderStatus.textContent = 'Some reminders were not sent (' + (error && error.code ? error.code : 'error') + '). Press Find students with dues again to see who is left.';
   } finally {
     reminderBusy = false;
   }
