@@ -6132,15 +6132,36 @@ document.querySelector('#feereminders-send').addEventListener('click', async () 
   try {
     const today = localToday();
     let sent = 0;
+    const failed = [];
+    const sentSet = new Set();
+    const toRecord = (item) => ({ path: ['feeReminders', newId('FR')], data: { studentId: item.studentId, studentName: String(item.studentName).slice(0, 80),
+      amount: Math.max(1, Math.round(Number(item.amount))), createdOn: today, ...(message ? { message } : {}), by: schoolUid } });
     // The rules look up each student once, and one batch may make only 20 such lookups, so each batch stays small.
-    for (let start = 0; start < reminderPlan.length; start += 15) {
-      const group = reminderPlan.slice(start, start + 15);
-      await academic.commit(group.map((item) => ({ path: ['feeReminders', newId('FR')], data: { studentId: item.studentId, studentName: item.studentName, amount: item.amount,
-        createdOn: today, ...(message ? { message } : {}), by: schoolUid } })));
-      sent += group.length;
-      reminderPlan = reminderPlan.filter((item) => !group.includes(item));
-      start -= group.length;
+    // If a batch is refused, its students are tried one by one so a single bad record cannot block the others.
+    const queue = [...reminderPlan];
+    for (let start = 0; start < queue.length; start += 10) {
+      const group = queue.slice(start, start + 10);
+      try {
+        await academic.commit(group.map(toRecord));
+        sent += group.length;
+        for (const item of group) sentSet.add(item);
+      } catch {
+        for (const item of group) {
+          try { await academic.commit([toRecord(item)]); sent += 1; sentSet.add(item); } catch (error) { failed.push({ item, code: error && error.code ? error.code : 'error' }); }
+        }
+      }
       if (request === schoolRequest) reminderStatus.textContent = 'Sent ' + sent + ' reminder(s)...';
+      if (!sent && failed.length >= 10) break;
+    }
+    reminderPlan = queue.filter((item) => !sentSet.has(item));
+    if (failed.length) {
+      const first = failed[0];
+      if (request === schoolRequest) {
+        reminderStatus.textContent = sent + ' sent, ' + failed.length + ' not sent (' + first.code + '). First: ' + first.item.studentName + ' / ' + first.item.studentId + ' / ' + first.item.amount + '.';
+        await loadReminderHistory();
+        reminderStatus.textContent = sent + ' sent, ' + failed.length + ' not sent (' + first.code + '). First: ' + first.item.studentName + ' / ' + first.item.studentId + ' / ' + first.item.amount + '.';
+      }
+      return;
     }
     reminderPlan = [];
     if (request === schoolRequest) { reminderList.replaceChildren(); collapseList(reminderList, 8, 'students'); reminderStatus.textContent = 'Sent ' + sent + ' reminder(s).'; await loadReminderHistory(); }
