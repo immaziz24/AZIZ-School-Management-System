@@ -94,7 +94,8 @@ body:not(.signed-in) #sign-out{position:static;margin-top:18px;width:100%}
 .cat-tabs{display:flex;gap:8px;margin:0 0 18px;padding:0 0 6px;overflow-x:auto;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
 button.cat-tab{flex:0 0 auto;display:flex;align-items:center;gap:8px;width:auto;padding:9px 16px;border:1px solid var(--line);border-radius:99px;background:rgba(10,17,34,.6);color:var(--ink);font-size:.98rem;white-space:nowrap;box-shadow:none}
 button.cat-tab:hover{border-color:var(--gold)}
-button.cat-tab.on{border-color:var(--gold);background:linear-gradient(145deg,rgba(201,162,74,.35),rgba(201,162,74,.12));color:var(--gold2);font-weight:600}
+button.cat-tab.on,button.cat-tab[aria-selected=true]{border-color:#f3dfa2;background:linear-gradient(120deg,#b88a2e,#f3dfa2 52%,#c9a24a);color:#150f02;font-weight:700;box-shadow:0 8px 26px -10px #c9a24a}
+button.cat-tab.on .cat-count,button.cat-tab[aria-selected=true] .cat-count{background:#150f02;color:#f3dfa2;border-color:#150f02}
 .cat-count{min-width:24px;padding:1px 8px;text-align:center;border:1px solid var(--line);border-radius:99px;font-size:.8rem;color:var(--mut)}
 .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px;perspective:1200px}
 button.tile{display:flex;flex-direction:column;align-items:flex-start;gap:10px;width:100%;min-height:128px;padding:20px;text-align:left;border:1px solid var(--line);border-radius:22px;background:linear-gradient(155deg,rgba(24,38,72,.85),rgba(10,17,34,.9));color:var(--ink);box-shadow:0 20px 50px -30px #000;transform-style:preserve-3d}
