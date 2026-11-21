@@ -134,43 +134,33 @@ function prepare(dash, label) {
       for (const section of shown) grid.append(makeTile(section));
       if (grid.children.length) tiles.append(grid);
     } else {
-      const collapsed = readCollapsed();
+      const saved = readCollapsed();
       const names = [...catList.map(([name]) => name), REST_NAME];
       for (const section of shown) {
         const name = groupOf(section);
         if (!made.has(name)) made.set(name, []);
         made.get(name).push(section);
       }
-      const bar = document.createElement('div'); bar.className = 'cat-tools';
-      const expandAll = document.createElement('button'); expandAll.type = 'button'; expandAll.textContent = 'Expand all';
-      const collapseAll = document.createElement('button'); collapseAll.type = 'button'; collapseAll.textContent = 'Collapse all';
-      const setAll = (value) => { const next = readCollapsed(); for (const name of names) next[dash.id + ':' + name] = value; saveCollapsed(next); rebuild(); };
-      expandAll.addEventListener('click', () => setAll(false));
-      collapseAll.addEventListener('click', () => setAll(true));
-      if (!words) bar.append(expandAll, collapseAll);
-      if (bar.children.length) tiles.append(bar);
-      let firstGroup = true;
-      for (const name of names) {
-        const list = made.get(name);
-        if (!list || !list.length) continue;
-        list.sort((a, b) => orderIn(a) - orderIn(b));
-        const stateKey = dash.id + ':' + name;
-        // A group nobody has touched opens only when it is the first one; searching opens every group that has a match.
-        const closed = words ? false : (stateKey in collapsed ? collapsed[stateKey] : !firstGroup);
-        firstGroup = false;
-        const block = document.createElement('section'); block.className = 'cat' + (closed ? ' cat-closed' : '');
-        const head = document.createElement('button'); head.type = 'button'; head.className = 'cat-head';
-        head.setAttribute('aria-expanded', String(!closed));
-        const arrow = document.createElement('span'); arrow.className = 'cat-arrow'; arrow.textContent = closed ? '▸' : '▾';
-        const label = document.createElement('span'); label.className = 'cat-name'; label.textContent = name;
-        const count = document.createElement('span'); count.className = 'cat-count'; count.textContent = String(list.length);
-        head.append(arrow, label, count);
-        const grid = document.createElement('div'); grid.className = 'tiles';
-        for (const section of list) grid.append(makeTile(section));
-        if (!words) head.addEventListener('click', () => { const next = readCollapsed(); next[stateKey] = !block.classList.contains('cat-closed'); saveCollapsed(next); rebuild(); });
-        block.append(head, grid);
-        tiles.append(block);
+      for (const list of made.values()) list.sort((a, b) => orderIn(a) - orderIn(b));
+      const tabNames = names.filter((name) => made.get(name)?.length);
+      // The first tab is All. While searching, All is used so every match is visible.
+      const wanted = words ? 'All' : (saved[dash.id] || 'All');
+      const active = wanted === 'All' || tabNames.includes(wanted) ? wanted : 'All';
+      const strip = document.createElement('div'); strip.className = 'cat-tabs'; strip.setAttribute('role', 'tablist');
+      for (const name of ['All', ...tabNames]) {
+        const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'cat-tab' + (name === active ? ' on' : '');
+        tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(name === active));
+        const label = document.createElement('span'); label.textContent = name;
+        const count = document.createElement('span'); count.className = 'cat-count'; count.textContent = String(name === 'All' ? shown.length : made.get(name).length);
+        tab.append(label, count);
+        tab.addEventListener('click', () => { if (words) search.value = ''; const next = readCollapsed(); next[dash.id] = name; saveCollapsed(next); rebuild(); });
+        strip.append(tab);
       }
+      tiles.append(strip);
+      const grid = document.createElement('div'); grid.className = 'tiles';
+      const list = active === 'All' ? tabNames.flatMap((name) => made.get(name)) : made.get(active);
+      for (const section of list) grid.append(makeTile(section));
+      if (grid.children.length) tiles.append(grid);
     }
     if (!tiles.children.length) { const none = document.createElement('p'); none.textContent = words ? 'No module matches.' : 'Loading your modules.'; none.style.color = 'var(--mut)'; tiles.append(none); }
     refreshShell();
