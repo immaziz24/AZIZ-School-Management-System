@@ -91,7 +91,7 @@ body:not(.signed-in) #sign-out{position:static;margin-top:18px;width:100%}
 .launch-head h3{margin:0;font-size:1.7rem}
 .launch-head input{max-width:340px;margin-left:auto;border-radius:99px;padding-left:20px}
 .cats{display:block}
-.cat-tabs{display:flex;gap:8px;margin:0 0 18px;padding:0 0 6px;overflow-x:auto;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+.cat-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px;padding:0}
 button.cat-tab{flex:0 0 auto;display:flex;align-items:center;gap:8px;width:auto;padding:9px 16px;border:1px solid var(--line);border-radius:99px;background:rgba(10,17,34,.6);color:var(--ink);font-size:.98rem;white-space:nowrap;box-shadow:none}
 button.cat-tab:hover{border-color:var(--gold)}
 button.cat-tab.on,button.cat-tab[aria-selected=true]{border-color:#f3dfa2;background:linear-gradient(120deg,#b88a2e,#f3dfa2 52%,#c9a24a);color:#150f02;font-weight:700;box-shadow:0 8px 26px -10px #c9a24a}
