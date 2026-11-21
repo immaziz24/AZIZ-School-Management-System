@@ -6089,8 +6089,8 @@ async function loadReminderHistory() {
       listItem(reminderHistory, item.createdOn + ' - ' + item.studentName + ' - ' + rupees(item.amount) + (item.message ? ' (' + item.message + ')' : ''));
     }
     collapseList(reminderHistory, 5, 'recent reminders');
-  } catch {
-    if (request === schoolRequest) reminderStatus.textContent = 'Could not load the reminders already sent.';
+  } catch (error) {
+    if (request === schoolRequest) reminderStatus.textContent = 'Could not load the reminders already sent (' + (error && error.code ? error.code : 'error') + ').';
   }
 }
 document.querySelector('#feereminders').addEventListener('mod-open', loadReminderHistory);
