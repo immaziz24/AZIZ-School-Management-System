@@ -16,7 +16,7 @@ const OWNER_CATS = [
   ['Students and admissions', ['student-roster', 'roster', 'profile360', 'family-access', 'enquiries', 'bulk-import', 'promotion', 'cards', 'certificates', 'health', 'behaviour', 'achievements', 'alumni', 'hostelrooms', 'hostelstays', 'canteenmenu', 'canteenplans', 'pickuppeople']],
   ['Classes and exams', ['academic-setup', 'class-teachers', 'exam-setup', 'marks-review', 'report-card', 'grading', 'homework-owner', 'lessons-owner', 'syllabus', 'onlinetests', 'questionbank', 'riskboard', 'library', 'bookreservations', 'diary']],
   ['Fees and accounts', ['fees', 'defaulters', 'feereminders', 'concessions', 'scholarships', 'scholarshipapps', 'expenses', 'ledger', 'finance', 'sales', 'workflowrules', 'reports']],
-  ['Staff', ['staffdir', 'staff-profiles', 'teacher assignment', 'staff directory', 'staff-attendance', 'checkins', 'qr-screen', 'disputes', 'hours', 'leave-review', 'payroll', 'bulk-cards', 'payslip', 'appraisals', 'trainings', 'workload']],
+  ['Staff', ['staffdir', 'staffdocs', 'staff-profiles', 'teacher assignment', 'staff directory', 'staff-attendance', 'checkins', 'qr-screen', 'disputes', 'hours', 'leave-review', 'payroll', 'bulk-cards', 'payslip', 'appraisals', 'trainings', 'workload']],
   ['Transport and campus', ['routes', 'riders', 'vehicles', 'activities', 'members', 'inventory', 'assets', 'tickets', 'vendors', 'lostfound', 'storage']],
   ['Parents and website', ['website', 'siteextras', 'ptm', 'eventregs', 'consents', 'complaints', 'minutes']],
   ['Settings and data', ['school profile', 'prefs', 'principal-access', 'backup', 'audit-log', 'plan-section', 'invite-accept']],

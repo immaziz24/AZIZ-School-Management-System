@@ -1,0 +1,32 @@
+rules_version = '2';
+// Cloud Storage rules. Files for a school live under schools/{schoolId}/ and are reachable only by that school's people.
+// Roles are read from the school's members record in Firestore (a cross-service rule).
+service firebase.storage {
+  match /b/{bucket}/o {
+    function member(schoolId) {
+      return firestore.get(/databases/(default)/documents/schools/$(schoolId)/members/$(request.auth.uid)).data;
+    }
+    function isOwner(schoolId) {
+      return request.auth != null && member(schoolId).active == true && member(schoolId).role == 'owner';
+    }
+    function isViewer(schoolId) {
+      return request.auth != null && member(schoolId).active == true && member(schoolId).role in ['owner', 'principal'];
+    }
+
+    // Staff document vault (feature 141): one PDF, JPG or PNG of at most 5 MB per document. A file is written once and never
+    // replaced; the owner removes it. The owner and principal can read it.
+    match /schools/{schoolId}/staffDocs/{docId} {
+      allow read: if isViewer(schoolId);
+      allow create: if isOwner(schoolId)
+        && docId.matches('SD-[A-Za-z0-9-]{1,30}')
+        && request.resource.size > 0 && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|image/jpeg|image/png');
+      allow update: if false;
+      allow delete: if isOwner(schoolId);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

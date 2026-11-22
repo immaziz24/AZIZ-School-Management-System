@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-65j">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-65k">
 </head>
 <body>
   <main>
@@ -875,7 +875,8 @@
       </section>
       <section id="storage" aria-labelledby="storage-title" hidden>
         <h3 id="storage-title">Storage Records</h3>
-        <p>A log of the files your school keeps (reports, photos, backups). It shows how much of your storage plan is used. This is a record only; it does not upload files.</p>
+        <p>Shows how much of your storage plan is used. Files you upload in the Staff Document Vault are counted automatically. For other files your school keeps (reports, photos, backups) you can add a record by hand.</p>
+        <p><button id="storage-report" type="button">Download storage report (CSV)</button></p>
         <p id="storage-status" role="status"></p>
         <p id="storage-total" role="status"></p>
         <p><progress id="storage-meter" max="100" value="0" aria-label="Storage used" hidden></progress></p>
@@ -910,6 +911,25 @@
           <button type="submit">Add ticket</button>
         </form>
         <ul id="tickets-list"></ul>
+      </section>
+      <section id="staffdocs" aria-labelledby="staffdocs-title" hidden>
+        <h3 id="staffdocs-title">Staff Document Vault</h3>
+        <p>Keep each staff member's papers (ID proof, contract, certificates, medical and police checks) in your school's private file storage. PDF, JPG or PNG, up to 5 MB each. Add an expiry date and the vault warns you before a paper runs out. Files count against your plan's storage.</p>
+        <p id="staffdocs-status" role="status"></p>
+        <p id="staffdocs-alert" role="status"></p>
+        <form id="staffdocs-form">
+          <p><label>Staff member <select name="staffId" required></select></label></p>
+          <p><label>Type <select name="kind"><option value="id-proof">ID proof</option><option value="contract">Contract</option><option value="certificate">Certificate</option><option value="qualification">Qualification</option><option value="police">Police verification</option><option value="medical">Medical</option><option value="other">Other</option></select></label></p>
+          <p><label>Title <input name="title" type="text" maxlength="100" required></label></p>
+          <p><label>Expires on (optional) <input name="expiryOn" type="date"></label></p>
+          <p><label>Note (optional) <input name="note" type="text" maxlength="200"></label></p>
+          <p><label>File (PDF, JPG or PNG, up to 5 MB) <input name="file" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" required></label></p>
+          <button type="submit">Upload document</button>
+        </form>
+        <p><label>Show <select id="staffdocs-filter"><option value="all">All documents</option><option value="expired">Expired</option><option value="soon">Expiring in 30 days</option><option value="none">No expiry date</option></select></label>
+          <label>Staff member <select id="staffdocs-staff"></select></label>
+          <button id="staffdocs-csv" type="button">Download list (CSV)</button></p>
+        <ul id="staffdocs-list"></ul>
       </section>
       <section id="staffdir" aria-labelledby="staffdir-title" hidden>
         <h3 id="staffdir-title">Staff Contact Directory</h3>

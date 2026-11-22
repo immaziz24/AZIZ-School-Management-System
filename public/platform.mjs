@@ -244,8 +244,12 @@ $('#consent-accept').addEventListener('click', () => run(plan.status, async () =
 }, 'Thank you. Your acceptance is recorded.'));
 async function recountUsage() {
   const [students, staff, classes] = await Promise.all(['students', 'staff', 'classes'].map((n) => getDocs(collection(schoolRef, n))));
-  let storageMb = 0;
-  try { storageMb = Math.ceil((await getDocs(collection(schoolRef, 'storageRecords'))).docs.reduce((total, d) => total + (d.data().sizeKb ?? 0), 0) / 1024); } catch { storageMb = 0; }
+  // Storage counts the hand-kept records and the files uploaded to the staff document vault.
+  let storageKb = 0;
+  for (const name of ['storageRecords', 'staffDocuments']) {
+    try { storageKb += (await getDocs(collection(schoolRef, name))).docs.reduce((total, d) => total + (d.data().sizeKb ?? 0), 0); } catch { /* Not readable: counts as nothing. */ }
+  }
+  const storageMb = Math.ceil(storageKb / 1024);
   await setDoc(doc(schoolRef, 'usage', 'main'), { students: students.size, staff: staff.size, classes: classes.size, storageMb, updatedAt: serverTimestamp() });
   await showUsage();
 }

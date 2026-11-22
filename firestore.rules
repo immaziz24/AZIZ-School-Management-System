@@ -1441,6 +1441,18 @@ service cloud.firestore {
         allow delete: if ownerAuth(schoolId);
       }
 
+      // Staff document vault (feature 141). staffDocuments/{SD-...}: details of a file kept in Cloud Storage at
+      // schools/{schoolId}/staffDocs/{id}. The owner adds, edits the title, type, expiry and note, and removes; the
+      // principal and the platform administrator read the details. New files are refused when the plan's storage is full.
+      match /staffDocuments/{docId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
+        allow create: if ownerAuth(schoolId) && docId.matches('SD-[A-Za-z0-9-]{1,30}')
+          && validStaffDocument(request.resource.data) && withinStorage(schoolId);
+        allow update: if ownerAuth(schoolId) && validStaffDocument(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['kind', 'title', 'expiryOn', 'note']);
+        allow delete: if ownerAuth(schoolId);
+      }
+
       // Student photos. studentPhotos/{studentId}: one small JPEG (data URL, shrunk in the browser). The owner
       // keeps it; the owner, principal and the student's own linked family read it.
       match /studentPhotos/{studentId} {
@@ -1941,6 +1953,22 @@ service cloud.firestore {
         && item.by is string && item.at is timestamp
         && intIn(item.index, 0, 59) && intIn(item.remainingSec, 0, 10800) && intIn(item.pauses, 0, 7)
         && item.state in ['paused', 'running'];
+    }
+
+    function validStaffDocument(item) {
+      return item.keys().hasOnly(['staffId', 'staffName', 'kind', 'title', 'expiryOn', 'note', 'fileName', 'contentType', 'sizeKb', 'uploadedOn', 'by'])
+        && item.keys().hasAll(['staffId', 'staffName', 'kind', 'title', 'fileName', 'contentType', 'sizeKb', 'uploadedOn', 'by'])
+        && textLen(item.staffId, 1, 40)
+        && namedText(item.staffName, 120)
+        && item.kind in ['id-proof', 'contract', 'certificate', 'qualification', 'police', 'medical', 'other']
+        && namedText(item.title, 100)
+        && (!item.keys().hasAny(['expiryOn']) || dateText(item.expiryOn))
+        && optText(item, 'note', 200)
+        && namedText(item.fileName, 120)
+        && item.contentType in ['application/pdf', 'image/jpeg', 'image/png']
+        && intIn(item.sizeKb, 1, 5120)
+        && dateText(item.uploadedOn)
+        && item.by is string;
     }
 
     function validFeeReminder(item) {

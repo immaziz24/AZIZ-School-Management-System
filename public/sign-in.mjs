@@ -5265,11 +5265,11 @@ lists.storage = ownerList({
   id: 'storage', collection: 'storageRecords', empty: 'No storage records yet.', saved: 'Record added.',
   sort: (a, b) => b.data().date.localeCompare(a.data().date) || b.id.localeCompare(a.id),
   prepare: (form, items) => {
-    const kb = items.reduce((sum, record) => sum + record.data().sizeKb, 0);
+    const kb = items.reduce((sum, record) => sum + record.data().sizeKb, 0) + vaultKb();
     const mb = Math.round(kb / 1024 * 10) / 10;
-    document.querySelector('#storage-total').textContent = 'Recorded: ' + mb + ' MB' + (storagePlanMb ? ' of ' + storagePlanMb + ' MB in your plan ('
+    document.querySelector('#storage-total').textContent = 'Used: ' + mb + ' MB' + (storagePlanMb ? ' of ' + storagePlanMb + ' MB in your plan ('
       + Math.round(mb / storagePlanMb * 1000) / 10 + '% used).' : '. Your plan has no storage limit set yet.')
-      + (storagePlanMb && mb / storagePlanMb >= 1 ? ' STORAGE FULL: new records are refused.' : storagePlanMb && mb / storagePlanMb >= 0.8 ? ' Warning: more than 80% used.' : '');
+      + (storagePlanMb && mb / storagePlanMb >= 1 ? ' STORAGE FULL: new records and uploads are refused.' : storagePlanMb && mb / storagePlanMb >= 0.8 ? ' Warning: more than 80% used.' : '');
     const meter = document.querySelector('#storage-meter');
     meter.hidden = !storagePlanMb;
     if (storagePlanMb) meter.value = Math.min(100, mb / storagePlanMb * 100);
@@ -5277,6 +5277,7 @@ lists.storage = ownerList({
     breakdown.replaceChildren();
     const byKind = new Map();
     for (const record of items) byKind.set(record.data().kind, (byKind.get(record.data().kind) ?? 0) + record.data().sizeKb);
+    if (vaultKb()) byKind.set('Staff documents (vault)', vaultKb());
     for (const [kind, size] of [...byKind].sort((a, b) => b[1] - a[1])) listItem(breakdown, kind + ': ' + Math.round(size / 1024 * 10) / 10 + ' MB');
     const biggest = [...items].sort((a, b) => b.data().sizeKb - a.data().sizeKb).slice(0, 3);
     if (biggest.length) listItem(breakdown, 'Largest: ' + biggest.map((record) => record.data().name + ' (' + Math.round(record.data().sizeKb / 1024 * 10) / 10 + ' MB)').join(', '));
@@ -5287,6 +5288,197 @@ lists.storage = ownerList({
     return { id: newId('ST'), data: { name: text(fields, 'name'), kind: text(fields, 'kind'), sizeKb, date: localToday(), ...optional(fields, 'note') } };
   },
   line: (item) => item.date + ' - ' + item.name + ' - ' + item.kind + ' - ' + item.sizeKb + ' KB' + (item.note ? ' (' + item.note + ')' : ''),
+});
+
+// Staff Document Vault (feature 141). Files go to Cloud Storage under schools/<school>/staffDocs/<id>; the details are kept in
+// Firestore (staffDocuments). Uploads are refused when the plan's storage is full.
+let vaultItems = [];
+let vaultLoaded = false;
+const VAULT_KINDS = { 'id-proof': 'ID proof', contract: 'Contract', certificate: 'Certificate', qualification: 'Qualification', police: 'Police verification', medical: 'Medical', other: 'Other' };
+const VAULT_TYPES = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png' };
+const VAULT_MAX_KB = 5120;
+function vaultKb() { return vaultItems.reduce((sum, record) => sum + (record.data().sizeKb ?? 0), 0); }
+const vaultState = (item) => (!item.expiryOn ? 'none' : daysUntil(item.expiryOn) < 0 ? 'expired' : daysUntil(item.expiryOn) <= SOON_DAYS ? 'soon' : 'ok');
+function vaultNotes() {
+  const notes = [];
+  for (const record of vaultItems) {
+    const item = record.data();
+    const state = vaultState(item);
+    if (state === 'expired') notes.push('Staff document expired: ' + item.staffName + ' - ' + item.title + ' (' + item.expiryOn + ').');
+    else if (state === 'soon') notes.push('Staff document expires in ' + daysUntil(item.expiryOn) + ' day(s): ' + item.staffName + ' - ' + item.title + '.');
+  }
+  return notes;
+}
+const vaultSection = document.querySelector('#staffdocs');
+const vaultForm = document.querySelector('#staffdocs-form');
+const vaultStatus = document.querySelector('#staffdocs-status');
+const vaultAlert = document.querySelector('#staffdocs-alert');
+const vaultList = document.querySelector('#staffdocs-list');
+const vaultFilter = document.querySelector('#staffdocs-filter');
+const vaultStaffFilter = document.querySelector('#staffdocs-staff');
+function vaultStaffChoices() {
+  const people = [...lists.staffdir.items].sort((a, b) => a.data().name.localeCompare(b.data().name));
+  fillSelect(vaultForm.elements.namedItem('staffId'), people, (record) => record.data().name);
+  const keep = vaultStaffFilter.value;
+  vaultStaffFilter.replaceChildren(new Option('All staff', ''), ...people.map((record) => new Option(record.data().name, record.id)));
+  vaultStaffFilter.value = people.some((record) => record.id === keep) ? keep : '';
+}
+function vaultVisible() {
+  return vaultItems.filter((record) => {
+    const item = record.data();
+    if (vaultStaffFilter.value && item.staffId !== vaultStaffFilter.value) return false;
+    const state = vaultState(item);
+    return vaultFilter.value === 'all' || (vaultFilter.value === 'expired' && state === 'expired') || (vaultFilter.value === 'soon' && state === 'soon')
+      || (vaultFilter.value === 'none' && state === 'none');
+  }).sort((a, b) => (a.data().expiryOn ?? '9999').localeCompare(b.data().expiryOn ?? '9999') || b.id.localeCompare(a.id));
+}
+function vaultDraw() {
+  vaultList.replaceChildren();
+  const notes = vaultNotes();
+  vaultAlert.textContent = notes.length ? notes.length + ' staff document(s) need attention. ' + notes.slice(0, 3).join(' ') : '';
+  const rows = vaultVisible();
+  if (!rows.length) { listItem(vaultList, vaultItems.length ? 'No documents match this filter.' : 'No staff documents yet.'); return; }
+  for (const record of rows) {
+    const item = record.data();
+    const state = vaultState(item);
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Open';
+    open.addEventListener('click', () => vaultOpenFile(record));
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.textContent = 'Change expiry';
+    edit.addEventListener('click', () => vaultChangeExpiry(record));
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Delete';
+    remove.addEventListener('click', () => vaultDelete(record));
+    listItem(vaultList, item.staffName + ' - ' + (VAULT_KINDS[item.kind] ?? item.kind) + ' - ' + item.title + ' (' + item.fileName + ', ' + item.sizeKb + ' KB)'
+      + (item.expiryOn ? ' - expires ' + item.expiryOn + (state === 'expired' ? ' (EXPIRED)' : state === 'soon' ? ' (expires in ' + daysUntil(item.expiryOn) + ' days)' : '') : ' - no expiry date')
+      + (item.note ? ' - ' + item.note : ''), open);
+    const last = vaultList.lastElementChild;
+    last.append(' ', edit, ' ', remove);
+  }
+}
+async function vaultLoad() {
+  if (!academic) return;
+  vaultStatus.textContent = 'Loading documents.';
+  try {
+    vaultItems = (await academic.list('staffDocuments')).docs;
+    vaultLoaded = true;
+    vaultStatus.textContent = '';
+  } catch {
+    vaultStatus.textContent = 'Could not load the documents. Try again.';
+  }
+  vaultStaffChoices();
+  vaultDraw();
+  if (!document.querySelector('#storage').hidden) lists.storage.render();
+}
+vaultSection.addEventListener('mod-open', vaultLoad);
+vaultFilter.addEventListener('change', vaultDraw);
+vaultStaffFilter.addEventListener('change', vaultDraw);
+vaultForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy) return;
+  const fields = new FormData(vaultForm);
+  const file = vaultForm.elements.namedItem('file').files[0];
+  const staff = lists.staffdir.items.find((record) => record.id === text(fields, 'staffId'));
+  if (!staff) { vaultStatus.textContent = 'Choose a staff member.'; return; }
+  if (!file) { vaultStatus.textContent = 'Choose a file.'; return; }
+  const ext = file.name.split('.').pop().toLowerCase();
+  const contentType = VAULT_TYPES[ext];
+  if (!contentType) { vaultStatus.textContent = 'Only PDF, JPG or PNG files are accepted.'; return; }
+  const sizeKb = Math.max(1, Math.ceil(file.size / 1024));
+  if (file.size === 0 || sizeKb > VAULT_MAX_KB) { vaultStatus.textContent = 'The file must be between 1 byte and 5 MB.'; return; }
+  const expiryOn = text(fields, 'expiryOn');
+  if (expiryOn && !/^\d{4}-\d{2}-\d{2}$/.test(expiryOn)) { vaultStatus.textContent = 'Enter the expiry date as a full date.'; return; }
+  if (storagePlanMb && (vaultKb() + lists.storage.items.reduce((sum, record) => sum + record.data().sizeKb, 0) + sizeKb) / 1024 > storagePlanMb) {
+    vaultStatus.textContent = 'Your plan storage is full (' + storagePlanMb + ' MB). Delete a file or ask for a larger plan.';
+    return;
+  }
+  const id = newId('SD');
+  const data = { staffId: staff.id, staffName: staff.data().name, kind: text(fields, 'kind'), title: text(fields, 'title'), fileName: file.name.slice(-120),
+    contentType, sizeKb, uploadedOn: localToday(), by: academic.uid, ...(expiryOn ? { expiryOn } : {}), ...optional(fields, 'note') };
+  academic.busy = true;
+  vaultStatus.textContent = 'Uploading.';
+  try {
+    await academic.vaultPut(id, file, contentType);
+    try {
+      await academic.save('staffDocuments', id, data);
+    } catch (error) {
+      await academic.vaultDrop(id).catch(() => {});
+      throw error;
+    }
+    vaultItems = [...vaultItems, { id, data: () => data }];
+    vaultForm.reset();
+    vaultStatus.textContent = 'Document uploaded.';
+    vaultStaffChoices();
+    vaultDraw();
+    if (!document.querySelector('#storage').hidden) lists.storage.render();
+    refreshAttention();
+  } catch (error) {
+    vaultStatus.textContent = error?.code === 'permission-denied' || error?.code === 'storage/unauthorized'
+      ? 'Not allowed. Your plan storage may be full, or file storage is not switched on yet.'
+      : 'Could not upload. Check your connection and try again.';
+  } finally {
+    academic.busy = false;
+  }
+});
+async function vaultOpenFile(record) {
+  vaultStatus.textContent = 'Opening.';
+  try {
+    const url = await academic.vaultUrl(record.id);
+    const win = window.open(url, '_blank', 'noopener');
+    vaultStatus.textContent = win ? '' : 'Your browser blocked the new window. Allow pop-ups for this site and try again.';
+  } catch {
+    vaultStatus.textContent = 'Could not open the file.';
+  }
+}
+async function vaultChangeExpiry(record) {
+  const item = record.data();
+  const entered = window.prompt('New expiry date for "' + item.title + '" (YYYY-MM-DD). Leave empty for no expiry.', item.expiryOn ?? '');
+  if (entered === null) return;
+  const value = entered.trim();
+  if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) { vaultStatus.textContent = 'Enter the date as YYYY-MM-DD.'; return; }
+  const next = { ...item };
+  delete next.expiryOn;
+  if (value) next.expiryOn = value;
+  try {
+    await academic.save('staffDocuments', record.id, next);
+    vaultItems = vaultItems.map((entry) => (entry.id === record.id ? { id: record.id, data: () => next } : entry));
+    vaultStatus.textContent = 'Expiry updated.';
+    vaultDraw();
+    refreshAttention();
+  } catch {
+    vaultStatus.textContent = 'Could not change the date.';
+  }
+}
+async function vaultDelete(record) {
+  if (!window.confirm('Delete "' + record.data().title + '" for ' + record.data().staffName + '? The file is removed for good.')) return;
+  try {
+    await academic.vaultDrop(record.id).catch((error) => { if (error?.code !== 'storage/object-not-found') throw error; });
+    await academic.remove('staffDocuments', record.id);
+    vaultItems = vaultItems.filter((entry) => entry.id !== record.id);
+    vaultStatus.textContent = 'Document deleted.';
+    vaultDraw();
+    if (!document.querySelector('#storage').hidden) lists.storage.render();
+    refreshAttention();
+  } catch {
+    vaultStatus.textContent = 'Could not delete the document.';
+  }
+}
+document.querySelector('#staffdocs-csv').addEventListener('click', () => {
+  downloadCsv('staff-documents', [['Staff member', 'Type', 'Title', 'File', 'Size KB', 'Uploaded', 'Expires', 'State', 'Note'],
+    ...vaultVisible().map((record) => { const item = record.data(); return [item.staffName, VAULT_KINDS[item.kind] ?? item.kind, item.title, item.fileName, item.sizeKb,
+      item.uploadedOn, item.expiryOn ?? '', { none: 'No expiry date', ok: 'Valid', soon: 'Expiring soon', expired: 'Expired' }[vaultState(item)], item.note ?? '']; })]);
+});
+document.querySelector('#storage-report').addEventListener('click', () => {
+  const rows = [['Source', 'Name', 'Type', 'Size KB', 'Date', 'Note']];
+  for (const record of lists.storage.items) { const item = record.data(); rows.push(['Record', item.name, item.kind, item.sizeKb, item.date, item.note ?? '']); }
+  for (const record of vaultItems) { const item = record.data(); rows.push(['Staff vault', item.staffName + ' - ' + item.title, VAULT_KINDS[item.kind] ?? item.kind, item.sizeKb, item.uploadedOn, item.fileName]); }
+  const total = rows.slice(1).reduce((sum, row) => sum + Number(row[3]), 0);
+  rows.push(['TOTAL', '', '', total, '', storagePlanMb ? 'Plan: ' + storagePlanMb + ' MB, ' + Math.round(total / 1024 / storagePlanMb * 1000) / 10 + '% used' : 'No plan limit set']);
+  downloadCsv('storage-report', rows);
 });
 
 lists.certificates = ownerList({
@@ -6592,10 +6784,10 @@ function complianceNotes() {
   return notes;
 }
 function storageNotes() {
-  const used = lists.storage.items.reduce((sum, record) => sum + record.data().sizeKb, 0) / 1024;
+  const used = (lists.storage.items.reduce((sum, record) => sum + record.data().sizeKb, 0) + vaultKb()) / 1024;
   if (!storagePlanMb) return [];
   const percent = used / storagePlanMb * 100;
-  if (percent >= 100) return ['Storage is full: ' + Math.round(used) + ' MB of ' + storagePlanMb + ' MB. New records are refused until space is freed or the plan is raised.'];
+  if (percent >= 100) return ['Storage is full: ' + Math.round(used) + ' MB of ' + storagePlanMb + ' MB. New records and uploads are refused until space is freed or the plan is raised.'];
   if (percent >= 80) return ['Storage is ' + Math.round(percent) + '% full (' + Math.round(used) + ' MB of ' + storagePlanMb + ' MB).'];
   return [];
 }
@@ -6629,7 +6821,7 @@ function refreshAttention() {
     item.textContent = number + ' ' + label;
     attentionList.append(item);
   }
-  const notes = [...securityNotes(), ...complianceNotes(), ...storageNotes()];
+  const notes = [...securityNotes(), ...complianceNotes(), ...storageNotes(), ...vaultNotes()];
   for (const note of notes) listItem(attentionList, note);
   attentionStatus.textContent = checks.length || birthdays.length || notes.length ? '' : 'Nothing needs attention right now.';
 }
@@ -8512,7 +8704,7 @@ function renderWorkload() {
   workloadStatus.textContent = byTeacher.size ? 'Counted from the timetable.' : 'The timetable is empty, so there is nothing to count yet.';
 }
 
-const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
+const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'staffDocuments', 'members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
   'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
   'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
@@ -8670,6 +8862,7 @@ const resetInsights = () => {
   principalAccess = { ...PRINCIPAL_DEFAULTS };
   for (const section of [checklistSection, defaultersSection, workloadSection, backupSection, principalAccessSection]) section.hidden = true;
   for (const list of [checklistList, defaultersList, workloadList]) list.replaceChildren();
+  vaultItems = []; vaultLoaded = false; vaultSection.hidden = true; vaultList.replaceChildren(); vaultStatus.textContent = ''; vaultAlert.textContent = '';
   for (const status of [checklistStatus, defaultersStatus, workloadStatus, backupStatus]) status.textContent = '';
   defaultersRows = [];
 };
@@ -8682,13 +8875,14 @@ async function loadOwnerLists(request) {
   const lazyNames = new Set(['substitutions', 'alumni', 'certificates', 'vendors', 'minutes', 'achievements', 'assets', 'sales', 'trainings',
     'diary', 'health', 'lessons', 'ptm', 'eventregs', 'appraisals', 'scholarships', 'scholarshipapps', 'consents',
     'hostelstays', 'canteenmenu', 'canteenplans', 'bookreservations', 'questionbank', 'onlinetests', 'pickuppeople']);
+  vaultSection.hidden = false;
   for (const name of names) {
     if (!lazyNames.has(name)) continue;
     lists[name].lazy = true;
     lists[name].loaded = false;
     document.querySelector('#' + lists[name].cfg.id).hidden = false;
   }
-  await Promise.allSettled([...names.filter((name) => !lazyNames.has(name)).map((name) => lists[name].load(request)), loadBackupLog()]);
+  await Promise.allSettled([...names.filter((name) => !lazyNames.has(name)).map((name) => lists[name].load(request)), loadBackupLog(), vaultLoad()]);
   if (request === schoolRequest) { refreshAttention(); showReportSections(); }
 }
 const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.draw(); };
@@ -9878,14 +10072,28 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: async (name, id, data) => {
         await setDoc(doc(schoolRef, name, id), data);
-        if (name === 'students' || name === 'storageRecords') document.dispatchEvent(new Event('usage-changed'));
+        if (name === 'students' || name === 'storageRecords' || name === 'staffDocuments') document.dispatchEvent(new Event('usage-changed'));
         const voided = name === 'payments' && data.voided === true;
         await log(voided ? 'void' : 'save', name, id, name === 'payments' ? 'Rs ' + data.amount : '');
       },
       marksOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('studentId', '==', studentId))),
       remove: async (name, id) => {
         await deleteDoc(doc(schoolRef, name, id));
+        if (name === 'staffDocuments') document.dispatchEvent(new Event('usage-changed'));
         await log('remove', name, id, '');
+      },
+      uid: user.uid,
+      vaultPut: async (id, file, contentType) => {
+        const { getStorage, ref, uploadBytes } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js');
+        await uploadBytes(ref(getStorage(app), 'schools/' + SCHOOL_ID + '/staffDocs/' + id), file, { contentType });
+      },
+      vaultDrop: async (id) => {
+        const { getStorage, ref, deleteObject } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js');
+        await deleteObject(ref(getStorage(app), 'schools/' + SCHOOL_ID + '/staffDocs/' + id));
+      },
+      vaultUrl: async (id) => {
+        const { getStorage, ref, getDownloadURL } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js');
+        return getDownloadURL(ref(getStorage(app), 'schools/' + SCHOOL_ID + '/staffDocs/' + id));
       },
       decideLeave: async (id, data, status) => {
         await setDoc(doc(schoolRef, 'leaveRequests', id), { ...data, status, decidedBy: user.uid });
