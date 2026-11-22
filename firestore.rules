@@ -150,7 +150,7 @@ service cloud.firestore {
       allow create: if request.auth != null && validNewSchool(request.resource.data)
         && schoolId.matches('[a-z][a-z0-9-]{2,29}') && !(schoolId in ['www', 'admin', 'api', 'app', 'platform', 'school', 'aziz', 'public', 'support', 'demo'])
         && request.resource.data.createdBy == request.auth.uid;
-      allow update: if request.auth != null && isSchoolOwner(schoolId)
+      allow update: if ownerAuth(schoolId)
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['name', 'contactEmail', 'phone', 'address'])
         && validProfile(request.resource.data);
@@ -158,7 +158,7 @@ service cloud.firestore {
       // Staff profiles contain contact and job details only.
       match /members/{uid} {
         allow get: if request.auth != null && (request.auth.uid == uid || isSchoolViewer(schoolId));
-        allow list: if request.auth != null && isSchoolViewer(schoolId);
+        allow list: if viewerAuth(schoolId);
         // The signup user becomes the owner of the school created in the same batch.
         allow create: if request.auth != null && request.auth.uid == uid
           && request.resource.data.keys().hasOnly(['role', 'active'])
@@ -177,7 +177,7 @@ service cloud.firestore {
           && getAfter(/databases/$(database)/documents/invites/$(request.resource.data.inviteId)).data.role == request.resource.data.role
           && getAfter(/databases/$(database)/documents/invites/$(request.resource.data.inviteId)).data.email == request.auth.token.email.lower();
         // The owner switches another member on or off. The role never changes here.
-        allow update: if request.auth != null && isSchoolOwner(schoolId) && request.auth.uid != uid
+        allow update: if ownerAuth(schoolId) && request.auth.uid != uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
           && request.resource.data.active is bool;
       }
@@ -200,16 +200,16 @@ service cloud.firestore {
               && get(/databases/$(database)/documents/schools/$(schoolId)/subjects/$(assignment.subjectId)).data.name == assignment.subject);
         }
 
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && activeTeacher() && validAssignment(request.resource.data)
           && idsMatchRecords(request.resource.data);
       }
 
       match /staff/{staffId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId) && withinLimit(schoolId, 'staff', 'staffLimit')
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if ownerAuth(schoolId) && withinLimit(schoolId, 'staff', 'staffLimit')
           && validStaff(request.resource.data);
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validStaff(request.resource.data);
       }
 
@@ -275,7 +275,7 @@ service cloud.firestore {
       match /classTeachers/{classId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (isActiveTeacher() && resource.data.teacherUid == request.auth.uid));
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && classId.matches('[a-z0-9-]{1,20}') && validClassTeacher(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(classId))
           && activeTeacherMember(request.resource.data.teacherUid);
@@ -309,13 +309,13 @@ service cloud.firestore {
       match /staffAttendance/{recordId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (resource.data.staffUid == request.auth.uid && isActiveTeacher()));
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && validStaffAttendance(request.resource.data)
           && request.resource.data.markedBy == request.auth.uid
           && recordId == request.resource.data.date + '_' + request.resource.data.staffUid
           && request.resource.data.date <= latestAttendanceDate()
           && activeTeacherMember(request.resource.data.staffUid);
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validStaffAttendance(request.resource.data)
           && request.resource.data.markedBy == request.auth.uid
           && recordId == request.resource.data.date + '_' + request.resource.data.staffUid
@@ -382,12 +382,12 @@ service cloud.firestore {
       // read neither.
       match /feeStructures/{feeId} {
         allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyActive());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && validFeeStructure(request.resource.data)
           && feeId == request.resource.data.yearId + '_' + request.resource.data.classId + '_' + request.resource.data.head
           && exists(/databases/$(database)/documents/schools/$(schoolId)/academicYears/$(request.resource.data.yearId))
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && classExists(schoolId, request.resource.data.classId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       match /payments/{paymentId} {
@@ -398,9 +398,9 @@ service cloud.firestore {
           && request.resource.data.receivedBy == request.auth.uid
           && paymentId == request.resource.data.receiptNo
           && request.resource.data.date <= latestAttendanceDate()
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId))
+          && studentExists(schoolId, request.resource.data.studentId)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/academicYears/$(request.resource.data.yearId));
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && !resource.data.keys().hasAny(['voided'])
           && request.resource.data.voided == true
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided'])
@@ -460,8 +460,8 @@ service cloud.firestore {
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt <= latestAttendanceDate()
           && (request.resource.data.audience != 'class'
-            || exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId)));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+            || classExists(schoolId, request.resource.data.classId));
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Audit trail. auditLog/{logId}: who (actor) did what (action) to which record (target, docId)
@@ -469,7 +469,7 @@ service cloud.firestore {
       // and never edited or deleted, and only the owner reads them. Teachers can add entries only for the
       // marks and attendance they save.
       match /auditLog/{logId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow get, list: if viewerAuth(schoolId);
         allow create: if request.auth != null
           && (isSchoolOwner(schoolId) || isActivePrincipal(schoolId)
             || (isActiveTeacher() && request.resource.data.action in ['marks', 'attendance']))
@@ -485,11 +485,11 @@ service cloud.firestore {
       match /timetable/{slotId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher()
           || familyInClass(resource.data.classId));
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && validTimetableSlot(request.resource.data)
           && slotId == request.resource.data.classId + '_' + string(request.resource.data.day) + '_' + string(request.resource.data.period)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && classExists(schoolId, request.resource.data.classId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Homework. homework/{homeworkId}: classId, subjectId, subject, title, details, dueDate, createdAt,
@@ -505,7 +505,7 @@ service cloud.firestore {
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt <= latestAttendanceDate()
           && request.resource.data.dueDate >= request.resource.data.createdAt
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && classExists(schoolId, request.resource.data.classId)
           && (isSchoolOwner(schoolId)
             || (teachesClass(request.resource.data.classId) && teacherSubjectId() == request.resource.data.subjectId));
         allow delete: if request.auth != null && (isSchoolOwner(schoolId)
@@ -525,7 +525,7 @@ service cloud.firestore {
           && validMaterial(request.resource.data)
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt <= latestAttendanceDate()
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && classExists(schoolId, request.resource.data.classId)
           && (isSchoolOwner(schoolId) || teachesClass(request.resource.data.classId));
         allow delete: if request.auth != null && (isSchoolOwner(schoolId)
           || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
@@ -535,39 +535,39 @@ service cloud.firestore {
       // note. The owner manages it; every active teacher and linked family reads it.
       match /calendar/{eventId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && eventId.matches('[A-Za-z0-9-]{1,30}') && validCalendarEvent(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Library. books/{bookId}: title, author, copies. loans/{loanId}: bookId, studentId, issuedOn, dueOn,
       // issuedBy, and returnedOn once it comes back. Office records: only the owner reads or writes them.
       // A loan is never deleted; a return is the one allowed change, made once.
       match /books/{bookId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && bookId.matches('[a-z0-9-]{1,20}') && validBook(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       match /loans/{loanId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if ownerAuth(schoolId)
           && loanId.matches('[A-Za-z0-9-]{1,30}') && validLoan(request.resource.data)
           && !request.resource.data.keys().hasAny(['returnedOn'])
           && request.resource.data.issuedBy == request.auth.uid
           && request.resource.data.issuedOn <= latestAttendanceDate()
           && request.resource.data.dueOn >= request.resource.data.issuedOn
           && exists(/databases/$(database)/documents/schools/$(schoolId)/books/$(request.resource.data.bookId))
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow update: if ownerAuth(schoolId)
           && validLoan(request.resource.data)
           && !resource.data.keys().hasAny(['returnedOn'])
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['returnedOn'])
           && request.resource.data.returnedOn >= resource.data.issuedOn
           && request.resource.data.returnedOn <= latestAttendanceDate();
         // A renewal (feature 137): the due date moves later, at most 3 times, and only while the book is still out.
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validLoan(request.resource.data)
           && !resource.data.keys().hasAny(['returnedOn']) && !request.resource.data.keys().hasAny(['returnedOn'])
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dueOn', 'renewals'])
@@ -578,36 +578,36 @@ service cloud.firestore {
 
       // Book reservations (feature 137). bookReservations/{id}: bookId, bookTitle, studentId, studentName, createdOn, status.
       match /bookReservations/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validReservation(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/books/$(request.resource.data.bookId))
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Behaviour notes. behaviour/{noteId}: studentId, date, kind (positive or concern), note,
       // recordedBy. Owner only; written once and removed by the owner.
       match /behaviour/{noteId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if ownerAuth(schoolId)
           && noteId.matches('[A-Za-z0-9-]{1,30}') && validBehaviour(request.resource.data)
           && request.resource.data.recordedBy == request.auth.uid
           && request.resource.data.date <= latestAttendanceDate()
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Visitor log. visitors/{visitId}: name, purpose, whom, phone, date, timeIn, recordedBy, and
       // timeOut once they leave. Owner only; never deleted.
       match /visitors/{visitId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if ownerAuth(schoolId)
           && visitId.matches('[A-Za-z0-9-]{1,30}') && validVisitor(request.resource.data)
           && !request.resource.data.keys().hasAny(['timeOut'])
           && request.resource.data.recordedBy == request.auth.uid
           && request.resource.data.date <= latestAttendanceDate();
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validVisitor(request.resource.data)
           && !resource.data.keys().hasAny(['timeOut'])
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['timeOut'])
@@ -621,12 +621,12 @@ service cloud.firestore {
       match /substitutions/{subId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
           || (isActiveTeacher() && resource.data.substituteUid == request.auth.uid));
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && subId.matches('[A-Za-z0-9-]{1,30}') && validSubstitution(request.resource.data)
           && request.resource.data.createdBy == request.auth.uid
           && activeTeacherMember(request.resource.data.substituteUid)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && classExists(schoolId, request.resource.data.classId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Transport. routes/{routeId}: name, vehicle, driver, driverPhone, stops. transportRiders/{studentId}:
@@ -634,18 +634,18 @@ service cloud.firestore {
       // own student's rider record.
       match /routes/{routeId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId) || familyActive());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && routeId.matches('[A-Za-z0-9-]{1,30}') && validRoute(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       match /transportRiders/{riderId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId) || familyOwns(resource.data.studentId));
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && validRider(request.resource.data) && riderId == request.resource.data.studentId
           && exists(/databases/$(database)/documents/schools/$(schoolId)/routes/$(request.resource.data.routeId))
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Activities. activities/{activityId}: name, optional teacher and schedule.
@@ -653,146 +653,146 @@ service cloud.firestore {
       // teachers and linked families read activities, and families read their own student's memberships.
       match /activities/{activityId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && activityId.matches('[A-Za-z0-9-]{1,30}') && validActivity(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       match /activityMembers/{memberId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && validActivityMember(request.resource.data)
           && memberId == request.resource.data.activityId + '_' + request.resource.data.studentId
           && request.resource.data.joinedOn <= latestAttendanceDate()
           && exists(/databases/$(database)/documents/schools/$(schoolId)/activities/$(request.resource.data.activityId))
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Inventory. inventory/{itemId}: name, optional category and unit, quantity, minQuantity. Owner only.
       match /inventory/{itemId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && itemId.matches('[A-Za-z0-9-]{1,30}') && validInventoryItem(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Expenses. expenses/{id}: date, category, amount (whole rupees), optional note. Owner only.
       match /expenses/{expenseId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && expenseId.matches('[A-Za-z0-9-]{1,30}') && validExpense(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Certificates register. certificates/{certNo}: type, studentId, studentName, issuedOn, optional purpose.
       // Owner creates; an entry cannot be edited, only removed.
       match /certificates/{certNo} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if ownerAuth(schoolId)
           && certNo.matches('[A-Za-z0-9-]{1,30}') && validCertificate(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Maintenance tickets. tickets/{id}: title, optional place, priority, status open/done.
       match /tickets/{ticketId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && ticketId.matches('[A-Za-z0-9-]{1,30}') && validTicket(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Staff directory. staffDirectory/{id}: name, role, optional phone, email, joinedOn. Owner only.
       match /staffDirectory/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validStaffCard(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Vehicles. vehicles/{VH-...}: registration, capacity and the insurance, fitness and driver-licence expiry
       // dates the Needs Attention list watches. Appraisals. appraisals/{AP-...}: staff name, date, rating 1-5, remarks.
       // The owner writes both; the principal reads them.
       match /vehicles/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('VH-[A-Za-z0-9-]{1,30}') && validVehicle(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
       match /appraisals/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('AP-[A-Za-z0-9-]{1,30}') && validAppraisal(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Vendors. vendors/{id}: name, trade, optional phone, note. Owner only.
       match /vendors/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validVendor(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Meeting minutes. minutes/{id}: date, title, notes. Owner only.
       match /minutes/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validMinutes(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Lost and found. lostFound/{id}: item, kind lost/found, date, status open/returned, optional place. Owner only.
       match /lostFound/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validLostFound(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Fee concessions. concessions/{id}: studentId, studentName, kind, amount, givenOn, optional note. Owner only.
       match /concessions/{docId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId) || familyOwns(resource.data.studentId));
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validConcession(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Achievements. achievements/{id}: studentId, studentName, title, level, date. Owner only.
       match /achievements/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validAchievement(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Complaints. complaints/{id}: title, raisedBy, date, status open/resolved, optional note. Owner only.
       match /complaints/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validComplaint(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Scholarships (feature 152). scholarships/{SC-...}: a scheme. scholarshipApps/{SA-...}: one student's application, decided
       // once by the owner. Approving one also writes a fee concession in the same batch. Owner writes; the principal reads.
       match /scholarships/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('SC-[A-Za-z0-9-]{1,30}') && validScholarship(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       match /scholarshipApps/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('SA-[A-Za-z0-9-]{1,30}') && validScholarshipApp(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId))
+          && studentExists(schoolId, request.resource.data.studentId)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/scholarships/$(request.resource.data.schemeId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Parent consent forms (feature 151). consentForms/{CF-...}: a trip, photo or other permission the school asks for. The
@@ -800,9 +800,9 @@ service cloud.firestore {
       // form is open, and may change the answer. The owner and principal read every answer; a parent reads their own.
       match /consentForms/{docId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyActive());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('CF-[A-Za-z0-9-]{1,30}') && validConsentForm(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       match /consentResponses/{docId} {
@@ -825,7 +825,7 @@ service cloud.firestore {
       // Staff self-service (feature 143). staffProfiles/{teacherUid}: a teacher's own phone, address and emergency contact.
       match /staffProfiles/{uid} {
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || (isActiveTeacher() && request.auth.uid == uid));
-        allow list: if request.auth != null && isSchoolViewer(schoolId);
+        allow list: if viewerAuth(schoolId);
         allow create, update: if request.auth != null && isActiveTeacher() && request.auth.uid == uid
           && validStaffProfile(request.resource.data);
         allow delete: if false;
@@ -833,41 +833,41 @@ service cloud.firestore {
 
       // Hostel (feature 144). hostelRooms/{id}: name, beds, optional block and monthlyFee. hostelStays/{id}: who sleeps where.
       match /hostelRooms/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validHostelRoom(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
       match /hostelStays/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validHostelStay(request.resource.data)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/hostelRooms/$(request.resource.data.roomId))
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Canteen (feature 145). canteenMenu/{id}: day, meal, items, optional price. canteenPlans/{id}: a student's meal plan.
       match /canteenMenu/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validCanteenMenu(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
       match /canteenPlans/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validCanteenPlan(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Approval rules (feature 156). workflowRules/{id}: an expense at or above `over` rupees waits for approval.
       match /workflowRules/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validWorkflowRule(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Student pickup (feature 146). pickupPeople/{id}: a person allowed to collect a student, with a 6-digit code the
@@ -880,7 +880,7 @@ service cloud.firestore {
           && docId.matches('[A-Za-z0-9-]{1,30}')
           && request.resource.data.createdBy == request.auth.uid
           && (isSchoolOwner(schoolId) || familyOwns(request.resource.data.studentId))
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+          && studentExists(schoolId, request.resource.data.studentId);
         allow update: if request.auth != null && validPickupPerson(request.resource.data)
           && request.resource.data.createdBy == resource.data.createdBy
           && request.resource.data.studentId == resource.data.studentId
@@ -889,10 +889,10 @@ service cloud.firestore {
           || (resource.data.createdBy == request.auth.uid && familyActive()));
       }
       match /pickupLogs/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolViewer(schoolId) && validPickupLog(request.resource.data)
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if viewerAuth(schoolId) && validPickupLog(request.resource.data)
           && docId.matches('[A-Za-z0-9-]{1,30}') && request.resource.data.by == request.auth.uid
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+          && studentExists(schoolId, request.resource.data.studentId);
         allow update, delete: if false;
       }
 
@@ -901,26 +901,26 @@ service cloud.firestore {
       // student never receives them. onlineAttempts/{testId_studentId}: one answer sheet per student, made once while the
       // test is open; the owner then grades it (score and gradedOn are the only things that can change).
       match /questionBank/{docId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if ownerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validQuestion(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
       match /onlineTests/{docId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.status in ['open', 'closed'] && familyActive()));
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && docId.matches('OT-[A-Za-z0-9-]{1,27}') && validOnlineTest(request.resource.data);
-        allow update: if request.auth != null && isSchoolOwner(schoolId) && validOnlineTest(request.resource.data)
+        allow update: if ownerAuth(schoolId) && validOnlineTest(request.resource.data)
           && (resource.data.status == 'draft'
             || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
       match /onlineTestKeys/{docId} {
-        allow get, list: if request.auth != null && isSchoolOwner(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if ownerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('OT-[A-Za-z0-9-]{1,27}') && validOnlineKey(request.resource.data)
           && existsAfter(/databases/$(database)/documents/schools/$(schoolId)/onlineTests/$(docId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
       match /onlineAttempts/{docId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.by == request.auth.uid && familyActive()));
@@ -931,7 +931,7 @@ service cloud.firestore {
           && familyOwns(request.resource.data.studentId)
           && docId == request.resource.data.testId + '_' + request.resource.data.studentId
           && get(/databases/$(database)/documents/schools/$(schoolId)/onlineTests/$(request.resource.data.testId)).data.status == 'open';
-        allow update: if request.auth != null && isSchoolOwner(schoolId) && validAttempt(request.resource.data)
+        allow update: if ownerAuth(schoolId) && validAttempt(request.resource.data)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['score', 'gradedOn'])
           && request.resource.data.keys().hasAll(['score', 'gradedOn']);
         allow delete: if false;
@@ -941,12 +941,12 @@ service cloud.firestore {
       // the owner and principal read all; a linked family reads its own student's (query by studentId).
       match /feeReminders/{docId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && docId.matches('FR-[A-Za-z0-9-]{1,27}') && validFeeReminder(request.resource.data)
           && request.resource.data.by == request.auth.uid
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+          && studentExists(schoolId, request.resource.data.studentId);
         allow update: if false;
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Phone notifications (feature 150). pushTokens/{uid}: the notification address of a family's phone, kept by that family only.
@@ -961,49 +961,49 @@ service cloud.firestore {
 
       // Automatic backup result (feature 086). settings/autoBackup is written only by the nightly server job.
       match /settings/autoBackup {
-        allow get: if request.auth != null && isSchoolViewer(schoolId);
+        allow get: if viewerAuth(schoolId);
         allow create, update, delete: if false;
       }
 
       // Assets register. assets/{id}: name, place, cost, condition, boughtOn. Owner only.
       match /assets/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validAsset(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Sales ledger (uniforms, books). sales/{id}: studentId, studentName, item, quantity, amount, date. Owner only.
       match /sales/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validSale(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Syllabus tracker. syllabus/{id}: className, subjectName, chapter, status. Owner only.
       match /syllabus/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validSyllabus(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Staff training log. trainings/{id}: staffName, course, date, hours. Owner only.
       match /trainings/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validTraining(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Daily diary. diary/{id}: date, entry. Owner only.
       match /diary/{docId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validDiary(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Billing and plan (features 064, 070, 072, 089, 101, 103). billing/main is written by the platform
@@ -1030,7 +1030,7 @@ service cloud.firestore {
       // Custom domain requests (067). domainRequests/{id}: domain, status, optional note, createdOn.
       match /domainRequests/{requestId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
-        allow create: if request.auth != null && isSchoolOwner(schoolId) && requestId.matches('[A-Za-z0-9-]{1,30}')
+        allow create: if ownerAuth(schoolId) && requestId.matches('[A-Za-z0-9-]{1,30}')
           && validDomainRequest(request.resource.data) && request.resource.data.status == 'requested'
           && !request.resource.data.keys().hasAny(['dnsTarget', 'checkedOn', 'ssl']);
         allow update: if isPlatformAdmin() && validDomainRequest(request.resource.data)
@@ -1040,7 +1040,7 @@ service cloud.firestore {
       // Data requests (110). dataRequests/{id}: kind export/deletion, status, optional note, createdOn.
       match /dataRequests/{requestId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
-        allow create: if request.auth != null && isSchoolOwner(schoolId) && requestId.matches('[A-Za-z0-9-]{1,30}')
+        allow create: if ownerAuth(schoolId) && requestId.matches('[A-Za-z0-9-]{1,30}')
           && validDataRequest(request.resource.data) && request.resource.data.status == 'requested';
         allow update: if isPlatformAdmin() && validDataRequest(request.resource.data)
           && request.resource.data.kind == resource.data.kind;
@@ -1049,7 +1049,7 @@ service cloud.firestore {
       // Consent (094). consents/{uid}: policyVersion and acceptedAt (server time). Each member records their own.
       match /consents/{uid} {
         allow get: if request.auth != null && (request.auth.uid == uid || isSchoolViewer(schoolId));
-        allow list: if request.auth != null && isSchoolViewer(schoolId);
+        allow list: if viewerAuth(schoolId);
         allow create, update: if request.auth != null && request.auth.uid == uid
           && exists(/databases/$(database)/documents/schools/$(schoolId)/members/$(uid))
           && request.resource.data.keys().hasOnly(['policyVersion', 'acceptedAt'])
@@ -1065,20 +1065,20 @@ service cloud.firestore {
 
       // Alumni. alumni/{id}: name, passoutYear, optional contact, occupation and note. Owner only.
       match /alumni/{alumniId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && alumniId.matches('[A-Za-z0-9-]{1,30}') && validAlumnus(request.resource.data);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Health records. healthRecords/{studentId}: studentId, bloodGroup, allergies, conditions,
       // emergencyContact, notes. The owner writes them; the owner and the linked family read them.
       match /healthRecords/{recordId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && validHealthRecord(request.resource.data) && recordId == request.resource.data.studentId
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && studentExists(schoolId, request.resource.data.studentId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Lesson plans. lessonPlans/{id}: classId, subjectId, subject, date, topic, objectives, createdAt,
@@ -1091,7 +1091,7 @@ service cloud.firestore {
           && planId.matches('[A-Za-z0-9-]{1,30}') && validLessonPlan(request.resource.data)
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt <= latestAttendanceDate()
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && classExists(schoolId, request.resource.data.classId)
           && (isSchoolOwner(schoolId)
             || (teachesClass(request.resource.data.classId) && teacherSubjectId() == request.resource.data.subjectId));
         allow delete: if request.auth != null && (isSchoolOwner(schoolId)
@@ -1103,10 +1103,10 @@ service cloud.firestore {
       // of the class their student is placed in this year.
       match /ptmSlots/{slotId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyInClass(resource.data.classId));
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && slotId.matches('[A-Za-z0-9-]{1,30}') && validPtmSlot(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+          && classExists(schoolId, request.resource.data.classId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Payroll. payroll/{staffUid}_{YYYY-MM}: staffUid, month, basic, allowances, deductions (whole
@@ -1114,11 +1114,11 @@ service cloud.firestore {
       match /payroll/{payrollId} {
         allow get, list: if request.auth != null && (isOwnerRole(schoolId) || principalAllows(schoolId, 'payroll', false)
           || (isActiveTeacher() && resource.data.staffUid == request.auth.uid));
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && validPayroll(request.resource.data)
           && payrollId == request.resource.data.staffUid + '_' + request.resource.data.month
           && exists(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.resource.data.staffUid));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Messages from families. messages/{id}: studentId, subject, body, createdAt, createdBy, and the
@@ -1132,23 +1132,23 @@ service cloud.firestore {
           && !request.resource.data.keys().hasAny(['reply', 'repliedAt', 'mod', 'modNote'])
           && request.resource.data.createdBy == request.auth.uid
           && familyOwns(request.resource.data.studentId);
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validMessage(request.resource.data)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reply', 'repliedAt', 'mod', 'modNote'])
           && request.resource.data.diff(resource.data).affectedKeys().hasAny(['reply', 'repliedAt', 'mod', 'modNote'])
           && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['reply', 'repliedAt'])
             || request.resource.data.keys().hasAll(['reply', 'repliedAt']));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Public website. site/main holds the text of the public school page (school.html). Anyone can read
       // that one document, so it must hold only what the school is happy to publish; only the owner edits it.
       match /site/{docId} {
         allow get: if docId in ['main', 'extras'];
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && ((docId == 'main' && validSite(request.resource.data))
             || (docId == 'extras' && validSiteExtras(request.resource.data) && templateAllowed(request.resource.data)));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Admission enquiries. enquiries/{EQ-...}: sent from the public page by anyone, always starting as
@@ -1158,9 +1158,9 @@ service cloud.firestore {
         allow get, list: if request.auth != null && (isOwnerRole(schoolId) || principalAllows(schoolId, 'admissions', true));
         allow create: if enquiryId.matches('EQ-[A-Za-z0-9-]{1,30}') && validEnquiry(request.resource.data)
           && request.resource.data.status == 'new' && !request.resource.data.keys().hasAny(['note']);
-        allow update: if request.auth != null && isSchoolOwner(schoolId) && validEnquiry(request.resource.data)
+        allow update: if ownerAuth(schoolId) && validEnquiry(request.resource.data)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'note']);
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Event registration. eventRegistrations/{eventId}_{studentId}: a linked family registers its own
@@ -1193,7 +1193,7 @@ service cloud.firestore {
         allow update: if request.auth != null && validSubmission(request.resource.data)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['feedback', 'feedbackAt'])
           && (isSchoolOwner(schoolId) || teachesClass(resource.data.classId) || classTeacherOf(resource.data.classId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Continuous assessment. assessments/{id}: classId, subjectId, subject, title, date, maxMarks,
@@ -1206,7 +1206,7 @@ service cloud.firestore {
         allow create: if request.auth != null && assessmentId.matches('[A-Za-z0-9-]{1,30}')
           && validAssessment(request.resource.data)
           && request.resource.data.createdBy == request.auth.uid
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && classExists(schoolId, request.resource.data.classId)
           && (isSchoolOwner(schoolId)
             || (teachesClass(request.resource.data.classId) && teacherSubjectId() == request.resource.data.subjectId));
         allow delete: if request.auth != null && (isSchoolOwner(schoolId)
@@ -1230,10 +1230,10 @@ service cloud.firestore {
           return exists(path) && get(path).data.active == true && get(path).data.role in ['student', 'parent'];
         }
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || (request.auth.uid == uid && familyMember()));
-        allow list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && familyMember()
+        allow list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId) && familyMember()
           && validFamilyAccess(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(request.resource.data.studentId));
+          && studentExists(schoolId, request.resource.data.studentId);
       }
 
       // A pure status change leaves the name and the maximum marks untouched.
@@ -1269,8 +1269,8 @@ service cloud.firestore {
       //   draft -> active -> closed. settings/academic.activeYearId points at the one
       //   active year; it must be written in the same batch as the year's status change.
       match /settings/academic {
-        allow get: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && request.resource.data.keys().hasOnly(['activeYearId'])
           && request.resource.data.activeYearId is string
           && request.resource.data.activeYearId.matches('[a-z0-9-]{1,20}')
@@ -1285,14 +1285,14 @@ service cloud.firestore {
       // attendance percentage below which a student is flagged, and an optional term list.
       match /settings/preferences {
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validPreferences(request.resource.data);
+        allow create, update: if ownerAuth(schoolId) && validPreferences(request.resource.data);
       }
 
       // Principal switches. settings/principalAccess: payroll, fees and admissions, each true or false. The owner
       // sets them; the owner and the principal read them.
       match /settings/principalAccess {
-        allow get: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && request.resource.data.keys().hasOnly(['payroll', 'fees', 'admissions'])
           && request.resource.data.keys().hasAll(['payroll', 'fees', 'admissions'])
           && request.resource.data.payroll is bool && request.resource.data.fees is bool && request.resource.data.admissions is bool;
@@ -1314,25 +1314,25 @@ service cloud.firestore {
       match /staffCheckins/{docId} {
         allow get: if request.auth != null && (isSchoolViewer(schoolId)
           || (isActiveTeacher() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}_' + request.auth.uid + '_(in|out)')));
-        allow list: if request.auth != null && isSchoolViewer(schoolId);
+        allow list: if viewerAuth(schoolId);
         allow create: if request.auth != null && isActiveTeacher()
           && request.resource.data.staffUid == request.auth.uid
           && (validVerifiedCheckin(schoolId, request.resource.data, docId)
             || validReviewCheckin(schoolId, request.resource.data, docId));
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && resource.data.status == 'review'
           && request.resource.data.status in ['approved', 'rejected']
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewNote'])
           && request.resource.data.reviewedBy == request.auth.uid
           && (!request.resource.data.keys().hasAny(['reviewNote'])
-            || (request.resource.data.reviewNote is string && request.resource.data.reviewNote.size() <= 200));
+            || (maxText(request.resource.data.reviewNote, 200)));
         allow delete: if false;
       }
 
       // School QR code (features 129, 158). The owner's or principal's screen posts a new code about once a minute and keeps the one before it as prev.
       match /settings/qrCode {
-        allow get: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolViewer(schoolId) && !schoolSuspended(schoolId)
+        allow get: if viewerAuth(schoolId);
+        allow create, update: if viewerAuth(schoolId) && !schoolSuspended(schoolId)
           && request.resource.data.keys().hasOnly(['code', 'prev', 'at']) && request.resource.data.keys().hasAll(['code', 'at'])
           && request.resource.data.code is string && request.resource.data.code.matches('^[A-HJ-NP-Z2-9]{8}$')
           && (!request.resource.data.keys().hasAny(['prev'])
@@ -1344,14 +1344,14 @@ service cloud.firestore {
       // Shift (feature 132). settings/shift: start and end time, minutes of grace before a check-in counts as late, and minutes of break.
       match /settings/shift {
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validShift(request.resource.data);
+        allow create, update: if ownerAuth(schoolId) && validShift(request.resource.data);
         allow delete: if false;
       }
 
       // Selfie (feature 128). staffSelfies/{date}_{teacherUid}_{in|out}: a small compressed photo taken live at check-in.
       // The teacher saves it before the check-in and may replace it until the check-in exists. The school's owner and principal read it.
       match /staffSelfies/{docId} {
-        allow get: if request.auth != null && isSchoolViewer(schoolId);
+        allow get: if viewerAuth(schoolId);
         allow create, update: if request.auth != null && isActiveTeacher()
           && request.resource.data.keys().hasOnly(['staffUid', 'date', 'kind', 'photo', 'at'])
           && request.resource.data.keys().hasAll(['staffUid', 'date', 'kind', 'photo', 'at'])
@@ -1359,7 +1359,7 @@ service cloud.firestore {
           && request.resource.data.kind in ['in', 'out']
           && request.resource.data.date == checkinDay(get(/databases/$(database)/documents/schools/$(schoolId)/settings/location).data)
           && docId == request.resource.data.date + '_' + request.auth.uid + '_' + request.resource.data.kind
-          && request.resource.data.photo is string && request.resource.data.photo.size() <= 40000
+          && maxText(request.resource.data.photo, 40000)
           && request.resource.data.photo.matches('^data:image/jpeg;base64,.*')
           && request.resource.data.at == request.time
           && !exists(/databases/$(database)/documents/schools/$(schoolId)/staffCheckins/$(docId));
@@ -1376,28 +1376,28 @@ service cloud.firestore {
         allow create: if request.auth != null && isActiveTeacher()
           && request.resource.data.staffUid == request.auth.uid
           && validDispute(schoolId, request.resource.data, docId);
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && resource.data.status == 'open'
           && request.resource.data.status in ['approved', 'rejected']
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewNote'])
           && request.resource.data.reviewedBy == request.auth.uid
           && (!request.resource.data.keys().hasAny(['reviewNote'])
-            || (request.resource.data.reviewNote is string && request.resource.data.reviewNote.size() <= 200));
+            || (maxText(request.resource.data.reviewNote, 200)));
         allow delete: if false;
       }
 
       // Backup log. settings/backupLog: the date of the last backup the owner downloaded and its kind.
       match /settings/backupLog {
-        allow get: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && request.resource.data.keys().hasOnly(['lastAt', 'kind']) && request.resource.data.keys().hasAll(['lastAt', 'kind'])
           && dateText(request.resource.data.lastAt) && request.resource.data.kind in ['full', 'zip'];
       }
 
       // Launch checklist. settings/launch: eight manual "done" ticks (m1 to m8) kept by the owner.
       match /settings/launch {
-        allow get: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow get: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && request.resource.data.keys().hasOnly(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8'])
           && (!request.resource.data.keys().hasAny(['m1']) || request.resource.data.m1 is bool)
           && (!request.resource.data.keys().hasAny(['m2']) || request.resource.data.m2 is bool)
@@ -1413,51 +1413,51 @@ service cloud.firestore {
       // The owner keeps the log; the platform administrator reads it to compare with the storage plan.
       match /storageRecords/{recordId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && recordId.matches('ST-[A-Za-z0-9-]{1,30}') && validStorageRecord(request.resource.data)
           && (resource != null || withinStorage(schoolId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Student photos. studentPhotos/{studentId}: one small JPEG (data URL, shrunk in the browser). The owner
       // keeps it; the owner, principal and the student's own linked family read it.
       match /studentPhotos/{studentId} {
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(studentId));
-        allow list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow list: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
           && studentId.matches('[a-z0-9-]{1,20}') && validImage(request.resource.data, 'photo')
           && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(studentId));
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // School logo for printed documents. settings/branding: logo (JPEG data URL). Staff and linked families read it.
       match /settings/branding {
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validImage(request.resource.data, 'logo');
-        allow delete: if request.auth != null && isSchoolOwner(schoolId);
+        allow create, update: if ownerAuth(schoolId) && validImage(request.resource.data, 'logo');
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Student profile history. studentHistory/{SH-...}: who changed what and when. Written when the owner
       // edits a student; never edited or removed.
       match /studentHistory/{historyId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if ownerAuth(schoolId)
           && historyId.matches('SH-[A-Za-z0-9-]{1,30}') && validStudentHistory(request.resource.data)
           && request.resource.data.by == request.auth.uid;
       }
 
       match /settings/grading {
         allow get: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId) && validGrading(request.resource.data);
+        allow create, update: if ownerAuth(schoolId) && validGrading(request.resource.data);
       }
 
       match /academicYears/{yearId} {
         // Teachers read years (label, dates, status only) so a class teacher can find the active year.
         allow get, list: if request.auth != null && ((isSchoolViewer(schoolId) || isFeeStaff(schoolId)) || isActiveTeacher());
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && yearId.matches('[a-z0-9-]{1,20}')
           && validYear(request.resource.data) && request.resource.data.status == 'draft';
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validYear(request.resource.data)
           && request.resource.data.label == resource.data.label
           && ((resource.data.status == 'draft' && request.resource.data.status == 'draft')
@@ -1473,37 +1473,37 @@ service cloud.firestore {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId));
         // A class teacher reads their own class by ID, to show its name on the attendance sheet.
         allow get: if request.auth != null && classTeacherOf(classId);
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && classId.matches('[a-z0-9-]{1,20}') && validClass(request.resource.data);
       }
 
       match /sections/{sectionId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || teachesClass(resource.data.classId)
           || classTeacherOf(resource.data.classId));
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && sectionId.matches('[a-z0-9-]{1,31}') && validSection(request.resource.data)
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId));
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+          && classExists(schoolId, request.resource.data.classId);
+        allow update: if ownerAuth(schoolId)
           && validSection(request.resource.data)
           && request.resource.data.classId == resource.data.classId;
       }
 
       // subjects/{subjectId}: name, code. classSubjects/{classId}_{subjectId}: classId, subjectId.
       match /subjects/{subjectId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
+        allow get, list: if viewerAuth(schoolId);
         allow get: if request.auth != null && familyActive();
-        allow create, update: if request.auth != null && isSchoolOwner(schoolId)
+        allow create, update: if ownerAuth(schoolId)
           && subjectId.matches('[a-z0-9-]{1,30}') && validSubject(request.resource.data);
       }
 
       match /classSubjects/{mappingId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if ownerAuth(schoolId)
           && request.resource.data.keys().hasOnly(['classId', 'subjectId'])
-          && request.resource.data.classId is string && request.resource.data.classId.matches('[a-z0-9-]{1,20}')
+          && idText(request.resource.data.classId)
           && request.resource.data.subjectId is string && request.resource.data.subjectId.matches('[a-z0-9-]{1,30}')
           && mappingId == request.resource.data.classId + '_' + request.resource.data.subjectId
-          && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId))
+          && classExists(schoolId, request.resource.data.classId)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/subjects/$(request.resource.data.subjectId));
       }
 
@@ -1517,14 +1517,14 @@ service cloud.firestore {
       match /exams/{examId} {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || teachesExam(resource.data));
         allow get, list: if request.auth != null && resource.data.published == true && familyActive();
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && validExam(request.resource.data)
           && request.resource.data.status == 'open'
           && examId == request.resource.data.yearId + '_' + request.resource.data.classId
             + '_' + request.resource.data.subjectId + '_' + request.resource.data.examKey
           && openYear(request.resource.data.yearId)
           && exists(/databases/$(database)/documents/schools/$(schoolId)/classSubjects/$(request.resource.data.classId + '_' + request.resource.data.subjectId));
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validExam(request.resource.data)
           && request.resource.data.yearId == resource.data.yearId
           && request.resource.data.classId == resource.data.classId
@@ -1587,12 +1587,12 @@ service cloud.firestore {
         allow get: if request.auth != null && familyOwns(studentId);
         // A class teacher reads, one by one, the students placed in their class in the active year.
         allow get: if request.auth != null && classTeacherOfStudent(studentId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && studentId.matches('[a-z0-9-]{1,20}') && validStudentRecord(request.resource.data)
           && withinLimit(schoolId, 'students', 'studentLimit')
           && request.resource.data.admissionNo.lower() == studentId
           && request.resource.data.status == 'active';
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validStudentRecord(request.resource.data)
           && request.resource.data.admissionNo == resource.data.admissionNo;
       }
@@ -1604,14 +1604,14 @@ service cloud.firestore {
       match /enrollments/{enrollmentId} {
         allow get, list: if request.auth != null && ((isSchoolViewer(schoolId) || isFeeStaff(schoolId)) || teachesClass(resource.data.classId)
           || classTeacherOf(resource.data.classId) || familyOwns(resource.data.studentId));
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow create: if ownerAuth(schoolId)
           && validEnrollment(request.resource.data)
           && enrollmentId == request.resource.data.yearId + '_' + request.resource.data.studentId
           && openYear(request.resource.data.yearId)
           && activeStudent(request.resource.data.studentId)
           && sectionInClass(request.resource.data.sectionId, request.resource.data.classId)
           && rollKeyMatches(request.resource.data);
-        allow update: if request.auth != null && isSchoolOwner(schoolId)
+        allow update: if ownerAuth(schoolId)
           && validEnrollment(request.resource.data)
           && request.resource.data.yearId == resource.data.yearId
           && request.resource.data.studentId == resource.data.studentId
@@ -1622,8 +1622,8 @@ service cloud.firestore {
       }
 
       match /rollKeys/{rollKeyId} {
-        allow get, list: if request.auth != null && isSchoolViewer(schoolId);
-        allow create: if request.auth != null && isSchoolOwner(schoolId)
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if ownerAuth(schoolId)
           && validRollKey(request.resource.data)
           && rollKeyId == request.resource.data.yearId + '_' + request.resource.data.sectionId
             + '_' + string(request.resource.data.rollNo)
@@ -1633,7 +1633,7 @@ service cloud.firestore {
           && enrollmentAfter(request.resource.data.yearId, request.resource.data.studentId).rollNo
             == request.resource.data.rollNo;
         // A roll key may be released only when its student has moved to another section or roll.
-        allow delete: if request.auth != null && isSchoolOwner(schoolId)
+        allow delete: if ownerAuth(schoolId)
           && openYear(resource.data.yearId)
           && (enrollmentAfter(resource.data.yearId, resource.data.studentId).sectionId != resource.data.sectionId
             || enrollmentAfter(resource.data.yearId, resource.data.studentId).rollNo != resource.data.rollNo);
@@ -1660,12 +1660,12 @@ service cloud.firestore {
     function validAssignment(assignment) {
       return assignment.keys().hasAll(['className', 'subject'])
         && assignment.keys().hasOnly(['className', 'subject', 'classId', 'subjectId'])
-        && assignment.className is string && assignment.className.size() <= 80
+        && maxText(assignment.className, 80)
         && assignment.className.matches('.*[^[:space:]].*')
-        && assignment.subject is string && assignment.subject.size() <= 80
+        && maxText(assignment.subject, 80)
         && assignment.subject.matches('.*[^[:space:]].*')
         && (assignment.keys().hasAll(['classId', 'subjectId'])
-          ? (assignment.classId is string && assignment.classId.matches('[a-z0-9-]{1,20}')
+          ? (idText(assignment.classId)
             && assignment.subjectId is string && assignment.subjectId.matches('[a-z0-9-]{1,30}'))
           : !assignment.keys().hasAny(['classId', 'subjectId']));
     }
@@ -1673,53 +1673,53 @@ service cloud.firestore {
     function validMark(mark, markId) {
       return mark.keys().hasAll(['className', 'subject', 'exam', 'roll', 'score', 'maximum'])
         && mark.keys().hasOnly(['className', 'subject', 'exam', 'roll', 'score', 'maximum'])
-        && mark.exam is string && mark.exam.matches('[a-z0-9-]{1,20}')
+        && idText(mark.exam)
         && mark.roll is string && mark.roll.matches('[a-z0-9-]{1,24}')
         && markId == mark.exam + '_' + mark.roll
         && mark.maximum is int && mark.maximum > 0 && mark.maximum <= 1000
-        && mark.score is int && mark.score >= 0 && mark.score <= mark.maximum;
+        && intMin(mark.score, 0) && mark.score <= mark.maximum;
     }
 
     function validYear(year) {
       return year.keys().hasOnly(['label', 'startDate', 'endDate', 'status'])
         && year.keys().hasAll(['label', 'startDate', 'endDate', 'status'])
-        && year.label is string && year.label.size() <= 20 && year.label.matches('.*[^[:space:]].*')
-        && year.startDate is string && year.startDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && year.endDate is string && year.endDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && namedText(year.label, 20)
+        && dateText(year.startDate)
+        && dateText(year.endDate)
         && year.endDate > year.startDate
         && year.status in ['draft', 'active', 'closed'];
     }
 
     function validClass(item) {
       return item.keys().hasOnly(['name', 'order']) && item.keys().hasAll(['name', 'order'])
-        && item.name is string && item.name.size() <= 40 && item.name.matches('.*[^[:space:]].*')
-        && item.order is int && item.order >= 1 && item.order <= 100;
+        && namedText(item.name, 40)
+        && intIn(item.order, 1, 100);
     }
 
     function validSection(item) {
       return item.keys().hasOnly(['classId', 'name']) && item.keys().hasAll(['classId', 'name'])
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.name is string && item.name.size() <= 10 && item.name.matches('.*[^[:space:]].*');
+        && idText(item.classId)
+        && namedText(item.name, 10);
     }
 
     function validSubject(item) {
       return item.keys().hasOnly(['name', 'code']) && item.keys().hasAll(['name', 'code'])
-        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
-        && item.code is string && item.code.size() <= 12;
+        && namedText(item.name, 80)
+        && maxText(item.code, 12);
     }
 
     function validResultMark(mark) {
       return mark.keys().hasOnly(['examId', 'yearId', 'classId', 'subjectId', 'studentId', 'score', 'maxMarks', 'enteredBy', 'draft'])
         && (!mark.keys().hasAny(['draft']) || mark.draft == true)
         && mark.keys().hasAll(['examId', 'yearId', 'classId', 'subjectId', 'studentId', 'score', 'maxMarks', 'enteredBy'])
-        && mark.examId is string && mark.examId.size() <= 100
-        && mark.yearId is string && mark.yearId.matches('[a-z0-9-]{1,20}')
-        && mark.classId is string && mark.classId.matches('[a-z0-9-]{1,20}')
+        && maxText(mark.examId, 100)
+        && idText(mark.yearId)
+        && idText(mark.classId)
         && mark.subjectId is string && mark.subjectId.matches('[a-z0-9-]{1,30}')
-        && mark.studentId is string && mark.studentId.matches('[a-z0-9-]{1,20}')
+        && idText(mark.studentId)
         && mark.enteredBy is string
-        && mark.maxMarks is int && mark.maxMarks >= 1 && mark.maxMarks <= 1000
-        && mark.score is int && mark.score >= 0 && mark.score <= mark.maxMarks;
+        && intIn(mark.maxMarks, 1, 1000)
+        && intMin(mark.score, 0) && mark.score <= mark.maxMarks;
     }
 
     // Scholarships (feature 152). A scheme says how much, how many seats and the lowest marks percent; an application
@@ -1727,11 +1727,11 @@ service cloud.firestore {
     function validScholarship(item) {
       return item.keys().hasOnly(['name', 'criteria', 'amount', 'seats', 'minPercent', 'active'])
         && item.keys().hasAll(['name', 'amount', 'seats', 'minPercent', 'active'])
-        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
-        && (!item.keys().hasAny(['criteria']) || (item.criteria is string && item.criteria.size() <= 300))
-        && item.amount is int && item.amount >= 1 && item.amount <= 10000000
-        && item.seats is int && item.seats >= 1 && item.seats <= 10000
-        && item.minPercent is int && item.minPercent >= 0 && item.minPercent <= 100
+        && namedText(item.name, 60)
+        && optText(item, 'criteria', 300)
+        && intIn(item.amount, 1, 10000000)
+        && intIn(item.seats, 1, 10000)
+        && intIn(item.minPercent, 0, 100)
         && item.active is bool;
     }
 
@@ -1739,23 +1739,23 @@ service cloud.firestore {
       return item.keys().hasOnly(['schemeId', 'schemeName', 'studentId', 'studentName', 'percent', 'status', 'appliedOn', 'decidedOn', 'note'])
         && item.keys().hasAll(['schemeId', 'schemeName', 'studentId', 'studentName', 'percent', 'status', 'appliedOn'])
         && item.schemeId is string && item.schemeId.matches('SC-[A-Za-z0-9-]{1,30}')
-        && item.schemeName is string && item.schemeName.size() <= 60
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
-        && item.percent is int && item.percent >= 0 && item.percent <= 100
+        && maxText(item.schemeName, 60)
+        && idText(item.studentId)
+        && namedText(item.studentName, 80)
+        && intIn(item.percent, 0, 100)
         && item.status in ['applied', 'approved', 'rejected']
         && dateText(item.appliedOn)
         && (!item.keys().hasAny(['decidedOn']) || dateText(item.decidedOn))
         && (item.status == 'applied' || item.keys().hasAny(['decidedOn']))
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && optText(item, 'note', 200);
     }
 
     // Parent consent forms (feature 151).
     function validConsentForm(item) {
       return item.keys().hasOnly(['title', 'text', 'kind', 'status', 'dueOn', 'createdOn'])
         && item.keys().hasAll(['title', 'text', 'kind', 'status', 'createdOn'])
-        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
-        && item.text is string && item.text.size() <= 1000 && item.text.matches('.*[^[:space:]].*')
+        && namedText(item.title, 120)
+        && namedText(item.text, 1000)
         && item.kind in ['trip', 'photo', 'other']
         && item.status in ['open', 'closed']
         && (!item.keys().hasAny(['dueOn']) || dateText(item.dueOn))
@@ -1766,7 +1766,7 @@ service cloud.firestore {
       return item.keys().hasOnly(['formId', 'studentId', 'decision', 'by', 'at'])
         && item.keys().hasAll(['formId', 'studentId', 'decision', 'by', 'at'])
         && item.formId is string && item.formId.matches('CF-[A-Za-z0-9-]{1,30}')
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && idText(item.studentId)
         && item.decision in ['yes', 'no']
         && item.by is string
         && item.at == request.time;
@@ -1778,18 +1778,18 @@ service cloud.firestore {
         && item.keys().hasAll(['updatedOn'])
         && dateText(item.updatedOn)
         && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')))
-        && (!item.keys().hasAny(['address']) || (item.address is string && item.address.size() <= 200))
-        && (!item.keys().hasAny(['emergencyName']) || (item.emergencyName is string && item.emergencyName.size() <= 80))
+        && optText(item, 'address', 200)
+        && optText(item, 'emergencyName', 80)
         && (!item.keys().hasAny(['emergencyPhone']) || (item.emergencyPhone is string && item.emergencyPhone.matches('[0-9+() -]{0,20}')));
     }
 
     function validReservation(item) {
       return item.keys().hasOnly(['bookId', 'bookTitle', 'studentId', 'studentName', 'createdOn', 'status'])
         && item.keys().hasAll(['bookId', 'bookTitle', 'studentId', 'studentName', 'createdOn', 'status'])
-        && item.bookId is string && item.bookId.matches('[a-z0-9-]{1,20}')
-        && item.bookTitle is string && item.bookTitle.size() >= 1 && item.bookTitle.size() <= 120
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
+        && idText(item.bookId)
+        && textLen(item.bookTitle, 1, 120)
+        && idText(item.studentId)
+        && textLen(item.studentName, 1, 80)
         && dateText(item.createdOn)
         && item.status in ['waiting', 'ready', 'collected', 'cancelled'];
     }
@@ -1797,19 +1797,19 @@ service cloud.firestore {
     function validHostelRoom(item) {
       return item.keys().hasOnly(['name', 'block', 'beds', 'monthlyFee'])
         && item.keys().hasAll(['name', 'beds'])
-        && item.name is string && item.name.size() >= 1 && item.name.size() <= 40
-        && item.beds is int && item.beds >= 1 && item.beds <= 50
-        && (!item.keys().hasAny(['block']) || (item.block is string && item.block.size() <= 40))
-        && (!item.keys().hasAny(['monthlyFee']) || (item.monthlyFee is int && item.monthlyFee >= 0 && item.monthlyFee <= 1000000));
+        && textLen(item.name, 1, 40)
+        && intIn(item.beds, 1, 50)
+        && optText(item, 'block', 40)
+        && (!item.keys().hasAny(['monthlyFee']) || (intIn(item.monthlyFee, 0, 1000000)));
     }
 
     function validHostelStay(item) {
       return item.keys().hasOnly(['studentId', 'studentName', 'roomId', 'roomName', 'from', 'status', 'leftOn'])
         && item.keys().hasAll(['studentId', 'studentName', 'roomId', 'roomName', 'from', 'status'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
+        && idText(item.studentId)
+        && textLen(item.studentName, 1, 80)
         && item.roomId is string && item.roomId.matches('[A-Za-z0-9-]{1,30}')
-        && item.roomName is string && item.roomName.size() >= 1 && item.roomName.size() <= 40
+        && textLen(item.roomName, 1, 40)
         && dateText(item.from)
         && item.status in ['staying', 'left']
         && (!item.keys().hasAny(['leftOn']) || dateText(item.leftOn));
@@ -1820,34 +1820,34 @@ service cloud.firestore {
         && item.keys().hasAll(['day', 'meal', 'items'])
         && item.day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         && item.meal in ['Breakfast', 'Lunch', 'Snacks', 'Dinner']
-        && item.items is string && item.items.size() >= 1 && item.items.size() <= 300
-        && (!item.keys().hasAny(['price']) || (item.price is int && item.price >= 0 && item.price <= 100000));
+        && textLen(item.items, 1, 300)
+        && (!item.keys().hasAny(['price']) || (intIn(item.price, 0, 100000)));
     }
 
     function validCanteenPlan(item) {
       return item.keys().hasOnly(['studentId', 'studentName', 'plan', 'monthlyFee', 'from', 'active'])
         && item.keys().hasAll(['studentId', 'studentName', 'plan', 'monthlyFee', 'from', 'active'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
-        && item.plan is string && item.plan.size() >= 1 && item.plan.size() <= 40
-        && item.monthlyFee is int && item.monthlyFee >= 0 && item.monthlyFee <= 1000000
+        && idText(item.studentId)
+        && textLen(item.studentName, 1, 80)
+        && textLen(item.plan, 1, 40)
+        && intIn(item.monthlyFee, 0, 1000000)
         && dateText(item.from) && item.active is bool;
     }
 
     function validWorkflowRule(item) {
       return item.keys().hasOnly(['name', 'over', 'kind'])
         && item.keys().hasAll(['name', 'over', 'kind'])
-        && item.name is string && item.name.size() >= 1 && item.name.size() <= 80
+        && textLen(item.name, 1, 80)
         && item.kind == 'expense'
-        && item.over is int && item.over >= 1 && item.over <= 100000000;
+        && intIn(item.over, 1, 100000000);
     }
 
     function validPickupPerson(item) {
       return item.keys().hasOnly(['studentId', 'name', 'relation', 'phone', 'code', 'active', 'createdBy'])
         && item.keys().hasAll(['studentId', 'name', 'relation', 'code', 'active', 'createdBy'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.name is string && item.name.size() >= 1 && item.name.size() <= 80
-        && item.relation is string && item.relation.size() >= 1 && item.relation.size() <= 40
+        && idText(item.studentId)
+        && textLen(item.name, 1, 80)
+        && textLen(item.relation, 1, 40)
         && item.code is string && item.code.matches('[0-9]{6}')
         && item.active is bool && item.createdBy is string
         && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')));
@@ -1856,10 +1856,10 @@ service cloud.firestore {
     function validPickupLog(item) {
       return item.keys().hasOnly(['studentId', 'studentName', 'personName', 'relation', 'at', 'by'])
         && item.keys().hasAll(['studentId', 'studentName', 'personName', 'relation', 'at', 'by'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
-        && item.personName is string && item.personName.size() >= 1 && item.personName.size() <= 80
-        && item.relation is string && item.relation.size() <= 40
+        && idText(item.studentId)
+        && textLen(item.studentName, 1, 80)
+        && textLen(item.personName, 1, 80)
+        && maxText(item.relation, 40)
         && item.at == request.time && item.by is string;
     }
 
@@ -1867,28 +1867,28 @@ service cloud.firestore {
       return item.keys().hasOnly(['classId', 'subjectName', 'text', 'options', 'correct', 'marks'])
         && item.keys().hasAll(['classId', 'text', 'options', 'correct', 'marks'])
         && item.classId is string && item.classId.matches('[A-Za-z0-9-]{1,30}')
-        && item.text is string && item.text.size() >= 1 && item.text.size() <= 300
+        && textLen(item.text, 1, 300)
         && item.options is list && item.options.size() >= 2 && item.options.size() <= 4
         && item.options[0] is string && item.options[0].size() >= 1 && item.options[0].size() <= 120
         && item.options[1] is string && item.options[1].size() >= 1 && item.options[1].size() <= 120
         && (item.options.size() < 3 || (item.options[2] is string && item.options[2].size() >= 1 && item.options[2].size() <= 120))
         && (item.options.size() < 4 || (item.options[3] is string && item.options[3].size() >= 1 && item.options[3].size() <= 120))
-        && item.correct is int && item.correct >= 0 && item.correct < item.options.size()
-        && item.marks is int && item.marks >= 1 && item.marks <= 20
-        && (!item.keys().hasAny(['subjectName']) || (item.subjectName is string && item.subjectName.size() <= 60));
+        && intMin(item.correct, 0) && item.correct < item.options.size()
+        && intIn(item.marks, 1, 20)
+        && optText(item, 'subjectName', 60);
     }
 
     function validOnlineTest(item) {
       return item.keys().hasOnly(['title', 'classId', 'className', 'durationMin', 'status', 'paper', 'count', 'totalMarks', 'createdOn'])
         && item.keys().hasAll(['title', 'classId', 'className', 'durationMin', 'status', 'paper', 'count', 'totalMarks', 'createdOn'])
-        && item.title is string && item.title.size() >= 1 && item.title.size() <= 120
+        && textLen(item.title, 1, 120)
         && item.classId is string && item.classId.matches('[A-Za-z0-9-]{1,30}')
-        && item.className is string && item.className.size() >= 1 && item.className.size() <= 40
-        && item.durationMin is int && item.durationMin >= 5 && item.durationMin <= 180
+        && textLen(item.className, 1, 40)
+        && intIn(item.durationMin, 5, 180)
         && item.status in ['draft', 'open', 'closed']
-        && item.paper is string && item.paper.size() >= 2 && item.paper.size() <= 30000
-        && item.count is int && item.count >= 1 && item.count <= 60
-        && item.totalMarks is int && item.totalMarks >= 1 && item.totalMarks <= 1200
+        && textLen(item.paper, 2, 30000)
+        && intIn(item.count, 1, 60)
+        && intIn(item.totalMarks, 1, 1200)
         && dateText(item.createdOn);
     }
 
@@ -1903,28 +1903,28 @@ service cloud.firestore {
       return item.keys().hasOnly(['testId', 'studentId', 'answers', 'by', 'at', 'score', 'gradedOn'])
         && item.keys().hasAll(['testId', 'studentId', 'answers', 'by', 'at'])
         && item.testId is string && item.testId.matches('OT-[A-Za-z0-9-]{1,27}')
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && idText(item.studentId)
         && item.answers is string && item.answers.matches('[0-3x](,[0-3x]){0,59}')
         && item.by is string && item.at is timestamp
-        && (!item.keys().hasAny(['score']) || (item.score is int && item.score >= 0 && item.score <= 1200))
+        && (!item.keys().hasAny(['score']) || (intIn(item.score, 0, 1200)))
         && (!item.keys().hasAny(['gradedOn']) || dateText(item.gradedOn));
     }
 
     function validFeeReminder(item) {
       return item.keys().hasOnly(['studentId', 'studentName', 'amount', 'createdOn', 'message', 'by'])
         && item.keys().hasAll(['studentId', 'studentName', 'amount', 'createdOn', 'by'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
-        && item.amount is int && item.amount >= 1 && item.amount <= 100000000
+        && idText(item.studentId)
+        && textLen(item.studentName, 1, 80)
+        && intIn(item.amount, 1, 100000000)
         && dateText(item.createdOn) && item.by is string
-        && (!item.keys().hasAny(['message']) || (item.message is string && item.message.size() <= 200));
+        && optText(item, 'message', 200);
     }
 
     function validPushToken(item) {
       return item.keys().hasOnly(['token', 'studentId', 'classId', 'updatedOn'])
         && item.keys().hasAll(['token', 'studentId', 'updatedOn'])
-        && item.token is string && item.token.size() >= 20 && item.token.size() <= 600
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && textLen(item.token, 20, 600)
+        && idText(item.studentId)
         && dateText(item.updatedOn)
         && (!item.keys().hasAny(['classId']) || (item.classId is string && item.classId.matches('[A-Za-z0-9-]{1,30}')));
     }
@@ -1943,7 +1943,7 @@ service cloud.firestore {
         && item.lng is number && item.lng >= -180 && item.lng <= 180
         && item.radiusM is number && item.radiusM >= 30 && item.radiusM <= 500
         && item.maxAccuracyM is number && item.maxAccuracyM >= 10 && item.maxAccuracyM <= 100
-        && item.tzMinutes is int && item.tzMinutes >= 0 && item.tzMinutes <= 840
+        && intIn(item.tzMinutes, 0, 840)
         && item.setBy == request.auth.uid
         && item.setOn == request.time;
     }
@@ -2019,8 +2019,8 @@ service cloud.firestore {
       return item.keys().hasOnly(['start', 'end', 'graceMin', 'breakMin'])
         && item.keys().hasAll(['start', 'end', 'graceMin', 'breakMin'])
         && hhmm(item.start) && hhmm(item.end) && item.end > item.start
-        && item.graceMin is int && item.graceMin >= 0 && item.graceMin <= 120
-        && item.breakMin is int && item.breakMin >= 0 && item.breakMin <= 240;
+        && intIn(item.graceMin, 0, 120)
+        && intIn(item.breakMin, 0, 240);
     }
 
     function validDispute(schoolId, item, docId) {
@@ -2030,7 +2030,7 @@ service cloud.firestore {
         && item.keys().hasAny(['inTime', 'outTime'])
         && dateText(item.date) && item.date <= checkinDay(loc)
         && docId == item.date + '_' + item.staffUid
-        && item.reason is string && item.reason.size() >= 3 && item.reason.size() <= 300
+        && textLen(item.reason, 3, 300)
         && (!item.keys().hasAny(['inTime']) || hhmm(item.inTime))
         && (!item.keys().hasAny(['outTime']) || hhmm(item.outTime))
         && item.status == 'open'
@@ -2042,7 +2042,7 @@ service cloud.firestore {
         && item.keys().hasAll(['staffUid', 'date', 'kind', 'at', 'status', 'reason'])
         && item.status == 'review'
         && item.reason in ['gps-weak', 'gps-denied', 'other']
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200))
+        && optText(item, 'note', 200)
         && (!item.keys().hasAny(['lat']) || (item.lat is number && item.lat >= -90 && item.lat <= 90))
         && (!item.keys().hasAny(['lng']) || (item.lng is number && item.lng >= -180 && item.lng <= 180))
         && (!item.keys().hasAny(['accuracy']) || (item.accuracy is number && item.accuracy >= 0))
@@ -2057,17 +2057,17 @@ service cloud.firestore {
 
     function validClassTeacher(item) {
       return item.keys().hasOnly(['teacherUid']) && item.keys().hasAll(['teacherUid'])
-        && item.teacherUid is string && item.teacherUid.size() >= 1 && item.teacherUid.size() <= 128;
+        && textLen(item.teacherUid, 1, 128);
     }
 
     function validAttendance(item) {
       return item.keys().hasOnly(['yearId', 'classId', 'studentId', 'date', 'status', 'markedBy', 'reason'])
         && item.keys().hasAll(['yearId', 'classId', 'studentId', 'date', 'status', 'markedBy'])
         && optionalText(item, 'reason', 120)
-        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && idText(item.yearId)
+        && idText(item.classId)
+        && idText(item.studentId)
+        && dateText(item.date)
         && item.status in ['present', 'absent', 'late', 'leave']
         && item.markedBy is string;
     }
@@ -2075,8 +2075,8 @@ service cloud.firestore {
     function validStaffAttendance(item) {
       return item.keys().hasOnly(['staffUid', 'date', 'status', 'markedBy'])
         && item.keys().hasAll(['staffUid', 'date', 'status', 'markedBy'])
-        && item.staffUid is string && item.staffUid.size() >= 1 && item.staffUid.size() <= 128
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && textLen(item.staffUid, 1, 128)
+        && dateText(item.date) && item.date >= '2020-01-01'
         && item.status in ['present', 'absent', 'late', 'leave']
         && item.markedBy is string;
     }
@@ -2084,11 +2084,11 @@ service cloud.firestore {
     function validLeaveRequest(item) {
       return item.keys().hasAll(['staffUid', 'fromDate', 'toDate', 'reason', 'status'])
         && item.keys().hasOnly(['staffUid', 'fromDate', 'toDate', 'reason', 'status', 'decidedBy'])
-        && item.staffUid is string && item.staffUid.size() >= 1 && item.staffUid.size() <= 128
-        && item.fromDate is string && item.fromDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.fromDate >= '2020-01-01'
-        && item.toDate is string && item.toDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && textLen(item.staffUid, 1, 128)
+        && dateText(item.fromDate) && item.fromDate >= '2020-01-01'
+        && dateText(item.toDate)
         && item.toDate >= item.fromDate
-        && item.reason is string && item.reason.size() <= 200 && item.reason.matches('.*[^[:space:]].*')
+        && namedText(item.reason, 200)
         && item.status in ['pending', 'approved', 'rejected']
         && (!item.keys().hasAny(['decidedBy']) || item.decidedBy is string);
     }
@@ -2096,36 +2096,36 @@ service cloud.firestore {
     function validStudentLeave(item) {
       return item.keys().hasAll(['studentId', 'studentName', 'classId', 'fromDate', 'toDate', 'reason', 'status', 'requestedBy'])
         && item.keys().hasOnly(['studentId', 'studentName', 'classId', 'fromDate', 'toDate', 'reason', 'status', 'requestedBy', 'decidedBy', 'decisionNote'])
-        && item.studentId is string && item.studentId.size() >= 1 && item.studentId.size() <= 40
-        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 100
-        && item.classId is string && item.classId.size() >= 1 && item.classId.size() <= 40
-        && item.fromDate is string && item.fromDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.fromDate >= '2020-01-01'
-        && item.toDate is string && item.toDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.toDate >= item.fromDate
-        && item.reason is string && item.reason.size() <= 300 && item.reason.matches('.*[^[:space:]].*')
+        && textLen(item.studentId, 1, 40)
+        && textLen(item.studentName, 1, 100)
+        && textLen(item.classId, 1, 40)
+        && dateText(item.fromDate) && item.fromDate >= '2020-01-01'
+        && dateText(item.toDate) && item.toDate >= item.fromDate
+        && namedText(item.reason, 300)
         && item.status in ['pending', 'approved', 'rejected']
-        && item.requestedBy is string && item.requestedBy.size() <= 128
+        && maxText(item.requestedBy, 128)
         && (!item.keys().hasAny(['decidedBy']) || item.decidedBy is string)
-        && (!item.keys().hasAny(['decisionNote']) || (item.decisionNote is string && item.decisionNote.size() <= 200));
+        && optText(item, 'decisionNote', 200);
     }
 
     function validFeeStructure(item) {
       return item.keys().hasOnly(['yearId', 'classId', 'head', 'name', 'amount', 'dueOn'])
         && item.keys().hasAll(['yearId', 'classId', 'head', 'name', 'amount'])
         && (!item.keys().hasAny(['dueOn']) || (item.dueOn is string && item.dueOn.matches('20[0-9]{2}-[0-9]{2}-[0-9]{2}')))
-        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.head is string && item.head.matches('[a-z0-9-]{1,20}')
-        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
-        && item.amount is int && item.amount >= 0 && item.amount <= 10000000;
+        && idText(item.yearId)
+        && idText(item.classId)
+        && idText(item.head)
+        && namedText(item.name, 60)
+        && intIn(item.amount, 0, 10000000);
     }
 
     function validPayment(item) {
       return item.keys().hasOnly(['studentId', 'yearId', 'amount', 'date', 'method', 'receiptNo', 'receivedBy', 'voided'])
         && item.keys().hasAll(['studentId', 'yearId', 'amount', 'date', 'method', 'receiptNo', 'receivedBy'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
-        && item.amount is int && item.amount >= 1 && item.amount <= 10000000
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && idText(item.studentId)
+        && idText(item.yearId)
+        && intIn(item.amount, 1, 10000000)
+        && dateText(item.date) && item.date >= '2020-01-01'
         && item.method in ['cash', 'upi', 'bank', 'cheque']
         && item.receiptNo is string && item.receiptNo.matches('[A-Za-z0-9-]{1,24}')
         && item.receivedBy is string
@@ -2135,13 +2135,13 @@ service cloud.firestore {
     function validNotice(item) {
       return item.keys().hasOnly(['title', 'body', 'audience', 'classId', 'createdAt', 'createdBy'])
         && item.keys().hasAll(['title', 'body', 'audience', 'createdAt', 'createdBy'])
-        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
-        && item.body is string && item.body.size() <= 2000 && item.body.matches('.*[^[:space:]].*')
+        && namedText(item.title, 100)
+        && namedText(item.body, 2000)
         && item.audience in ['all', 'teachers', 'families', 'class']
         && (item.audience == 'class'
-          ? (item.keys().hasAny(['classId']) && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}'))
+          ? (item.keys().hasAny(['classId']) && idText(item.classId))
           : !item.keys().hasAny(['classId']))
-        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && dateText(item.createdAt) && item.createdAt >= '2020-01-01'
         && item.createdBy is string;
     }
 
@@ -2150,16 +2150,16 @@ service cloud.firestore {
         && item.keys().hasAll(['actor', 'action', 'target', 'docId', 'at'])
         && item.actor is string
         && item.action in ['save', 'remove', 'void', 'decide-leave', 'activate-year', 'close-year', 'bulk', 'marks', 'attendance']
-        && item.target is string && item.target.size() >= 1 && item.target.size() <= 40
-        && item.docId is string && item.docId.size() <= 100
+        && textLen(item.target, 1, 40)
+        && maxText(item.docId, 100)
         && item.at is string && item.at.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,14}Z') && item.at >= '2020-01-01'
-        && (!item.keys().hasAny(['detail']) || (item.detail is string && item.detail.size() <= 200));
+        && optText(item, 'detail', 200);
     }
 
     function validGrading(item) {
       return item.keys().hasOnly(['passPercent', 'minAPlus', 'minA', 'minB', 'minC', 'minD', 'minE'])
         && item.keys().hasAll(['passPercent', 'minAPlus', 'minA', 'minB', 'minC', 'minD', 'minE'])
-        && item.passPercent is int && item.passPercent >= 1 && item.passPercent <= 100
+        && intIn(item.passPercent, 1, 100)
         && item.minAPlus is int && item.minA is int && item.minB is int
         && item.minC is int && item.minD is int && item.minE is int
         && item.minAPlus <= 100 && item.minAPlus > item.minA && item.minA > item.minB
@@ -2169,88 +2169,88 @@ service cloud.firestore {
     function validTimetableSlot(item) {
       return item.keys().hasOnly(['classId', 'className', 'day', 'period', 'subject', 'start', 'end', 'teacher'])
         && item.keys().hasAll(['classId', 'className', 'day', 'period', 'subject', 'start', 'end'])
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.className is string && item.className.size() >= 1 && item.className.size() <= 40
-        && item.day is int && item.day >= 1 && item.day <= 7
-        && item.period is int && item.period >= 1 && item.period <= 12
-        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
+        && idText(item.classId)
+        && textLen(item.className, 1, 40)
+        && intIn(item.day, 1, 7)
+        && intIn(item.period, 1, 12)
+        && textLen(item.subject, 1, 40)
         && item.start is string && item.start.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
         && item.end is string && item.end.matches('([01][0-9]|2[0-3]):[0-5][0-9]') && item.end > item.start
-        && (!item.keys().hasAny(['teacher']) || (item.teacher is string && item.teacher.size() <= 60));
+        && optText(item, 'teacher', 60);
     }
 
     function validHomework(item) {
       return item.keys().hasOnly(['classId', 'subjectId', 'subject', 'title', 'details', 'dueDate', 'createdAt', 'createdBy'])
         && item.keys().hasAll(['classId', 'subjectId', 'subject', 'title', 'details', 'dueDate', 'createdAt', 'createdBy'])
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && idText(item.classId)
         && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
-        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
-        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
-        && item.details is string && item.details.size() <= 2000 && item.details.matches('.*[^[:space:]].*')
-        && item.dueDate is string && item.dueDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && textLen(item.subject, 1, 40)
+        && namedText(item.title, 100)
+        && namedText(item.details, 2000)
+        && dateText(item.dueDate)
+        && dateText(item.createdAt) && item.createdAt >= '2020-01-01'
         && item.createdBy is string;
     }
 
     function validMaterial(item) {
       return item.keys().hasOnly(['classId', 'subject', 'title', 'link', 'createdAt', 'createdBy'])
         && item.keys().hasAll(['classId', 'subject', 'title', 'link', 'createdAt', 'createdBy'])
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
-        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
+        && idText(item.classId)
+        && textLen(item.subject, 1, 40)
+        && namedText(item.title, 100)
         && item.link is string && item.link.matches('https://[^ ]{4,400}')
-        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && dateText(item.createdAt) && item.createdAt >= '2020-01-01'
         && item.createdBy is string;
     }
 
     function validCalendarEvent(item) {
       return item.keys().hasOnly(['title', 'date', 'kind', 'note'])
         && item.keys().hasAll(['title', 'date', 'kind'])
-        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && namedText(item.title, 100)
+        && dateText(item.date) && item.date >= '2020-01-01'
         && item.kind in ['holiday', 'exam', 'event', 'meeting']
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 300));
+        && optText(item, 'note', 300);
     }
 
     function validBook(item) {
       return item.keys().hasOnly(['title', 'author', 'copies'])
         && item.keys().hasAll(['title', 'author', 'copies'])
-        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
-        && item.author is string && item.author.size() <= 80
-        && item.copies is int && item.copies >= 1 && item.copies <= 1000;
+        && namedText(item.title, 120)
+        && maxText(item.author, 80)
+        && intIn(item.copies, 1, 1000);
     }
 
     function validLoan(item) {
       return item.keys().hasOnly(['bookId', 'studentId', 'issuedOn', 'dueOn', 'returnedOn', 'issuedBy', 'renewals'])
         && item.keys().hasAll(['bookId', 'studentId', 'issuedOn', 'dueOn', 'issuedBy'])
-        && (!item.keys().hasAny(['renewals']) || (item.renewals is int && item.renewals >= 1 && item.renewals <= 3))
-        && item.bookId is string && item.bookId.matches('[a-z0-9-]{1,20}')
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.issuedOn is string && item.issuedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.issuedOn >= '2020-01-01'
-        && item.dueOn is string && item.dueOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && (!item.keys().hasAny(['renewals']) || (intIn(item.renewals, 1, 3)))
+        && idText(item.bookId)
+        && idText(item.studentId)
+        && dateText(item.issuedOn) && item.issuedOn >= '2020-01-01'
+        && dateText(item.dueOn)
         && item.issuedBy is string
         && (!item.keys().hasAny(['returnedOn'])
-          || (item.returnedOn is string && item.returnedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+          || (dateText(item.returnedOn)));
     }
 
     function validBehaviour(item) {
       return item.keys().hasOnly(['studentId', 'date', 'kind', 'note', 'recordedBy'])
         && item.keys().hasAll(['studentId', 'date', 'kind', 'note', 'recordedBy'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && idText(item.studentId)
+        && dateText(item.date) && item.date >= '2020-01-01'
         && item.kind in ['positive', 'concern']
-        && item.note is string && item.note.size() <= 500 && item.note.matches('.*[^[:space:]].*')
+        && namedText(item.note, 500)
         && item.recordedBy is string;
     }
 
     function validVisitor(item) {
       return item.keys().hasOnly(['name', 'purpose', 'whom', 'phone', 'date', 'timeIn', 'timeOut', 'recordedBy'])
         && item.keys().hasAll(['name', 'purpose', 'date', 'timeIn', 'recordedBy'])
-        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
-        && item.purpose is string && item.purpose.size() <= 120 && item.purpose.matches('.*[^[:space:]].*')
-        && (!item.keys().hasAny(['whom']) || (item.whom is string && item.whom.size() <= 80))
+        && namedText(item.name, 80)
+        && namedText(item.purpose, 120)
+        && optText(item, 'whom', 80)
         && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')))
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && dateText(item.date) && item.date >= '2020-01-01'
         && item.timeIn is string && item.timeIn.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
         && (!item.keys().hasAny(['timeOut']) || (item.timeOut is string && item.timeOut.matches('([01][0-9]|2[0-3]):[0-5][0-9]')))
         && item.recordedBy is string;
@@ -2259,49 +2259,49 @@ service cloud.firestore {
     function validSubstitution(item) {
       return item.keys().hasOnly(['date', 'classId', 'className', 'period', 'substituteUid', 'absentTeacher', 'note', 'createdBy'])
         && item.keys().hasAll(['date', 'classId', 'className', 'period', 'substituteUid', 'createdBy'])
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.className is string && item.className.size() >= 1 && item.className.size() <= 40
-        && item.period is int && item.period >= 1 && item.period <= 12
+        && dateText(item.date) && item.date >= '2020-01-01'
+        && idText(item.classId)
+        && textLen(item.className, 1, 40)
+        && intIn(item.period, 1, 12)
         && item.substituteUid is string && item.createdBy is string
-        && (!item.keys().hasAny(['absentTeacher']) || (item.absentTeacher is string && item.absentTeacher.size() <= 60))
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && optText(item, 'absentTeacher', 60)
+        && optText(item, 'note', 200);
     }
 
     function validRoute(item) {
       return item.keys().hasOnly(['name', 'vehicle', 'driver', 'driverPhone', 'stops', 'monthlyFee'])
-        && (!item.keys().hasAny(['monthlyFee']) || (item.monthlyFee is int && item.monthlyFee >= 0 && item.monthlyFee <= 100000))
+        && (!item.keys().hasAny(['monthlyFee']) || (intIn(item.monthlyFee, 0, 100000)))
         && item.keys().hasAll(['name'])
-        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
-        && (!item.keys().hasAny(['vehicle']) || (item.vehicle is string && item.vehicle.size() <= 30))
-        && (!item.keys().hasAny(['driver']) || (item.driver is string && item.driver.size() <= 60))
+        && namedText(item.name, 60)
+        && optText(item, 'vehicle', 30)
+        && optText(item, 'driver', 60)
         && (!item.keys().hasAny(['driverPhone']) || (item.driverPhone is string && item.driverPhone.matches('[0-9+() -]{0,20}')))
-        && (!item.keys().hasAny(['stops']) || (item.stops is string && item.stops.size() <= 300));
+        && optText(item, 'stops', 300);
     }
 
     function validRider(item) {
       return item.keys().hasOnly(['studentId', 'routeId', 'stop', 'months'])
         && item.keys().hasAll(['studentId', 'routeId'])
-        && (!item.keys().hasAny(['months']) || (item.months is int && item.months >= 0 && item.months <= 12))
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && (!item.keys().hasAny(['months']) || (intIn(item.months, 0, 12)))
+        && idText(item.studentId)
         && item.routeId is string && item.routeId.matches('[A-Za-z0-9-]{1,30}')
-        && (!item.keys().hasAny(['stop']) || (item.stop is string && item.stop.size() <= 60));
+        && optText(item, 'stop', 60);
     }
 
     function validActivity(item) {
       return item.keys().hasOnly(['name', 'teacher', 'schedule'])
         && item.keys().hasAll(['name'])
-        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
-        && (!item.keys().hasAny(['teacher']) || (item.teacher is string && item.teacher.size() <= 60))
-        && (!item.keys().hasAny(['schedule']) || (item.schedule is string && item.schedule.size() <= 100));
+        && namedText(item.name, 60)
+        && optText(item, 'teacher', 60)
+        && optText(item, 'schedule', 100);
     }
 
     function validActivityMember(item) {
       return item.keys().hasOnly(['activityId', 'studentId', 'joinedOn'])
         && item.keys().hasAll(['activityId', 'studentId', 'joinedOn'])
         && item.activityId is string && item.activityId.matches('[A-Za-z0-9-]{1,30}')
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.joinedOn is string && item.joinedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.joinedOn >= '2020-01-01';
+        && idText(item.studentId)
+        && dateText(item.joinedOn) && item.joinedOn >= '2020-01-01';
     }
 
     function validExpense(item) {
@@ -2309,169 +2309,169 @@ service cloud.firestore {
         && item.keys().hasAll(['date', 'category', 'amount'])
         && (!item.keys().hasAny(['status']) || item.status in ['pending', 'approved', 'rejected'])
         && (!item.keys().hasAny(['payMode']) || item.payMode in ['cash', 'bank', 'upi', 'cheque'])
-        && (!item.keys().hasAny(['vendor']) || (item.vendor is string && item.vendor.size() <= 80))
+        && optText(item, 'vendor', 80)
         && (!item.keys().hasAny(['decidedOn']) || dateText(item.decidedOn))
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && item.category is string && item.category.size() <= 40 && item.category.matches('.*[^[:space:]].*')
-        && item.amount is int && item.amount >= 1 && item.amount <= 100000000
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && dateText(item.date)
+        && namedText(item.category, 40)
+        && intIn(item.amount, 1, 100000000)
+        && optText(item, 'note', 200);
     }
 
     function validCertificate(item) {
       return item.keys().hasOnly(['type', 'studentId', 'studentName', 'issuedOn', 'purpose'])
         && item.keys().hasAll(['type', 'studentId', 'studentName', 'issuedOn'])
         && item.type in ['Bonafide', 'Transfer', 'Character']
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
-        && item.issuedOn is string && item.issuedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && (!item.keys().hasAny(['purpose']) || (item.purpose is string && item.purpose.size() <= 200));
+        && idText(item.studentId)
+        && namedText(item.studentName, 80)
+        && dateText(item.issuedOn)
+        && optText(item, 'purpose', 200);
     }
 
     function validTicket(item) {
       return item.keys().hasOnly(['title', 'place', 'priority', 'status', 'createdOn'])
         && item.keys().hasAll(['title', 'priority', 'status', 'createdOn'])
-        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
-        && (!item.keys().hasAny(['place']) || (item.place is string && item.place.size() <= 60))
+        && namedText(item.title, 120)
+        && optText(item, 'place', 60)
         && item.priority in ['low', 'normal', 'high'] && item.status in ['open', 'done']
-        && item.createdOn is string && item.createdOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+        && dateText(item.createdOn);
     }
 
     function validStaffCard(item) {
       return item.keys().hasOnly(['name', 'role', 'phone', 'email', 'joinedOn', 'qualification', 'emergencyPhone', 'address', 'experienceYears',
           'employeeId', 'department', 'employmentType', 'subjects', 'dateOfBirth', 'gender', 'bloodGroup', 'leftOn'])
         && item.keys().hasAll(['name', 'role'])
-        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
-        && item.role is string && item.role.size() <= 40 && item.role.matches('.*[^[:space:]].*')
+        && namedText(item.name, 80)
+        && namedText(item.role, 40)
         && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{1,20}')))
-        && (!item.keys().hasAny(['email']) || (item.email is string && item.email.size() <= 80))
-        && (!item.keys().hasAny(['joinedOn']) || (item.joinedOn is string && item.joinedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
-        && (!item.keys().hasAny(['qualification']) || (item.qualification is string && item.qualification.size() <= 100))
+        && optText(item, 'email', 80)
+        && (!item.keys().hasAny(['joinedOn']) || (dateText(item.joinedOn)))
+        && optText(item, 'qualification', 100)
         && (!item.keys().hasAny(['emergencyPhone']) || (item.emergencyPhone is string && item.emergencyPhone.matches('[0-9+() -]{1,20}')))
-        && (!item.keys().hasAny(['address']) || (item.address is string && item.address.size() <= 200))
-        && (!item.keys().hasAny(['experienceYears']) || (item.experienceYears is int && item.experienceYears >= 0 && item.experienceYears <= 60))
-        && (!item.keys().hasAny(['employeeId']) || (item.employeeId is string && item.employeeId.size() <= 20))
-        && (!item.keys().hasAny(['department']) || (item.department is string && item.department.size() <= 40))
+        && optText(item, 'address', 200)
+        && (!item.keys().hasAny(['experienceYears']) || (intIn(item.experienceYears, 0, 60)))
+        && optText(item, 'employeeId', 20)
+        && optText(item, 'department', 40)
         && (!item.keys().hasAny(['employmentType']) || item.employmentType in ['permanent', 'contract', 'part-time', 'visiting'])
-        && (!item.keys().hasAny(['subjects']) || (item.subjects is string && item.subjects.size() <= 100))
-        && (!item.keys().hasAny(['dateOfBirth']) || (item.dateOfBirth is string && item.dateOfBirth.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
+        && optText(item, 'subjects', 100)
+        && (!item.keys().hasAny(['dateOfBirth']) || (dateText(item.dateOfBirth)))
         && (!item.keys().hasAny(['gender']) || item.gender in ['male', 'female', 'other'])
         && (!item.keys().hasAny(['bloodGroup']) || item.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'])
-        && (!item.keys().hasAny(['leftOn']) || (item.leftOn is string && item.leftOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+        && (!item.keys().hasAny(['leftOn']) || (dateText(item.leftOn)));
     }
 
     function validVehicle(item) {
       return item.keys().hasOnly(['regNo', 'model', 'capacity', 'insuranceExpiry', 'fitnessExpiry', 'licenseExpiry', 'routeId'])
         && item.keys().hasAll(['regNo', 'capacity'])
-        && item.regNo is string && item.regNo.size() <= 20 && item.regNo.matches('.*[^[:space:]].*')
-        && (!item.keys().hasAny(['model']) || (item.model is string && item.model.size() <= 60))
-        && item.capacity is int && item.capacity >= 1 && item.capacity <= 200
-        && (!item.keys().hasAny(['insuranceExpiry']) || (item.insuranceExpiry is string && item.insuranceExpiry.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
-        && (!item.keys().hasAny(['fitnessExpiry']) || (item.fitnessExpiry is string && item.fitnessExpiry.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
-        && (!item.keys().hasAny(['licenseExpiry']) || (item.licenseExpiry is string && item.licenseExpiry.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
-        && (!item.keys().hasAny(['routeId']) || (item.routeId is string && item.routeId.size() <= 40));
+        && namedText(item.regNo, 20)
+        && optText(item, 'model', 60)
+        && intIn(item.capacity, 1, 200)
+        && (!item.keys().hasAny(['insuranceExpiry']) || (dateText(item.insuranceExpiry)))
+        && (!item.keys().hasAny(['fitnessExpiry']) || (dateText(item.fitnessExpiry)))
+        && (!item.keys().hasAny(['licenseExpiry']) || (dateText(item.licenseExpiry)))
+        && optText(item, 'routeId', 40);
     }
 
     function validAppraisal(item) {
       return item.keys().hasOnly(['staffName', 'date', 'rating', 'remarks', 'cycle', 'goals', 'status'])
         && item.keys().hasAll(['staffName', 'date', 'rating'])
-        && (!item.keys().hasAny(['cycle']) || (item.cycle is string && item.cycle.size() <= 40))
-        && (!item.keys().hasAny(['goals']) || (item.goals is string && item.goals.size() <= 300))
+        && optText(item, 'cycle', 40)
+        && optText(item, 'goals', 300)
         && (!item.keys().hasAny(['status']) || item.status in ['draft', 'submitted', 'approved'])
-        && item.staffName is string && item.staffName.size() <= 80 && item.staffName.matches('.*[^[:space:]].*')
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
-        && item.rating is int && item.rating >= 1 && item.rating <= 5
-        && (!item.keys().hasAny(['remarks']) || (item.remarks is string && item.remarks.size() <= 300));
+        && namedText(item.staffName, 80)
+        && dateText(item.date) && item.date >= '2020-01-01'
+        && intIn(item.rating, 1, 5)
+        && optText(item, 'remarks', 300);
     }
 
     function validVendor(item) {
       return item.keys().hasOnly(['name', 'trade', 'phone', 'note'])
         && item.keys().hasAll(['name', 'trade'])
-        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
-        && item.trade is string && item.trade.size() <= 60 && item.trade.matches('.*[^[:space:]].*')
+        && namedText(item.name, 80)
+        && namedText(item.trade, 60)
         && (!item.keys().hasAny(['phone']) || (item.phone is string && item.phone.matches('[0-9+() -]{1,20}')))
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && optText(item, 'note', 200);
     }
 
     function validMinutes(item) {
       return item.keys().hasOnly(['date', 'title', 'notes'])
         && item.keys().hasAll(['date', 'title', 'notes'])
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
-        && item.notes is string && item.notes.size() <= 3000 && item.notes.matches('.*[^[:space:]].*');
+        && dateText(item.date)
+        && namedText(item.title, 100)
+        && namedText(item.notes, 3000);
     }
 
     function validLostFound(item) {
       return item.keys().hasOnly(['item', 'kind', 'date', 'status', 'place'])
         && item.keys().hasAll(['item', 'kind', 'date', 'status'])
-        && item.item is string && item.item.size() <= 100 && item.item.matches('.*[^[:space:]].*')
+        && namedText(item.item, 100)
         && item.kind in ['lost', 'found'] && item.status in ['open', 'returned']
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && (!item.keys().hasAny(['place']) || (item.place is string && item.place.size() <= 60));
+        && dateText(item.date)
+        && optText(item, 'place', 60);
     }
 
     function validConcession(item) {
       return item.keys().hasOnly(['studentId', 'studentName', 'kind', 'amount', 'givenOn', 'note'])
         && item.keys().hasAll(['studentId', 'studentName', 'kind', 'amount', 'givenOn'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
+        && idText(item.studentId)
+        && namedText(item.studentName, 80)
         && item.kind in ['Scholarship', 'Sibling discount', 'Staff ward', 'Other']
-        && item.amount is int && item.amount >= 1 && item.amount <= 10000000
-        && item.givenOn is string && item.givenOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && intIn(item.amount, 1, 10000000)
+        && dateText(item.givenOn)
+        && optText(item, 'note', 200);
     }
 
     function validAchievement(item) {
       return item.keys().hasOnly(['studentId', 'studentName', 'title', 'level', 'date'])
         && item.keys().hasAll(['studentId', 'studentName', 'title', 'level', 'date'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
-        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
+        && idText(item.studentId)
+        && namedText(item.studentName, 80)
+        && namedText(item.title, 120)
         && item.level in ['School', 'District', 'State', 'National']
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+        && dateText(item.date);
     }
 
     function validComplaint(item) {
       return item.keys().hasOnly(['title', 'raisedBy', 'date', 'status', 'note', 'assignedTo', 'priority', 'dueOn', 'response', 'respondedOn'])
         && item.keys().hasAll(['title', 'raisedBy', 'date', 'status'])
-        && item.title is string && item.title.size() <= 120 && item.title.matches('.*[^[:space:]].*')
-        && item.raisedBy is string && item.raisedBy.size() <= 80 && item.raisedBy.matches('.*[^[:space:]].*')
+        && namedText(item.title, 120)
+        && namedText(item.raisedBy, 80)
         && item.status in ['open', 'in-progress', 'escalated', 'resolved']
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 500))
-        && (!item.keys().hasAny(['assignedTo']) || (item.assignedTo is string && item.assignedTo.size() <= 80))
+        && dateText(item.date)
+        && optText(item, 'note', 500)
+        && optText(item, 'assignedTo', 80)
         && (!item.keys().hasAny(['priority']) || item.priority in ['low', 'normal', 'high'])
         && (!item.keys().hasAny(['dueOn']) || dateText(item.dueOn))
-        && (!item.keys().hasAny(['response']) || (item.response is string && item.response.size() <= 500))
+        && optText(item, 'response', 500)
         && (!item.keys().hasAny(['respondedOn']) || dateText(item.respondedOn));
     }
 
     function validAsset(item) {
       return item.keys().hasOnly(['name', 'place', 'cost', 'condition', 'boughtOn'])
         && item.keys().hasAll(['name', 'place', 'cost', 'condition'])
-        && item.name is string && item.name.size() <= 100 && item.name.matches('.*[^[:space:]].*')
-        && item.place is string && item.place.size() <= 60 && item.place.matches('.*[^[:space:]].*')
-        && item.cost is int && item.cost >= 0 && item.cost <= 1000000000
+        && namedText(item.name, 100)
+        && namedText(item.place, 60)
+        && intIn(item.cost, 0, 1000000000)
         && item.condition in ['Good', 'Fair', 'Poor']
-        && (!item.keys().hasAny(['boughtOn']) || (item.boughtOn is string && item.boughtOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+        && (!item.keys().hasAny(['boughtOn']) || (dateText(item.boughtOn)));
     }
 
     function validSale(item) {
       return item.keys().hasOnly(['studentId', 'studentName', 'item', 'quantity', 'amount', 'date'])
         && item.keys().hasAll(['studentId', 'studentName', 'item', 'quantity', 'amount', 'date'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
-        && item.item is string && item.item.size() <= 80 && item.item.matches('.*[^[:space:]].*')
-        && item.quantity is int && item.quantity >= 1 && item.quantity <= 1000
-        && item.amount is int && item.amount >= 0 && item.amount <= 10000000
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+        && idText(item.studentId)
+        && namedText(item.studentName, 80)
+        && namedText(item.item, 80)
+        && intIn(item.quantity, 1, 1000)
+        && intIn(item.amount, 0, 10000000)
+        && dateText(item.date);
     }
 
     function validSyllabus(item) {
       return item.keys().hasOnly(['className', 'subjectName', 'chapter', 'status'])
         && item.keys().hasAll(['className', 'subjectName', 'chapter', 'status'])
-        && item.className is string && item.className.size() <= 40 && item.className.matches('.*[^[:space:]].*')
-        && item.subjectName is string && item.subjectName.size() <= 60 && item.subjectName.matches('.*[^[:space:]].*')
-        && item.chapter is string && item.chapter.size() <= 120 && item.chapter.matches('.*[^[:space:]].*')
+        && namedText(item.className, 40)
+        && namedText(item.subjectName, 60)
+        && namedText(item.chapter, 120)
         && item.status in ['Pending', 'In progress', 'Done'];
     }
 
@@ -2479,22 +2479,35 @@ service cloud.firestore {
       return item.keys().hasOnly(['staffName', 'course', 'date', 'hours', 'status'])
         && item.keys().hasAll(['staffName', 'course', 'date', 'hours'])
         && (!item.keys().hasAny(['status']) || item.status in ['planned', 'completed'])
-        && item.staffName is string && item.staffName.size() <= 80 && item.staffName.matches('.*[^[:space:]].*')
-        && item.course is string && item.course.size() <= 120 && item.course.matches('.*[^[:space:]].*')
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && item.hours is int && item.hours >= 1 && item.hours <= 1000;
+        && namedText(item.staffName, 80)
+        && namedText(item.course, 120)
+        && dateText(item.date)
+        && intIn(item.hours, 1, 1000);
     }
 
     function validDiary(item) {
       return item.keys().hasOnly(['date', 'entry'])
         && item.keys().hasAll(['date', 'entry'])
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && item.entry is string && item.entry.size() <= 3000 && item.entry.matches('.*[^[:space:]].*');
+        && dateText(item.date)
+        && namedText(item.entry, 3000);
     }
 
     function dateText(value) {
       return value is string && value.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
     }
+
+    // Shared checks. Each one replaces text that was repeated many times, so the compiled rules stay under the size limit.
+    function maxText(v, n) { return v is string && v.size() <= n; }
+    function textLen(v, a, b) { return v is string && v.size() >= a && v.size() <= b; }
+    function namedText(v, n) { return v is string && v.size() <= n && v.matches('.*[^[:space:]].*'); }
+    function optText(item, key, n) { return !item.keys().hasAny([key]) || (item[key] is string && item[key].size() <= n); }
+    function idText(v) { return v is string && v.matches('[a-z0-9-]{1,20}'); }
+    function intIn(v, a, b) { return v is int && v >= a && v <= b; }
+    function intMin(v, a) { return v is int && v >= a; }
+    function ownerAuth(schoolId) { return request.auth != null && isSchoolOwner(schoolId); }
+    function viewerAuth(schoolId) { return request.auth != null && isSchoolViewer(schoolId); }
+    function studentExists(schoolId, id) { return exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(id)); }
+    function classExists(schoolId, id) { return exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(id)); }
 
     function validNewSchool(item) {
       return item.keys().hasOnly(['name', 'contactEmail', 'phone', 'address', 'createdBy'])
@@ -2510,25 +2523,25 @@ service cloud.firestore {
         && item.plan in ['trial', 'basic', 'standard', 'premium']
         && item.status in ['trial', 'active', 'suspended', 'cancelled', 'pending']
         && (!item.keys().hasAny(['trialEnds']) || item.trialEnds is timestamp)
-        && (!item.keys().hasAny(['graceDays']) || (item.graceDays is int && item.graceDays >= 0 && item.graceDays <= 90))
-        && (!item.keys().hasAny(['studentLimit']) || (item.studentLimit is int && item.studentLimit >= 0 && item.studentLimit <= 1000000))
-        && (!item.keys().hasAny(['staffLimit']) || (item.staffLimit is int && item.staffLimit >= 0 && item.staffLimit <= 1000000))
-        && (!item.keys().hasAny(['storageMb']) || (item.storageMb is int && item.storageMb >= 0 && item.storageMb <= 10000000))
-        && (!item.keys().hasAny(['monthlyPrice']) || (item.monthlyPrice is int && item.monthlyPrice >= 0 && item.monthlyPrice <= 10000000))
+        && (!item.keys().hasAny(['graceDays']) || (intIn(item.graceDays, 0, 90)))
+        && (!item.keys().hasAny(['studentLimit']) || (intIn(item.studentLimit, 0, 1000000)))
+        && (!item.keys().hasAny(['staffLimit']) || (intIn(item.staffLimit, 0, 1000000)))
+        && (!item.keys().hasAny(['storageMb']) || (intIn(item.storageMb, 0, 10000000)))
+        && (!item.keys().hasAny(['monthlyPrice']) || (intIn(item.monthlyPrice, 0, 10000000)))
         && (!item.keys().hasAny(['renewsOn']) || dateText(item.renewsOn))
         && (!item.keys().hasAny(['legalHold']) || item.legalHold is bool)
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && optText(item, 'note', 200);
     }
 
     function validInvoice(item) {
       return item.keys().hasOnly(['period', 'amount', 'dueOn', 'status', 'paidOn', 'note'])
         && item.keys().hasAll(['period', 'amount', 'dueOn', 'status'])
         && item.period is string && item.period.matches('[0-9]{4}-[0-9]{2}')
-        && item.amount is int && item.amount >= 0 && item.amount <= 100000000
+        && intIn(item.amount, 0, 100000000)
         && dateText(item.dueOn)
         && item.status in ['due', 'paid', 'overdue']
         && (!item.keys().hasAny(['paidOn']) || dateText(item.paidOn))
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && optText(item, 'note', 200);
     }
 
     function validDomainMap(item) {
@@ -2547,7 +2560,7 @@ service cloud.firestore {
         && item.domain is string && item.domain.matches('[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?[.][a-z]{2,20}')
         && item.status in ['requested', 'dns-pending', 'verified', 'rejected']
         && dateText(item.createdOn)
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && optText(item, 'note', 200);
     }
 
     function validDataRequest(item) {
@@ -2556,17 +2569,17 @@ service cloud.firestore {
         && item.kind in ['export', 'deletion']
         && item.status in ['requested', 'approved', 'completed', 'held']
         && dateText(item.createdOn)
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 300));
+        && optText(item, 'note', 300);
     }
 
     function validUsage(item) {
       return item.keys().hasOnly(['students', 'staff', 'classes', 'payments', 'storageMb', 'updatedAt'])
-        && (!item.keys().hasAny(['storageMb']) || (item.storageMb is int && item.storageMb >= 0 && item.storageMb <= 100000000))
+        && (!item.keys().hasAny(['storageMb']) || (intIn(item.storageMb, 0, 100000000)))
         && item.keys().hasAll(['students', 'staff', 'updatedAt'])
-        && item.students is int && item.students >= 0 && item.students <= 10000000
-        && item.staff is int && item.staff >= 0 && item.staff <= 10000000
-        && (!item.keys().hasAny(['classes']) || (item.classes is int && item.classes >= 0 && item.classes <= 10000000))
-        && (!item.keys().hasAny(['payments']) || (item.payments is int && item.payments >= 0 && item.payments <= 100000000))
+        && intIn(item.students, 0, 10000000)
+        && intIn(item.staff, 0, 10000000)
+        && (!item.keys().hasAny(['classes']) || (intIn(item.classes, 0, 10000000)))
+        && (!item.keys().hasAny(['payments']) || (intIn(item.payments, 0, 100000000)))
         && item.updatedAt == request.time;
     }
 
@@ -2574,27 +2587,27 @@ service cloud.firestore {
       return item.keys().hasOnly(['date', 'what', 'result', 'minutes'])
         && item.keys().hasAll(['date', 'what', 'result'])
         && dateText(item.date)
-        && item.what is string && item.what.size() <= 200 && item.what.matches('.*[^[:space:]].*')
-        && item.result is string && item.result.size() <= 500
-        && (!item.keys().hasAny(['minutes']) || (item.minutes is int && item.minutes >= 0 && item.minutes <= 100000));
+        && namedText(item.what, 200)
+        && maxText(item.result, 500)
+        && (!item.keys().hasAny(['minutes']) || (intIn(item.minutes, 0, 100000)));
     }
 
     function validSupportTicket(item) {
       return item.keys().hasOnly(['schoolId', 'subject', 'body', 'status', 'createdBy', 'createdOn', 'reply'])
         && item.keys().hasAll(['schoolId', 'subject', 'body', 'status', 'createdBy', 'createdOn'])
         && item.schoolId is string && item.schoolId.matches('[a-z0-9-]{1,40}')
-        && item.subject is string && item.subject.size() <= 120 && item.subject.matches('.*[^[:space:]].*')
-        && item.body is string && item.body.size() <= 2000 && item.body.matches('.*[^[:space:]].*')
+        && namedText(item.subject, 120)
+        && namedText(item.body, 2000)
         && item.status in ['open', 'answered', 'closed']
         && item.createdBy is string && dateText(item.createdOn)
-        && (!item.keys().hasAny(['reply']) || (item.reply is string && item.reply.size() <= 2000));
+        && optText(item, 'reply', 2000);
     }
 
     function validInvite(item) {
       return item.keys().hasOnly(['schoolId', 'email', 'role', 'status', 'createdBy'])
         && item.keys().hasAll(['schoolId', 'email', 'role', 'status', 'createdBy'])
         && item.schoolId is string && item.schoolId.matches('[a-z0-9-]{1,40}')
-        && item.email is string && item.email.size() <= 120 && item.email.matches('[^@ A-Z]+@[^@ A-Z]+')
+        && maxText(item.email, 120) && item.email.matches('[^@ A-Z]+@[^@ A-Z]+')
         && item.role in ['teacher', 'principal', 'owner', 'accountant']
         && item.status in ['pending', 'accepted', 'revoked']
         && item.createdBy is string;
@@ -2603,21 +2616,21 @@ service cloud.firestore {
     function validInventoryItem(item) {
       return item.keys().hasOnly(['name', 'category', 'unit', 'quantity', 'minQuantity'])
         && item.keys().hasAll(['name', 'quantity', 'minQuantity'])
-        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
-        && (!item.keys().hasAny(['category']) || (item.category is string && item.category.size() <= 40))
-        && (!item.keys().hasAny(['unit']) || (item.unit is string && item.unit.size() <= 20))
-        && item.quantity is int && item.quantity >= 0 && item.quantity <= 1000000
-        && item.minQuantity is int && item.minQuantity >= 0 && item.minQuantity <= 1000000;
+        && namedText(item.name, 80)
+        && optText(item, 'category', 40)
+        && optText(item, 'unit', 20)
+        && intIn(item.quantity, 0, 1000000)
+        && intIn(item.minQuantity, 0, 1000000);
     }
 
     function validAlumnus(item) {
       return item.keys().hasOnly(['name', 'passoutYear', 'contact', 'occupation', 'note'])
         && item.keys().hasAll(['name', 'passoutYear'])
-        && item.name is string && item.name.size() <= 80 && item.name.matches('.*[^[:space:]].*')
-        && item.passoutYear is int && item.passoutYear >= 1950 && item.passoutYear <= 2100
-        && (!item.keys().hasAny(['contact']) || (item.contact is string && item.contact.size() <= 100))
-        && (!item.keys().hasAny(['occupation']) || (item.occupation is string && item.occupation.size() <= 100))
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 300));
+        && namedText(item.name, 80)
+        && intIn(item.passoutYear, 1950, 2100)
+        && optText(item, 'contact', 100)
+        && optText(item, 'occupation', 100)
+        && optText(item, 'note', 300);
     }
 
     function validHealthRecord(item) {
@@ -2626,49 +2639,49 @@ service cloud.firestore {
         && (!item.keys().hasAny(['lastCheckup']) || dateText(item.lastCheckup))
         && (!item.keys().hasAny(['nextCheckup']) || dateText(item.nextCheckup))
         && item.keys().hasAll(['studentId', 'bloodGroup'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && idText(item.studentId)
         && item.bloodGroup in ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
-        && (!item.keys().hasAny(['allergies']) || (item.allergies is string && item.allergies.size() <= 200))
-        && (!item.keys().hasAny(['conditions']) || (item.conditions is string && item.conditions.size() <= 200))
-        && (!item.keys().hasAny(['emergencyContact']) || (item.emergencyContact is string && item.emergencyContact.size() <= 100))
-        && (!item.keys().hasAny(['notes']) || (item.notes is string && item.notes.size() <= 300));
+        && optText(item, 'allergies', 200)
+        && optText(item, 'conditions', 200)
+        && optText(item, 'emergencyContact', 100)
+        && optText(item, 'notes', 300);
     }
 
     function validLessonPlan(item) {
       return item.keys().hasOnly(['classId', 'subjectId', 'subject', 'date', 'topic', 'objectives', 'createdAt', 'createdBy'])
         && item.keys().hasAll(['classId', 'subjectId', 'subject', 'date', 'topic', 'objectives', 'createdAt', 'createdBy'])
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && idText(item.classId)
         && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
-        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
-        && item.topic is string && item.topic.size() <= 100 && item.topic.matches('.*[^[:space:]].*')
-        && item.objectives is string && item.objectives.size() <= 1000 && item.objectives.matches('.*[^[:space:]].*')
-        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && textLen(item.subject, 1, 40)
+        && dateText(item.date) && item.date >= '2020-01-01'
+        && namedText(item.topic, 100)
+        && namedText(item.objectives, 1000)
+        && dateText(item.createdAt) && item.createdAt >= '2020-01-01'
         && item.createdBy is string;
     }
 
     function validPtmSlot(item) {
       return item.keys().hasOnly(['classId', 'date', 'time', 'teacher', 'place', 'note'])
         && item.keys().hasAll(['classId', 'date', 'time'])
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && idText(item.classId)
+        && dateText(item.date) && item.date >= '2020-01-01'
         && item.time is string && item.time.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
-        && (!item.keys().hasAny(['teacher']) || (item.teacher is string && item.teacher.size() <= 60))
-        && (!item.keys().hasAny(['place']) || (item.place is string && item.place.size() <= 60))
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && optText(item, 'teacher', 60)
+        && optText(item, 'place', 60)
+        && optText(item, 'note', 200);
     }
 
     function validPayroll(item) {
       return item.keys().hasOnly(['staffUid', 'month', 'basic', 'allowances', 'deductions', 'paidOn', 'note'])
         && item.keys().hasAll(['staffUid', 'month', 'basic', 'allowances', 'deductions'])
-        && item.staffUid is string && item.staffUid.size() >= 1 && item.staffUid.size() <= 40
+        && textLen(item.staffUid, 1, 40)
         && item.month is string && item.month.matches('20[0-9]{2}-(0[1-9]|1[0-2])')
-        && item.basic is int && item.basic >= 0 && item.basic <= 10000000
-        && item.allowances is int && item.allowances >= 0 && item.allowances <= 10000000
-        && item.deductions is int && item.deductions >= 0 && item.deductions <= 10000000
+        && intIn(item.basic, 0, 10000000)
+        && intIn(item.allowances, 0, 10000000)
+        && intIn(item.deductions, 0, 10000000)
         && item.deductions <= item.basic + item.allowances
-        && (!item.keys().hasAny(['paidOn']) || (item.paidOn is string && item.paidOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
-        && (!item.keys().hasAny(['note']) || (item.note is string && item.note.size() <= 200));
+        && (!item.keys().hasAny(['paidOn']) || (dateText(item.paidOn)))
+        && optText(item, 'note', 200);
     }
 
     function validMessage(item) {
@@ -2676,13 +2689,13 @@ service cloud.firestore {
         && item.keys().hasAll(['studentId', 'subject', 'body', 'createdAt', 'createdBy'])
         && (!item.keys().hasAny(['mod']) || item.mod in ['flagged', 'hidden'])
         && optionalText(item, 'modNote', 200)
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.subject is string && item.subject.size() <= 100 && item.subject.matches('.*[^[:space:]].*')
-        && item.body is string && item.body.size() <= 1000 && item.body.matches('.*[^[:space:]].*')
-        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && idText(item.studentId)
+        && namedText(item.subject, 100)
+        && namedText(item.body, 1000)
+        && dateText(item.createdAt) && item.createdAt >= '2020-01-01'
         && item.createdBy is string
-        && (!item.keys().hasAny(['reply']) || (item.reply is string && item.reply.size() <= 1000 && item.reply.matches('.*[^[:space:]].*')))
-        && (!item.keys().hasAny(['repliedAt']) || (item.repliedAt is string && item.repliedAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+        && (!item.keys().hasAny(['reply']) || (namedText(item.reply, 1000)))
+        && (!item.keys().hasAny(['repliedAt']) || (dateText(item.repliedAt)));
     }
 
     function optionalText(item, key, max) {
@@ -2694,12 +2707,12 @@ service cloud.firestore {
           'facilities', 'news', 'phone', 'email', 'address', 'mapUrl', 'seoTitle', 'seoDesc', 'gallery'])
         && optionalText(item, 'seoTitle', 70) && optionalText(item, 'seoDesc', 160) && optionalText(item, 'gallery', 1500)
         && item.keys().hasAll(['name'])
-        && item.name is string && item.name.size() >= 1 && item.name.size() <= 80
+        && textLen(item.name, 1, 80)
         && optionalText(item, 'tagline', 120) && optionalText(item, 'about', 2000) && optionalText(item, 'vision', 500)
         && optionalText(item, 'mission', 500) && optionalText(item, 'leadership', 1000) && optionalText(item, 'programmes', 2000)
         && optionalText(item, 'faculty', 2000) && optionalText(item, 'facilities', 1500) && optionalText(item, 'news', 1500)
         && optionalText(item, 'phone', 30) && optionalText(item, 'email', 100) && optionalText(item, 'address', 200)
-        && (!item.keys().hasAny(['mapUrl']) || (item.mapUrl is string && item.mapUrl.size() <= 600
+        && (!item.keys().hasAny(['mapUrl']) || (maxText(item.mapUrl, 600)
           && item.mapUrl.matches('(https://www\\.google\\.com/maps/embed\\?[^ ]*)?')));
     }
 
@@ -2710,8 +2723,8 @@ service cloud.firestore {
 
     function validSiteExtras(item) {
       return item.keys().hasOnly(['theme', 'tv', 'tvPrev', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'])
-        && (!item.keys().hasAny(['tv']) || (item.tv is int && item.tv >= 1 && item.tv <= 20))
-        && (!item.keys().hasAny(['tvPrev']) || (item.keys().hasAny(['tv']) && item.tvPrev is int && item.tvPrev >= 1 && item.tvPrev <= 20))
+        && (!item.keys().hasAny(['tv']) || (intIn(item.tv, 1, 20)))
+        && (!item.keys().hasAny(['tvPrev']) || (item.keys().hasAny(['tv']) && intIn(item.tvPrev, 1, 20)))
         && (!item.keys().hasAny(['theme']) || item.theme in ['classic', 'royal', 'emerald', 'crimson', 'midnight', 'saffron', 'ocean', 'slate', 'teal', 'maroon', 'indigo', 'forest', 'sunrise', 'rose', 'charcoal', 'sky',
           'obsidian', 'champagne', 'sapphire', 'emerald-noir', 'ruby', 'rose-gold', 'sandstone', 'lavender', 'sage', 'blush', 'pearl', 'platinum', 'copper', 'abyss', 'amethyst', 'bordeaux', 'olive', 'denim', 'mocha', 'aurora'])
         && fieldSlot(item, 'f1') && fieldSlot(item, 'f2') && fieldSlot(item, 'f3')
@@ -2727,17 +2740,17 @@ service cloud.firestore {
 
     function validTemplateConfig(item) {
       return item.keys().hasOnly(['latest', 'notes']) && item.keys().hasAll(['latest'])
-        && item.latest is int && item.latest >= 1 && item.latest <= 20
+        && intIn(item.latest, 1, 20)
         && optionalText(item, 'notes', 300);
     }
 
     function validStorageRecord(item) {
       return item.keys().hasOnly(['name', 'kind', 'sizeKb', 'date', 'note'])
         && item.keys().hasAll(['name', 'kind', 'sizeKb', 'date'])
-        && item.name is string && item.name.size() <= 100 && item.name.matches('.*[^[:space:]].*')
+        && namedText(item.name, 100)
         && item.kind in ['document', 'photo', 'report', 'backup', 'other']
-        && item.sizeKb is int && item.sizeKb >= 0 && item.sizeKb <= 5000000
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
+        && intIn(item.sizeKb, 0, 5000000)
+        && dateText(item.date) && item.date >= '2020-01-01'
         && optionalText(item, 'note', 200);
     }
 
@@ -2749,10 +2762,10 @@ service cloud.firestore {
 
     function validStudentHistory(item) {
       return item.keys().hasOnly(['studentId', 'at', 'by', 'summary']) && item.keys().hasAll(['studentId', 'at', 'by', 'summary'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && idText(item.studentId)
         && item.at is string && item.at.matches('20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,13}Z')
-        && item.by is string && item.by.size() <= 128
-        && item.summary is string && item.summary.size() >= 1 && item.summary.size() <= 500;
+        && maxText(item.by, 128)
+        && textLen(item.summary, 1, 500);
     }
 
     function validPreferences(item) {
@@ -2762,7 +2775,7 @@ service cloud.firestore {
         && item.startTime is string && item.startTime.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
         && item.endTime is string && item.endTime.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
         && item.startTime < item.endTime
-        && item.lowAttendance is int && item.lowAttendance >= 1 && item.lowAttendance <= 100
+        && intIn(item.lowAttendance, 1, 100)
         && optionalText(item, 'terms', 100);
     }
 
@@ -2770,14 +2783,14 @@ service cloud.firestore {
       return item.keys().hasOnly(['studentName', 'classApplying', 'guardianName', 'phone', 'email', 'message', 'createdAt', 'status', 'note',
           'a1', 'a2', 'a3', 'a4', 'a5', 'a6'])
         && item.keys().hasAll(['studentName', 'classApplying', 'guardianName', 'phone', 'createdAt', 'status'])
-        && item.studentName is string && item.studentName.size() <= 80 && item.studentName.matches('.*[^[:space:]].*')
-        && item.classApplying is string && item.classApplying.size() <= 40 && item.classApplying.matches('.*[^[:space:]].*')
-        && item.guardianName is string && item.guardianName.size() <= 80 && item.guardianName.matches('.*[^[:space:]].*')
+        && namedText(item.studentName, 80)
+        && namedText(item.classApplying, 40)
+        && namedText(item.guardianName, 80)
         && item.phone is string && item.phone.matches('[0-9+() -]{6,20}')
         && optionalText(item, 'email', 100) && optionalText(item, 'message', 500) && optionalText(item, 'note', 300)
         && optionalText(item, 'a1', 200) && optionalText(item, 'a2', 200) && optionalText(item, 'a3', 200)
         && optionalText(item, 'a4', 200) && optionalText(item, 'a5', 200) && optionalText(item, 'a6', 200)
-        && item.createdAt is string && item.createdAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.createdAt >= '2020-01-01'
+        && dateText(item.createdAt) && item.createdAt >= '2020-01-01'
         && item.status in ['new', 'contacted', 'interview', 'offered', 'admitted', 'rejected'];
     }
 
@@ -2785,9 +2798,9 @@ service cloud.firestore {
       return item.keys().hasOnly(['eventId', 'eventTitle', 'studentId', 'registeredOn', 'createdBy'])
         && item.keys().hasAll(['eventId', 'eventTitle', 'studentId', 'registeredOn', 'createdBy'])
         && item.eventId is string && item.eventId.matches('[A-Za-z0-9-]{1,30}')
-        && item.eventTitle is string && item.eventTitle.size() >= 1 && item.eventTitle.size() <= 100
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.registeredOn is string && item.registeredOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && textLen(item.eventTitle, 1, 100)
+        && idText(item.studentId)
+        && dateText(item.registeredOn)
         && item.createdBy is string;
     }
 
@@ -2795,26 +2808,26 @@ service cloud.firestore {
       return item.keys().hasOnly(['homeworkId', 'homeworkTitle', 'studentId', 'studentName', 'classId', 'answer', 'submittedOn', 'createdBy', 'feedback', 'feedbackAt'])
         && item.keys().hasAll(['homeworkId', 'homeworkTitle', 'studentId', 'studentName', 'classId', 'answer', 'submittedOn', 'createdBy'])
         && item.homeworkId is string && item.homeworkId.matches('[A-Za-z0-9-]{1,30}')
-        && item.homeworkTitle is string && item.homeworkTitle.size() >= 1 && item.homeworkTitle.size() <= 100
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.studentName is string && item.studentName.size() >= 1 && item.studentName.size() <= 80
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.answer is string && item.answer.size() <= 2000 && item.answer.matches('.*[^[:space:]].*')
-        && item.submittedOn is string && item.submittedOn.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && textLen(item.homeworkTitle, 1, 100)
+        && idText(item.studentId)
+        && textLen(item.studentName, 1, 80)
+        && idText(item.classId)
+        && namedText(item.answer, 2000)
+        && dateText(item.submittedOn)
         && item.createdBy is string
         && optionalText(item, 'feedback', 500)
-        && (!item.keys().hasAny(['feedbackAt']) || (item.feedbackAt is string && item.feedbackAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
+        && (!item.keys().hasAny(['feedbackAt']) || (dateText(item.feedbackAt)));
     }
 
     function validAssessment(item) {
       return item.keys().hasOnly(['classId', 'subjectId', 'subject', 'title', 'date', 'maxMarks', 'createdBy'])
         && item.keys().hasAll(['classId', 'subjectId', 'subject', 'title', 'date', 'maxMarks', 'createdBy'])
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && idText(item.classId)
         && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
-        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
-        && item.title is string && item.title.size() <= 100 && item.title.matches('.*[^[:space:]].*')
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') && item.date >= '2020-01-01'
-        && item.maxMarks is int && item.maxMarks >= 1 && item.maxMarks <= 1000
+        && textLen(item.subject, 1, 40)
+        && namedText(item.title, 100)
+        && dateText(item.date) && item.date >= '2020-01-01'
+        && intIn(item.maxMarks, 1, 1000)
         && item.createdBy is string;
     }
 
@@ -2822,22 +2835,22 @@ service cloud.firestore {
       return item.keys().hasOnly(['assessmentId', 'assessmentTitle', 'subject', 'subjectId', 'date', 'studentId', 'classId', 'yearId', 'score', 'maxMarks', 'createdBy'])
         && item.keys().hasAll(['assessmentId', 'assessmentTitle', 'subject', 'subjectId', 'date', 'studentId', 'classId', 'yearId', 'score', 'maxMarks', 'createdBy'])
         && item.assessmentId is string && item.assessmentId.matches('[A-Za-z0-9-]{1,30}')
-        && item.assessmentTitle is string && item.assessmentTitle.size() >= 1 && item.assessmentTitle.size() <= 100
-        && item.subject is string && item.subject.size() >= 1 && item.subject.size() <= 40
+        && textLen(item.assessmentTitle, 1, 100)
+        && textLen(item.subject, 1, 40)
         && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
-        && item.date is string && item.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
-        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
-        && item.score is int && item.score >= 0 && item.score <= 1000
-        && item.maxMarks is int && item.maxMarks >= 1 && item.maxMarks <= 1000
+        && dateText(item.date)
+        && idText(item.studentId)
+        && idText(item.classId)
+        && idText(item.yearId)
+        && intIn(item.score, 0, 1000)
+        && intIn(item.maxMarks, 1, 1000)
         && item.createdBy is string;
     }
 
     function validFamilyAccess(item) {
       return item.keys().hasOnly(['studentId', 'relation', 'active', 'extraStudentIds', 'extraClassIds'])
         && item.keys().hasAll(['studentId', 'relation', 'active'])
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
+        && idText(item.studentId)
         && item.relation in ['student', 'parent'] && item.active is bool
         && (!item.keys().hasAny(['extraStudentIds']) || (item.extraStudentIds is list && item.extraStudentIds.size() <= 4
           && item.relation == 'parent'))
@@ -2847,14 +2860,14 @@ service cloud.firestore {
 
     function validExam(item) {
       return item.keys().hasOnly(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'passMarks', 'status', 'approvedBy', 'published'])
-        && (!item.keys().hasAny(['passMarks']) || (item.passMarks is int && item.passMarks >= 0 && item.passMarks <= item.maxMarks))
+        && (!item.keys().hasAny(['passMarks']) || (intMin(item.passMarks, 0) && item.passMarks <= item.maxMarks))
         && item.keys().hasAll(['yearId', 'classId', 'subjectId', 'examKey', 'name', 'maxMarks', 'status'])
-        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && idText(item.yearId)
+        && idText(item.classId)
         && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
-        && item.examKey is string && item.examKey.matches('[a-z0-9-]{1,20}')
-        && item.name is string && item.name.size() <= 60 && item.name.matches('.*[^[:space:]].*')
-        && item.maxMarks is int && item.maxMarks >= 1 && item.maxMarks <= 1000
+        && idText(item.examKey)
+        && namedText(item.name, 60)
+        && intIn(item.maxMarks, 1, 1000)
         && item.status in ['open', 'locked', 'approved']
         && ((item.status == 'approved')
           ? (item.keys().hasAll(['approvedBy']) && item.approvedBy == request.auth.uid)
@@ -2866,19 +2879,19 @@ service cloud.firestore {
       return student.keys().hasOnly(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status', 'dob', 'address',
           'gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail', 'tcNo', 'docsReceived'])
         && student.keys().hasAll(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status'])
-        && (!student.keys().hasAny(['dob']) || (student.dob is string && student.dob.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')))
-        && (!student.keys().hasAny(['address']) || (student.address is string && student.address.size() <= 200))
+        && (!student.keys().hasAny(['dob']) || (dateText(student.dob)))
+        && optText(student, 'address', 200)
         && (!student.keys().hasAny(['gender']) || student.gender in ['male', 'female', 'other'])
-        && (!student.keys().hasAny(['motherName']) || (student.motherName is string && student.motherName.size() <= 120))
-        && (!student.keys().hasAny(['previousSchool']) || (student.previousSchool is string && student.previousSchool.size() <= 120))
+        && optText(student, 'motherName', 120)
+        && optText(student, 'previousSchool', 120)
         && (!student.keys().hasAny(['emergencyPhone']) || (student.emergencyPhone is string && student.emergencyPhone.matches('[0-9+() -]{0,20}')))
-        && (!student.keys().hasAny(['guardianEmail']) || (student.guardianEmail is string && student.guardianEmail.size() <= 100))
-        && (!student.keys().hasAny(['tcNo']) || (student.tcNo is string && student.tcNo.size() <= 40))
+        && optText(student, 'guardianEmail', 100)
+        && optText(student, 'tcNo', 40)
         && (!student.keys().hasAny(['docsReceived']) || (student.docsReceived is list && student.docsReceived.size() <= 8
           && student.docsReceived.hasOnly(['birth', 'tc', 'marksheet', 'aadhaar', 'photos', 'address', 'medical', 'other'])))
         && student.admissionNo is string && student.admissionNo.matches('[A-Za-z0-9-]{1,20}')
-        && student.name is string && student.name.size() <= 120 && student.name.matches('.*[^[:space:]].*')
-        && student.guardianName is string && student.guardianName.size() <= 120
+        && namedText(student.name, 120)
+        && maxText(student.guardianName, 120)
         && student.guardianName.matches('.*[^[:space:]].*')
         && student.guardianPhone is string && student.guardianPhone.matches('[0-9+() -]{0,20}')
         && student.status in ['active', 'inactive'];
@@ -2887,40 +2900,40 @@ service cloud.firestore {
     function validEnrollment(item) {
       return item.keys().hasOnly(['yearId', 'studentId', 'classId', 'sectionId', 'rollNo'])
         && item.keys().hasAll(['yearId', 'studentId', 'classId', 'sectionId', 'rollNo'])
-        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.classId is string && item.classId.matches('[a-z0-9-]{1,20}')
+        && idText(item.yearId)
+        && idText(item.studentId)
+        && idText(item.classId)
         && item.sectionId is string && item.sectionId.matches('[a-z0-9-]{1,31}')
-        && item.rollNo is int && item.rollNo >= 1 && item.rollNo <= 999;
+        && intIn(item.rollNo, 1, 999);
     }
 
     function validRollKey(item) {
       return item.keys().hasOnly(['yearId', 'sectionId', 'rollNo', 'studentId'])
         && item.keys().hasAll(['yearId', 'sectionId', 'rollNo', 'studentId'])
-        && item.yearId is string && item.yearId.matches('[a-z0-9-]{1,20}')
+        && idText(item.yearId)
         && item.sectionId is string && item.sectionId.matches('[a-z0-9-]{1,31}')
-        && item.studentId is string && item.studentId.matches('[a-z0-9-]{1,20}')
-        && item.rollNo is int && item.rollNo >= 1 && item.rollNo <= 999;
+        && idText(item.studentId)
+        && intIn(item.rollNo, 1, 999);
     }
 
     function validStaff(staff) {
       return staff.keys().hasAll(['name', 'position', 'email'])
         && staff.keys().hasOnly(['name', 'position', 'email'])
-        && staff.name is string && staff.name.size() <= 120
+        && maxText(staff.name, 120)
         && staff.name.matches('.*[^[:space:]].*')
-        && staff.position is string && staff.position.size() <= 80
+        && maxText(staff.position, 80)
         && staff.position.matches('.*[^[:space:]].*')
-        && staff.email is string && staff.email.size() <= 254
+        && maxText(staff.email, 254)
         && (staff.email == '' || staff.email.matches('[^@[:space:]]+@[^@[:space:]]+'));
     }
 
     function validProfile(profile) {
-      return profile.name is string && profile.name.size() <= 120
+      return maxText(profile.name, 120)
         && profile.name.matches('.*[^[:space:]].*')
-        && profile.contactEmail is string && profile.contactEmail.size() <= 254
+        && maxText(profile.contactEmail, 254)
         && (profile.contactEmail == '' || profile.contactEmail.matches('[^@[:space:]]+@[^@[:space:]]+'))
-        && profile.phone is string && profile.phone.size() <= 40
-        && profile.address is string && profile.address.size() <= 500;
+        && maxText(profile.phone, 40)
+        && maxText(profile.address, 500);
     }
   }
 }
