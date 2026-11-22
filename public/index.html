@@ -750,6 +750,19 @@
         <h4>School data pack</h4>
         <p>Downloads every list as its own spreadsheet (CSV) file, packed in one ZIP file you can open in Excel. Use it when you leave AZIZ or want your own copy. It also works after a school is cancelled.</p>
         <button type="button" id="backup-zip">Download data pack (ZIP)</button>
+        <h4>Restore from a nightly backup</h4>
+        <p>AZIZ saves a copy of your records every night and keeps the last 14. If records were deleted or changed by mistake, pick a copy, check what a restore would change, then restore only the lists you choose. A restore never deletes anything, and a safety copy of the chosen lists is saved first. Sign-in accounts, the activity log and settings are never restored.</p>
+        <p id="restore-status" role="status"></p>
+        <p><label>Backup copy <select id="restore-date"></select></label>
+          <button type="button" id="restore-load">Find backups</button>
+          <button type="button" id="restore-check">Check what would change</button></p>
+        <fieldset id="restore-lists" hidden>
+          <legend>Lists that differ from the backup</legend>
+          <ul id="restore-list"></ul>
+          <p><label><input type="radio" name="restoremode" value="missing" checked> Only put back records that are gone (safest)</label></p>
+          <p><label><input type="radio" name="restoremode" value="overwrite"> Also put back the saved version of records that were changed</label></p>
+          <button type="button" id="restore-run">Restore chosen lists</button>
+        </fieldset>
       </section>
       <section id="principal-access" aria-labelledby="principal-access-title" hidden>
         <h3 id="principal-access-title">Principal Access</h3>

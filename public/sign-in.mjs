@@ -8779,6 +8779,70 @@ const plainValue = (value) => {
   if (typeof value === 'object') return typeof value.toDate === 'function' ? value.toDate().toISOString() : JSON.stringify(value);
   return String(value);
 };
+
+// Restore from a nightly backup (feature 086). The work is done by server functions that only the school owner can call.
+const restoreStatus = document.querySelector('#restore-status');
+const restoreDate = document.querySelector('#restore-date');
+const restoreFieldset = document.querySelector('#restore-lists');
+const restoreListEl = document.querySelector('#restore-list');
+const RESTORE_NAMES = { students: 'Students', payments: 'Fee payments', feeStructures: 'Fee structures', attendance: 'Student attendance', marks: 'Marks', exams: 'Exams',
+  classes: 'Classes', sections: 'Sections', subjects: 'Subjects', enrollments: 'Class placements', staffProfiles: 'Staff profiles', staffDirectory: 'Staff contact directory',
+  staffDocuments: 'Staff vault records', books: 'Library books', loans: 'Library loans', notices: 'Notices', homework: 'Homework', timetable: 'Timetable', payroll: 'Payroll',
+  expenses: 'Expenses', onlineTests: 'Online tests', questionBank: 'Question bank', storageRecords: 'Storage records', inventory: 'Inventory', routes: 'Routes' };
+async function restoreCall(name, data) {
+  const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
+  const result = await httpsCallable(getFunctions(app, 'asia-south1'), name)({ schoolId: SCHOOL_ID, ...data });
+  return result.data;
+}
+const restoreError = (error) => (error?.code === 'functions/permission-denied' ? 'Only the school owner can restore.'
+  : error?.code === 'functions/not-found' ? 'That backup file was not found, or the restore function is not switched on yet.'
+  : error?.code === 'functions/failed-precondition' ? (error.message || 'This school is read-only.')
+  : 'Could not reach the restore service. Check your connection, and that the functions are deployed, then try again.');
+document.querySelector('#restore-load').addEventListener('click', async () => {
+  restoreStatus.textContent = 'Looking for backups.';
+  restoreFieldset.hidden = true;
+  try {
+    const { backups } = await restoreCall('listBackups', {});
+    restoreDate.replaceChildren(...backups.map((item) => new Option(item.date.startsWith('pre-restore') ? 'Safety copy ' + item.date.slice(12) : item.date, item.date)));
+    restoreStatus.textContent = backups.length ? backups.length + ' backup(s) found. Pick one and check what would change.' : 'No backups yet. The first one is made at 2:30 am.';
+  } catch (error) { restoreStatus.textContent = restoreError(error); }
+});
+document.querySelector('#restore-check').addEventListener('click', async () => {
+  if (!restoreDate.value) { restoreStatus.textContent = 'Click Find backups and pick one first.'; return; }
+  restoreStatus.textContent = 'Comparing. This can take a minute.';
+  restoreFieldset.hidden = true;
+  try {
+    const result = await restoreCall('previewRestore', { date: restoreDate.value });
+    restoreListEl.replaceChildren();
+    for (const item of result.lists) {
+      const line = document.createElement('li');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = item.name;
+      box.checked = item.missing > 0;
+      const label = document.createElement('label');
+      label.append(box, ' ' + (RESTORE_NAMES[item.name] ?? item.name) + ': ' + item.missing + ' gone, ' + item.changed + ' changed since the backup, ' + item.extra + ' added since (backup had ' + item.inBackup + ', now ' + item.now + ')');
+      line.append(label);
+      restoreListEl.append(line);
+    }
+    restoreFieldset.hidden = !result.lists.length;
+    restoreStatus.textContent = result.lists.length ? 'Backup of ' + result.date + ': tick the lists to restore.' : 'Nothing differs from this backup. There is nothing to restore.';
+  } catch (error) { restoreStatus.textContent = restoreError(error); }
+});
+document.querySelector('#restore-run').addEventListener('click', async () => {
+  const chosen = [...restoreListEl.querySelectorAll('input:checked')].map((box) => box.value);
+  if (!chosen.length) { restoreStatus.textContent = 'Tick at least one list.'; return; }
+  const mode = document.querySelector('input[name="restoremode"]:checked').value;
+  if (!window.confirm('Restore ' + chosen.length + ' list(s) from the backup of ' + restoreDate.value + (mode === 'overwrite' ? ', putting back saved versions of changed records too' : ', adding back only records that are gone')
+    + '? Nothing will be deleted, and a safety copy is saved first.')) return;
+  restoreStatus.textContent = 'Restoring. Do not close this page.';
+  try {
+    const result = await restoreCall('restoreBackup', { date: restoreDate.value, lists: chosen, mode });
+    restoreStatus.textContent = 'Done: ' + result.restored + ' record(s) put back. Safety copy: ' + result.safetyCopy + '. Reload the page to see the restored records.';
+    restoreFieldset.hidden = true;
+    document.dispatchEvent(new Event('usage-changed'));
+  } catch (error) { restoreStatus.textContent = restoreError(error); }
+});
 document.querySelector('#backup-zip').addEventListener('click', async () => {
   const tools = academic;
   if (!tools || tools.busy) return;
