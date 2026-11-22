@@ -1171,6 +1171,19 @@
 
           <button type="submit">Save question</button>
         </form>
+        <details id="qbimport">
+          <summary>Import many questions at once (CSV file, pasted rows or Google Sheet)</summary>
+          <p id="qbimport-help">Columns, in this order: Class, Subject, Question, Option 1, Option 2, Option 3, Option 4, Right answer (1 to 4, or A to D), Marks. Only Question, Option 1, Option 2 and Right answer are required. A header row is fine. Up to 500 questions at a time.</p>
+          <p><button id="qbimport-sample" type="button">Download a sample file</button></p>
+          <p><label>CSV file <input id="qbimport-file" type="file" accept=".csv,.txt,text/csv"></label></p>
+          <p><label>Google Sheet link (shared as "Anyone with the link can view") <input id="qbimport-link" type="url" placeholder="https://docs.google.com/spreadsheets/d/..."></label></p>
+          <p><button id="qbimport-fetch" type="button">Fetch from Google Sheet</button></p>
+          <p><label>Class for rows that have no class <select id="qbimport-class"></select></label></p>
+          <p><label>Rows <textarea id="qbimport-text" rows="8"></textarea></label></p>
+          <p id="qbimport-status" role="status"></p>
+          <p><button id="qbimport-check" type="button">Check rows</button> <button id="qbimport-run" type="button" disabled>Import the good rows</button></p>
+          <ul id="qbimport-preview"></ul>
+        </details>
         <ul id="questionbank-list"></ul>
       </section>
       <section id="onlinetests" aria-labelledby="onlinetests-title" hidden>

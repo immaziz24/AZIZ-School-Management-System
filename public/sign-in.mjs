@@ -5823,6 +5823,128 @@ function fillQuestionPicker() {
     select.append(option);
   }
 }
+// Question Bank import (CSV file, pasted rows or a shared Google Sheet). Rows are checked first and only the good ones are saved.
+const qbStatus = document.querySelector('#qbimport-status');
+const qbText = document.querySelector('#qbimport-text');
+const qbPreview = document.querySelector('#qbimport-preview');
+const qbRun = document.querySelector('#qbimport-run');
+const qbClass = document.querySelector('#qbimport-class');
+const QB_MAX_ROWS = 500;
+let qbReady = [];
+document.querySelector('#questionbank').addEventListener('mod-open', () => {
+  fillSelect(qbClass, [...examData.classes].sort(byClassOrder), (item) => item.name);
+});
+document.querySelector('#qbimport-sample').addEventListener('click', () => {
+  const first = [...examData.classes].sort(byClassOrder)[0]?.data().name ?? 'Class 1';
+  const rows = [['Class', 'Subject', 'Question', 'Option 1', 'Option 2', 'Option 3', 'Option 4', 'Right answer', 'Marks'],
+    [first, 'GK', 'Which letter comes after A?', 'A', 'B', 'C', 'D', '2', '1'],
+    [first, 'Maths', 'What is 2 + 3?', '4', '5', '6', '', 'B', '2']];
+  const blob = new Blob(['﻿' + rows.map((row) => row.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'question-bank-sample.csv';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+});
+document.querySelector('#qbimport-file').addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > 1000000) { qbStatus.textContent = 'That file is too large. Import up to ' + QB_MAX_ROWS + ' questions at a time.'; return; }
+  qbText.value = await file.text();
+  qbReady = []; qbRun.disabled = true;
+  qbStatus.textContent = 'File loaded. Press Check rows.';
+});
+document.querySelector('#qbimport-fetch').addEventListener('click', async () => {
+  const link = document.querySelector('#qbimport-link').value.trim();
+  const found = /\/spreadsheets\/d\/([A-Za-z0-9_-]+)/.exec(link);
+  if (!found) { qbStatus.textContent = 'Paste the full Google Sheet link (it contains /spreadsheets/d/...).'; return; }
+  const gid = /[#&?]gid=([0-9]+)/.exec(link)?.[1];
+  qbStatus.textContent = 'Reading the Google Sheet.';
+  try {
+    const reply = await fetch('https://docs.google.com/spreadsheets/d/' + found[1] + '/gviz/tq?tqx=out:csv' + (gid ? '&gid=' + gid : ''), { credentials: 'omit' });
+    const body = await reply.text();
+    if (!reply.ok || /^\s*</.test(body)) throw new Error('blocked');
+    qbText.value = body;
+    qbReady = []; qbRun.disabled = true;
+    qbStatus.textContent = 'Sheet loaded. Press Check rows.';
+  } catch {
+    qbStatus.textContent = 'Could not read that sheet. In Google Sheets press Share, set "Anyone with the link" to Viewer, then try again. Or use File, Download, CSV and choose the file here.';
+  }
+});
+document.querySelector('#qbimport-check').addEventListener('click', async () => {
+  qbPreview.replaceChildren(); qbReady = []; qbRun.disabled = true;
+  if (!academic) return;
+  await lists.questionbank.ensure();
+  let rows = parseDelimited(qbText.value.replace(/^﻿/, '').trim());
+  if (rows.length) {
+    const head = rows[0].map((cell) => cell.trim().toLowerCase());
+    if (head[0] === 'class' || head[2] === 'question' || head.includes('question')) rows = rows.slice(1);
+  }
+  if (!rows.length) { qbStatus.textContent = 'There are no rows yet. Choose a file, fetch a sheet or paste rows.'; return; }
+  if (rows.length > QB_MAX_ROWS) { qbStatus.textContent = 'That is ' + rows.length + ' rows. Import up to ' + QB_MAX_ROWS + ' at a time.'; return; }
+  const byName = new Map(examData.classes.map((record) => [record.data().name.trim().toLowerCase(), record.id]));
+  const have = new Set(lists.questionbank.items.map((record) => record.data().classId + '|' + record.data().text.trim().toLowerCase()));
+  const problems = [];
+  let duplicates = 0;
+  rows.forEach((cells, index) => {
+    const cell = (n) => String(cells[n] ?? '').trim();
+    const fail = (why) => problems.push('Row ' + (index + 1) + ': ' + why);
+    const className = cell(0);
+    const classId = className ? byName.get(className.toLowerCase()) : qbClass.value;
+    if (!classId) { fail(className ? 'unknown class "' + className.slice(0, 30) + '"' : 'no class (choose a default class)'); return; }
+    const question = cell(2);
+    if (!question || question.length > 300) { fail('write the question (up to 300 characters)'); return; }
+    const subject = cell(1);
+    if (subject.length > 60) { fail('subject is longer than 60 characters'); return; }
+    const options = [3, 4, 5, 6].map(cell);
+    const used = options.filter(Boolean);
+    if (used.length < 2 || options.findIndex((option, at) => !option && options.slice(at + 1).some(Boolean)) >= 0) { fail('fill at least two options, in order'); return; }
+    if (used.some((option) => option.length > 120)) { fail('an option is longer than 120 characters'); return; }
+    const answer = cell(7);
+    let correct = /^[1-4]$/.test(answer) ? Number(answer) - 1 : /^[a-dA-D]$/.test(answer) ? answer.toUpperCase().charCodeAt(0) - 65 : used.findIndex((option) => option.toLowerCase() === answer.toLowerCase());
+    if (!(correct >= 0 && correct < used.length)) { fail('the right answer must be 1 to ' + used.length + ', A to ' + 'ABCD'[used.length - 1] + ', or the exact option text'); return; }
+    const marksText = cell(8);
+    const marks = marksText === '' ? 1 : (/^[0-9]+$/.test(marksText) ? Number(marksText) : NaN);
+    if (!(marks >= 1 && marks <= 20)) { fail('marks must be 1 to 20'); return; }
+    const key = classId + '|' + question.toLowerCase();
+    if (have.has(key)) { duplicates += 1; return; }
+    have.add(key);
+    qbReady.push({ classId, text: question, options: used, correct, marks, ...(subject ? { subjectName: subject } : {}) });
+  });
+  for (const item of qbReady.slice(0, 5)) listItem(qbPreview, '[' + nameOfClass(item.classId) + '] ' + item.text + ' (right: ' + (item.correct + 1) + ', ' + item.marks + ' mark(s))');
+  for (const message of problems.slice(0, 10)) listItem(qbPreview, message);
+  qbStatus.textContent = qbReady.length + ' question(s) ready' + (duplicates ? ', ' + duplicates + ' already in the bank (skipped)' : '') + (problems.length ? ', ' + problems.length + ' with problems (not imported)' : '') + '.';
+  qbRun.disabled = !qbReady.length || viewOnly;
+});
+qbRun.addEventListener('click', async () => {
+  if (viewOnly) { qbStatus.textContent = 'Only the owner can add questions.'; return; }
+  if (!academic || academic.busy || !qbReady.length) return;
+  if (!confirm('Add ' + qbReady.length + ' question(s) to the Question Bank?')) return;
+  const request = schoolRequest;
+  academic.busy = true;
+  qbRun.disabled = true;
+  try {
+    let saved = 0;
+    for (let start = 0; start < qbReady.length; start += 100) {
+      const group = qbReady.slice(start, start + 100);
+      await academic.commit(group.map((data) => ({ path: ['questionBank', newId('QB')], data })), true);
+      saved += group.length;
+      if (request === schoolRequest) qbStatus.textContent = 'Saved ' + saved + ' of ' + qbReady.length + '...';
+    }
+    await academic.log('bulk', 'questionBank', saved + ' questions', '').catch(() => {});
+    qbReady = [];
+    qbText.value = '';
+    qbPreview.replaceChildren();
+    academic.busy = false;
+    await lists.questionbank.load(request);
+    if (request === schoolRequest) qbStatus.textContent = 'Added ' + saved + ' question(s) to the Question Bank.';
+  } catch (error) {
+    if (request === schoolRequest) qbStatus.textContent = 'Some questions were not saved (' + (error && error.code ? error.code : 'error') + '). Press Check rows to see what is left.';
+  } finally {
+    academic.busy = false;
+  }
+});
+
 const TEST_STAGE = { draft: 'draft, not visible to students', open: 'OPEN for students', closed: 'closed' };
 async function gradeTest(record) {
   const request = schoolRequest;
