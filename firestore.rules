@@ -936,6 +936,28 @@ service cloud.firestore {
           && request.resource.data.keys().hasAll(['score', 'gradedOn']);
         allow delete: if false;
       }
+      // Test progress. onlineProgress/{testId_studentId}: where a student is in an open test (answers, place, time left, pauses used).
+      // The student's own family writes it while the test is open; the time left can only go down and a pause can only be added one at a time.
+      match /onlineProgress/{docId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.by == request.auth.uid && familyActive()));
+        allow create: if request.auth != null && validProgress(request.resource.data)
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.at == request.time
+          && request.resource.data.pauses == 0 && request.resource.data.state == 'running'
+          && familyOwns(request.resource.data.studentId)
+          && docId == request.resource.data.testId + '_' + request.resource.data.studentId
+          && get(/databases/$(database)/documents/schools/$(schoolId)/onlineTests/$(request.resource.data.testId)).data.status == 'open'
+          && request.resource.data.remainingSec <= get(/databases/$(database)/documents/schools/$(schoolId)/onlineTests/$(request.resource.data.testId)).data.durationMin * 60;
+        allow update: if request.auth != null && resource.data.by == request.auth.uid && validProgress(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answers', 'index', 'remainingSec', 'pauses', 'state', 'at'])
+          && request.resource.data.at == request.time
+          && request.resource.data.remainingSec <= resource.data.remainingSec
+          && request.resource.data.pauses >= resource.data.pauses && request.resource.data.pauses <= resource.data.pauses + 1
+          && ((request.resource.data.state == 'paused' && resource.data.state == 'running') == (request.resource.data.pauses == resource.data.pauses + 1))
+          && familyActive()
+          && get(/databases/$(database)/documents/schools/$(schoolId)/onlineTests/$(resource.data.testId)).data.status == 'open';
+        allow delete: if false;
+      }
 
       // Fee reminders (feature 148). feeReminders/{id}: a reminder the owner sent for a student with dues. The owner writes them;
       // the owner and principal read all; a linked family reads its own student's (query by studentId).
@@ -1908,6 +1930,17 @@ service cloud.firestore {
         && item.by is string && item.at is timestamp
         && (!item.keys().hasAny(['score']) || (intIn(item.score, 0, 1200)))
         && (!item.keys().hasAny(['gradedOn']) || dateText(item.gradedOn));
+    }
+
+    function validProgress(item) {
+      return item.keys().hasOnly(['testId', 'studentId', 'by', 'answers', 'index', 'remainingSec', 'pauses', 'state', 'at'])
+        && item.keys().hasAll(['testId', 'studentId', 'by', 'answers', 'index', 'remainingSec', 'pauses', 'state', 'at'])
+        && item.testId is string && item.testId.matches('OT-[A-Za-z0-9-]{1,27}')
+        && idText(item.studentId)
+        && item.answers is string && item.answers.matches('[0-3x](,[0-3x]){0,59}')
+        && item.by is string && item.at is timestamp
+        && intIn(item.index, 0, 59) && intIn(item.remainingSec, 0, 10800) && intIn(item.pauses, 0, 7)
+        && item.state in ['paused', 'running'];
     }
 
     function validFeeReminder(item) {

@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-65h">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-65j">
 </head>
 <body>
   <main>
@@ -1757,8 +1757,22 @@
         <div id="portal-test-run" hidden>
           <h4 id="portal-test-title"></h4>
           <p id="portal-test-timer" role="timer"></p>
-          <form id="portal-test-form"></form>
-          <button id="portal-test-submit" type="button">Submit answers</button>
+          <p id="portal-test-info" role="status"></p>
+          <div id="portal-test-live">
+            <div id="portal-test-nav"></div>
+            <form id="portal-test-form"></form>
+            <p id="portal-test-buttons">
+              <button id="portal-test-prev" type="button">Previous</button>
+              <button id="portal-test-save" type="button">Save and next</button>
+              <button id="portal-test-skip" type="button">Skip</button>
+              <button id="portal-test-pause" type="button">Pause exam</button>
+              <button id="portal-test-submit" type="button">Submit exam</button>
+            </p>
+          </div>
+          <div id="portal-test-paused" hidden>
+            <p id="portal-test-paused-text"></p>
+            <button id="portal-test-resume" type="button">Resume exam</button>
+          </div>
         </div>
       </section>
       <section id="portal-pickup" aria-labelledby="portal-pickup-title" hidden>

@@ -8010,21 +8010,159 @@ const portalTestRun = document.querySelector('#portal-test-run');
 const portalTestForm = document.querySelector('#portal-test-form');
 const portalTestTimer = document.querySelector('#portal-test-timer');
 const portalTestSubmit = document.querySelector('#portal-test-submit');
-let portalTestState; // { tools, studentId, test, questions, endsAt, timer, busy }
+// The test runs one question at a time. Progress (answers, place, time left, pauses used) is saved as the student goes, so a paused or
+// closed test continues from the same place with the same time left. A student may pause 7 times and must answer 30% to submit early.
+const OT_PAUSES = 7;
+const OT_MIN_SHARE = 0.3;
+const portalTestNav = document.querySelector('#portal-test-nav');
+const portalTestInfo = document.querySelector('#portal-test-info');
+const portalTestLive = document.querySelector('#portal-test-live');
+const portalTestPaused = document.querySelector('#portal-test-paused');
+const portalTestPausedText = document.querySelector('#portal-test-paused-text');
+let portalTestState; // { tools, studentId, test, questions, answers, index, remaining, deadline, paused, pauses, timer, busy, queue, saveFailed }
+const clock = (seconds) => Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+const testLeft = (state) => (state.paused ? state.remaining : Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000)));
+const testAnswered = (state) => state.answers.filter((answer) => answer !== 'x').length;
+const testNeeded = (state) => Math.ceil(state.questions.length * OT_MIN_SHARE);
 const stopPortalTest = () => {
   if (portalTestState?.timer) clearInterval(portalTestState.timer);
   portalTestState = undefined;
   portalTestRun.hidden = true;
   portalTestForm.replaceChildren();
+  portalTestNav.replaceChildren();
   portalTestTimer.textContent = '';
+  portalTestInfo.textContent = '';
+  portalTestLive.hidden = false;
+  portalTestPaused.hidden = true;
 };
-async function submitPortalTest(request) {
+// Writes happen one after another so the saved time left never goes up.
+function saveTestProgress(state) {
+  const { doc, setDoc, serverTimestamp } = firestoreTools;
+  const data = { testId: state.test.id, studentId: state.studentId, by: state.tools.user.uid, answers: state.answers.join(','), index: state.index,
+    remainingSec: testLeft(state), pauses: state.pauses, state: state.paused ? 'paused' : 'running', at: serverTimestamp() };
+  state.queue = state.queue.then(() => setDoc(doc(state.tools.schoolRef, 'onlineProgress', state.test.id + '_' + state.studentId), data))
+    .then(() => { state.saveFailed = false; }, () => { state.saveFailed = true; });
+  return state.queue;
+}
+function renderTestQuestion() {
+  const state = portalTestState;
+  if (!state) return;
+  const total = state.questions.length;
+  const question = state.questions[state.index];
+  portalTestForm.replaceChildren();
+  const box = document.createElement('fieldset');
+  const legend = document.createElement('legend');
+  legend.textContent = 'Question ' + (state.index + 1) + ' of ' + total + ' (' + question.m + ' mark' + (question.m > 1 ? 's' : '') + ')';
+  const words = document.createElement('p');
+  words.textContent = question.q;
+  box.append(legend, words);
+  question.o.forEach((option, number) => {
+    const label = document.createElement('label');
+    label.className = 'otopt';
+    const radio = document.createElement('input');
+    radio.type = 'radio'; radio.name = 'answer'; radio.value = String(number);
+    radio.checked = state.answers[state.index] === String(number);
+    label.append(radio, ' ' + option);
+    box.append(label);
+  });
+  portalTestForm.append(box);
+  portalTestNav.replaceChildren();
+  state.questions.forEach((_, number) => {
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.textContent = String(number + 1);
+    jump.className = 'qn' + (state.answers[number] !== 'x' ? ' done' : '') + (number === state.index ? ' now' : '');
+    jump.setAttribute('aria-label', 'Question ' + (number + 1) + (state.answers[number] !== 'x' ? ', answered' : ', not answered'));
+    jump.addEventListener('click', () => { state.index = number; renderTestQuestion(); });
+    portalTestNav.append(jump);
+  });
+  document.querySelector('#portal-test-prev').disabled = state.index === 0;
+  document.querySelector('#portal-test-save').textContent = state.index === total - 1 ? 'Save answer' : 'Save and next';
+  const left = OT_PAUSES - state.pauses;
+  const pause = document.querySelector('#portal-test-pause');
+  pause.disabled = left <= 0;
+  pause.textContent = 'Pause exam (' + left + ' left)';
+  portalTestInfo.textContent = testAnswered(state) + ' of ' + total + ' answered. You must answer at least ' + testNeeded(state) + ' to submit before the time ends.';
+}
+function nextTestQuestion() {
+  const state = portalTestState;
+  if (state.index < state.questions.length - 1) { state.index += 1; return true; }
+  const open = state.answers.indexOf('x');
+  if (open >= 0) { state.index = open; return true; }
+  return false;
+}
+function tickPortalTest(request) {
+  const state = portalTestState;
+  if (!state || state.paused) return;
+  const left = testLeft(state);
+  portalTestTimer.textContent = 'Time left: ' + clock(left);
+  if (left === 0) submitPortalTest(request, true);
+}
+function runPortalTest(request) {
+  const state = portalTestState;
+  document.querySelector('#portal-test-title').textContent = state.test.data.title + ' - ' + state.test.data.totalMarks + ' marks';
+  portalTestRun.hidden = false;
+  if (state.paused) { showPausedTest(); return; }
+  portalTestLive.hidden = false;
+  portalTestPaused.hidden = true;
+  renderTestQuestion();
+  tickPortalTest(request);
+  state.timer = setInterval(() => tickPortalTest(request), 1000);
+}
+function showPausedTest() {
+  const state = portalTestState;
+  clearInterval(state.timer);
+  portalTestLive.hidden = true;
+  portalTestPaused.hidden = false;
+  portalTestTimer.textContent = 'Paused. Time left: ' + clock(state.remaining);
+  portalTestPausedText.textContent = 'Your exam is paused and the timer is stopped at ' + clock(state.remaining) + '. Pauses used: ' + state.pauses + ' of ' + OT_PAUSES + '. Press Resume to carry on from the same question.';
+}
+async function pausePortalTest() {
+  const state = portalTestState;
+  if (!state || state.paused || state.busy || state.pauses >= OT_PAUSES) return;
+  const before = { remaining: testLeft(state), deadline: state.deadline };
+  state.remaining = before.remaining;
+  state.paused = true;
+  state.pauses += 1;
+  state.busy = true;
+  await saveTestProgress(state);
+  state.busy = false;
+  if (state.saveFailed) {
+    state.paused = false; state.pauses -= 1; state.deadline = before.deadline;
+    portalTestInfo.textContent = 'The pause could not be saved. Check your connection and try again. Your timer is still running.';
+    return;
+  }
+  showPausedTest();
+}
+async function resumePortalTest() {
+  const state = portalTestState;
+  if (!state || !state.paused || state.busy) return;
+  state.paused = false;
+  state.deadline = Date.now() + state.remaining * 1000;
+  state.busy = true;
+  await saveTestProgress(state);
+  state.busy = false;
+  if (state.saveFailed) {
+    state.paused = true;
+    portalTestPausedText.textContent = 'Could not resume. Check your connection and press Resume again.';
+    return;
+  }
+  runPortalTest(schoolRequest);
+}
+async function submitPortalTest(request, forced) {
   const state = portalTestState;
   if (!state || state.busy) return;
+  if (!forced) {
+    if (state.paused) return;
+    if (testAnswered(state) < testNeeded(state)) {
+      portalTestInfo.textContent = 'Answer at least ' + testNeeded(state) + ' of the ' + state.questions.length + ' questions before you submit. You have answered ' + testAnswered(state) + '.';
+      return;
+    }
+    if (!confirm('Submit your exam now? You have answered ' + testAnswered(state) + ' of ' + state.questions.length + ' questions. You cannot change anything after this.')) return;
+  }
   state.busy = true;
   clearInterval(state.timer);
-  const form = new FormData(portalTestForm);
-  const answers = state.questions.map((_, index) => (['0', '1', '2', '3'].includes(String(form.get('q' + index))) ? String(form.get('q' + index)) : 'x')).join(',');
+  const answers = state.answers.join(',');
   try {
     const { doc, setDoc, serverTimestamp } = firestoreTools;
     await setDoc(doc(state.tools.schoolRef, 'onlineAttempts', state.test.id + '_' + state.studentId),
@@ -8034,41 +8172,71 @@ async function submitPortalTest(request) {
     if (request === schoolRequest) { portalTestsStatus.textContent = 'Your answers are submitted.'; await loadPortalTests(tools, schoolRequest, studentId); }
   } catch {
     state.busy = false;
-    if (request === schoolRequest) portalTestsStatus.textContent = 'Your answers could not be submitted. The test may have been closed, or you may have already submitted.';
+    if (!forced) state.timer = setInterval(() => tickPortalTest(request), 1000);
+    if (request === schoolRequest) portalTestInfo.textContent = 'Your answers could not be submitted. The test may have been closed, or you may have already submitted.';
   }
 }
-function startPortalTest(tools, studentId, test) {
+// A new start saves the first progress record straight away; resuming carries on from the saved one.
+async function startPortalTest(tools, studentId, test, saved) {
   let questions;
   try { questions = JSON.parse(test.data.paper); } catch { portalTestsStatus.textContent = 'This test could not be opened.'; return; }
   stopPortalTest();
-  portalTestState = { tools, studentId, test, questions, endsAt: Date.now() + test.data.durationMin * 60000, timer: 0, busy: false };
-  document.querySelector('#portal-test-title').textContent = test.data.title + ' - ' + test.data.totalMarks + ' marks';
-  portalTestForm.replaceChildren();
-  questions.forEach((question, index) => {
-    const box = document.createElement('fieldset');
-    const legend = document.createElement('legend');
-    legend.textContent = (index + 1) + '. ' + question.q + ' (' + question.m + ' mark' + (question.m > 1 ? 's' : '') + ')';
-    box.append(legend);
-    question.o.forEach((option, number) => {
-      const label = document.createElement('label');
-      const radio = document.createElement('input');
-      radio.type = 'radio'; radio.name = 'q' + index; radio.value = String(number);
-      label.append(radio, ' ' + option);
-      box.append(label, document.createElement('br'));
-    });
-    portalTestForm.append(box);
-  });
-  portalTestRun.hidden = false;
   const request = schoolRequest;
-  const tick = () => {
-    const left = Math.max(0, portalTestState ? portalTestState.endsAt - Date.now() : 0);
-    portalTestTimer.textContent = 'Time left: ' + Math.floor(left / 60000) + ':' + String(Math.floor(left / 1000) % 60).padStart(2, '0');
-    if (left === 0) submitPortalTest(request);
-  };
-  tick();
-  portalTestState.timer = setInterval(tick, 1000);
+  const state = { tools, studentId, test, questions, answers: questions.map(() => 'x'), index: 0, remaining: test.data.durationMin * 60, deadline: 0, paused: false, pauses: 0,
+    timer: 0, busy: false, queue: Promise.resolve(), saveFailed: false };
+  if (saved) {
+    const answers = String(saved.answers).split(',');
+    if (answers.length === questions.length) state.answers = answers;
+    state.index = Math.min(Math.max(0, Number(saved.index) || 0), questions.length - 1);
+    state.pauses = Number(saved.pauses) || 0;
+    state.remaining = Number(saved.remainingSec) || 0;
+    if (saved.state === 'paused') state.paused = true;
+    else {
+      // Closing the page does not stop the clock, so the time spent away is taken off.
+      const savedAt = saved.at?.toMillis?.() ?? Date.now();
+      state.remaining = Math.max(0, state.remaining - Math.floor((Date.now() - savedAt) / 1000));
+    }
+  }
+  state.deadline = Date.now() + state.remaining * 1000;
+  portalTestState = state;
+  if (!saved) {
+    portalTestsStatus.textContent = 'Starting the test.';
+    await saveTestProgress(state);
+    if (portalTestState !== state) return;
+    if (state.saveFailed) { stopPortalTest(); portalTestsStatus.textContent = 'The test could not be started. Check your connection and try again.'; return; }
+    portalTestsStatus.textContent = '';
+  }
+  runPortalTest(request);
 }
-portalTestSubmit.addEventListener('click', () => submitPortalTest(schoolRequest));
+portalTestSubmit.addEventListener('click', () => submitPortalTest(schoolRequest, false));
+document.querySelector('#portal-test-pause').addEventListener('click', pausePortalTest);
+document.querySelector('#portal-test-resume').addEventListener('click', resumePortalTest);
+document.querySelector('#portal-test-prev').addEventListener('click', () => {
+  const state = portalTestState;
+  if (!state || state.index === 0) return;
+  state.index -= 1;
+  renderTestQuestion();
+});
+document.querySelector('#portal-test-save').addEventListener('click', () => {
+  const state = portalTestState;
+  if (!state || state.paused) return;
+  const chosen = portalTestForm.querySelector('input[name="answer"]:checked');
+  if (!chosen) { portalTestInfo.textContent = 'Choose an answer, or press Skip to leave this question for later.'; return; }
+  state.answers[state.index] = chosen.value;
+  const moved = nextTestQuestion();
+  saveTestProgress(state);
+  renderTestQuestion();
+  if (!moved) portalTestInfo.textContent = 'All questions are answered. Press Submit exam when you are ready.';
+});
+document.querySelector('#portal-test-skip').addEventListener('click', () => {
+  const state = portalTestState;
+  if (!state || state.paused) return;
+  const moved = nextTestQuestion();
+  saveTestProgress(state);
+  renderTestQuestion();
+  if (!moved) portalTestInfo.textContent = 'You are on the last question. Use the numbers above to go back to any question, or press Submit exam.';
+});
+portalTestForm.addEventListener('submit', (event) => event.preventDefault());
 async function loadPortalTests(tools, request, studentId) {
   const { schoolRef, collection, getDocsFromServer, query, where } = tools;
   portalTestsSection.hidden = false;
@@ -8076,11 +8244,13 @@ async function loadPortalTests(tools, request, studentId) {
   try {
     const placements = await getDocsFromServer(query(collection(schoolRef, 'enrollments'), where('studentId', '==', studentId)));
     const latest = placements.docs.map((record) => record.data()).sort((a, b) => b.yearId.localeCompare(a.yearId))[0];
-    const [open, closed, sheets] = await Promise.all([
+    const [open, closed, sheets, progress] = await Promise.all([
       getDocsFromServer(query(collection(schoolRef, 'onlineTests'), where('status', '==', 'open'))),
       getDocsFromServer(query(collection(schoolRef, 'onlineTests'), where('status', '==', 'closed'))),
       getDocsFromServer(query(collection(schoolRef, 'onlineAttempts'), where('by', '==', tools.user.uid))),
+      getDocsFromServer(query(collection(schoolRef, 'onlineProgress'), where('by', '==', tools.user.uid))).catch(() => ({ docs: [] })),
     ]);
+    const started = new Map(progress.docs.filter((record) => record.data().studentId === studentId).map((record) => [record.data().testId, record.data()]));
     if (request !== schoolRequest) return;
     const mine = new Map(sheets.docs.filter((record) => record.data().studentId === studentId).map((record) => [record.data().testId, record.data()]));
     const tests = [...open.docs, ...closed.docs].filter((record) => latest && record.data().classId === latest.classId)
@@ -8092,8 +8262,13 @@ async function loadPortalTests(tools, request, studentId) {
       let button;
       let state;
       if (sheet) state = sheet.score !== undefined ? 'Your score: ' + sheet.score + ' of ' + item.totalMarks : 'Submitted. The score will appear after your teacher checks it.';
-      else { state = 'Not attempted'; button = actionButton('Start test (' + item.durationMin + ' min)', () => {
-        if (confirm('Start "' + item.title + '"? The timer starts now and you can submit only once.')) startPortalTest(tools, studentId, { id: record.id, data: item });
+      else if (started.has(record.id)) {
+        const saved = started.get(record.id);
+        const left = saved.state === 'paused' ? saved.remainingSec : Math.max(0, saved.remainingSec - Math.floor((Date.now() - (saved.at?.toMillis?.() ?? Date.now())) / 1000));
+        state = (saved.state === 'paused' ? 'Paused' : 'In progress') + ', ' + clock(left) + ' left, ' + saved.pauses + ' of ' + OT_PAUSES + ' pauses used';
+        button = actionButton(saved.state === 'paused' ? 'Resume test' : 'Continue test', () => startPortalTest(tools, studentId, { id: record.id, data: item }, saved));
+      } else { state = 'Not attempted'; button = actionButton('Start test (' + item.durationMin + ' min)', () => {
+        if (confirm('Start "' + item.title + '"? The timer starts now. You answer one question at a time, can pause up to ' + OT_PAUSES + ' times, and must answer at least 30% of the questions to submit early.')) startPortalTest(tools, studentId, { id: record.id, data: item });
       }); }
       listItem(portalTestsList, item.title + ' - ' + item.count + ' question(s), ' + item.totalMarks + ' marks - ' + state, button);
     }

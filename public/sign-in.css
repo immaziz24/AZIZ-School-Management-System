@@ -240,3 +240,18 @@ body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concession
 label.otq{display:flex;align-items:flex-start;gap:12px;margin:0;padding:9px 10px;border-radius:10px;cursor:pointer;color:var(--ink);font-weight:400}
 label.otq:hover{background:rgba(201,162,74,.12)}
 label.otq input{flex:0 0 auto;margin-top:3px}
+#otpicker label.otq{display:flex;margin:0;width:100%}
+
+/* Online test: one question at a time */
+#portal-test-timer{font-size:1.25rem;font-weight:600;color:var(--gold2)}
+#portal-test-nav{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
+#portal-test-nav button.qn{min-width:40px;padding:6px 10px;border-radius:10px;font-size:.9rem;background:rgba(10,17,34,.6);color:var(--mut);border:1px solid var(--line)}
+#portal-test-nav button.qn.done{background:rgba(201,162,74,.28);color:var(--gold2);border-color:var(--gold)}
+#portal-test-nav button.qn.now{outline:2px solid var(--gold2);outline-offset:2px;color:var(--ink)}
+#portal-test-form fieldset{border:1px solid var(--line);border-radius:16px;padding:16px 18px}
+#portal-test-form legend{padding:0 8px;color:var(--gold2);font-weight:600}
+#portal-test-form p{font-size:1.1rem;margin:.2em 0 .8em}
+label.otopt{display:flex;align-items:center;gap:12px;margin:8px 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;cursor:pointer;color:var(--ink);font-weight:400;font-size:1.05rem}
+label.otopt:hover{border-color:var(--gold);background:rgba(201,162,74,.1)}
+#portal-test-buttons{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0}
+#portal-test-paused{border:1px solid var(--line);border-radius:16px;padding:18px;text-align:center}
