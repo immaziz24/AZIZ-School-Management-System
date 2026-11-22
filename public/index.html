@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-65c">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-65h">
 </head>
 <body>
   <main>
@@ -1194,7 +1194,19 @@
           <p><label>Title <input name="title" type="text" maxlength="120" required></label></p>
           <p><label>Class <select name="classId"></select></label></p>
           <p><label>Minutes allowed <input name="durationMin" type="number" min="5" max="180" step="1" value="20" required></label></p>
-          <p><label>Questions (hold Ctrl to choose several) <select name="questionIds" multiple size="8"></select></label></p>
+          <fieldset id="otpicker">
+            <legend>Choose the questions</legend>
+            <p id="otpick-help">Pick the class above, then tick the questions you want. Or type how many you need and press Pick randomly.</p>
+            <p><label>Subject <select id="otpick-subject"></select></label>
+              <label>Search <input id="otpick-search" type="search" maxlength="60" placeholder="Type a word from the question"></label>
+              <label>How many <input id="otpick-count" type="number" min="1" max="60" step="1" value="10"></label></p>
+            <p><button id="otpick-random" type="button">Pick randomly</button>
+              <button id="otpick-all" type="button">Select all shown</button>
+              <button id="otpick-clear" type="button">Clear all</button></p>
+            <p id="otpick-summary" role="status"></p>
+            <div id="otpick-list"></div>
+            <select name="questionIds" multiple hidden></select>
+          </fieldset>
 
           <button type="submit">Create test</button>
         </form>

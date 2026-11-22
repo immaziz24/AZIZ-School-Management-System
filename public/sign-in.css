@@ -229,3 +229,14 @@ body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concession
 .pw-eye .off{display:none}
 .pw-eye[aria-pressed="true"] .on{display:none}
 .pw-eye[aria-pressed="true"] .off{display:block}
+
+/* Online test question picker */
+#otpicker{border:1px solid var(--line);border-radius:18px;padding:14px 16px;margin:0}
+#otpicker legend{padding:0 8px;color:var(--gold2);font-weight:600}
+#otpicker>p{margin:.5em 0}
+#otpicker label{display:inline-block;margin:0 14px 8px 0;vertical-align:bottom}
+#otpicker input[type=number]{width:110px}
+#otpick-list{max-height:380px;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:6px;background:rgba(5,9,20,.45)}
+label.otq{display:flex;align-items:flex-start;gap:12px;margin:0;padding:9px 10px;border-radius:10px;cursor:pointer;color:var(--ink);font-weight:400}
+label.otq:hover{background:rgba(201,162,74,.12)}
+label.otq input{flex:0 0 auto;margin-top:3px}

@@ -5813,16 +5813,92 @@ lists.questionbank = ownerList({
     + ' - right: ' + (item.correct + 1) + ' - ' + item.marks + ' mark(s)',
 });
 const onlineDetail = document.querySelector('#onlinetests-detail');
-function fillQuestionPicker() {
-  const select = document.querySelector('#onlinetests-form').elements.namedItem('questionIds');
-  const chosen = new Set([...select.selectedOptions].map((option) => option.value));
-  select.replaceChildren();
-  for (const record of [...lists.questionbank.items].sort((a, b) => nameOfClass(a.data().classId).localeCompare(nameOfClass(b.data().classId)) || a.data().text.localeCompare(b.data().text))) {
-    const option = new Option('[' + nameOfClass(record.data().classId) + '] ' + record.data().text.slice(0, 70) + ' (' + record.data().marks + ')', record.id);
-    option.selected = chosen.has(record.id);
-    select.append(option);
-  }
+// Online test question picker: filter by class, subject and word, tick questions one by one, or pick a number at random.
+const otForm = document.querySelector('#onlinetests-form');
+const otList = document.querySelector('#otpick-list');
+const otSummary = document.querySelector('#otpick-summary');
+const otSubject = document.querySelector('#otpick-subject');
+const otSearch = document.querySelector('#otpick-search');
+const otCount = document.querySelector('#otpick-count');
+const OT_MAX_QUESTIONS = 60;
+const OT_SHOW_LIMIT = 300;
+const otPicked = new Set();
+const otShown = () => {
+  const classId = otForm.elements.namedItem('classId').value;
+  const subject = otSubject.value;
+  const word = otSearch.value.trim().toLowerCase();
+  return [...lists.questionbank.items].filter((record) => {
+    const data = record.data();
+    return data.classId === classId && (!subject || (data.subjectName ?? '') === subject) && (!word || data.text.toLowerCase().includes(word));
+  }).sort((a, b) => (a.data().subjectName ?? '').localeCompare(b.data().subjectName ?? '') || a.data().text.localeCompare(b.data().text));
+};
+function otSync() {
+  const select = otForm.elements.namedItem('questionIds');
+  for (const option of select.options) option.selected = otPicked.has(option.value);
+  const picked = [...otPicked].map((id) => lists.questionbank.items.find((record) => record.id === id)?.data()).filter(Boolean);
+  const marks = picked.reduce((sum, item) => sum + item.marks, 0);
+  const size = JSON.stringify(picked.map((item) => ({ q: item.text, o: item.options, m: item.marks }))).length;
+  const shown = otShown().length;
+  otSummary.textContent = picked.length + ' selected (' + marks + ' marks). ' + shown + ' question(s) shown for this class.'
+    + (picked.length > OT_MAX_QUESTIONS ? ' A test can have at most ' + OT_MAX_QUESTIONS + ' questions. Untick some.' : '')
+    + (size > 30000 ? ' These questions are too long for one test. Choose fewer.' : '');
 }
+function otRender() {
+  const classId = otForm.elements.namedItem('classId').value;
+  // Drop anything picked for another class or removed from the bank.
+  for (const id of [...otPicked]) {
+    const record = lists.questionbank.items.find((found) => found.id === id);
+    if (!record || record.data().classId !== classId) otPicked.delete(id);
+  }
+  const subjects = [...new Set(lists.questionbank.items.filter((record) => record.data().classId === classId).map((record) => record.data().subjectName ?? '').filter(Boolean))].sort();
+  const keep = subjects.includes(otSubject.value) ? otSubject.value : '';
+  otSubject.replaceChildren(new Option('All subjects', ''), ...subjects.map((name) => new Option(name, name)));
+  otSubject.value = keep;
+  otList.replaceChildren();
+  const shown = otShown();
+  for (const record of shown.slice(0, OT_SHOW_LIMIT)) {
+    const data = record.data();
+    const row = document.createElement('label');
+    row.className = 'otq';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = otPicked.has(record.id);
+    box.addEventListener('change', () => { if (box.checked) otPicked.add(record.id); else otPicked.delete(record.id); otSync(); });
+    const words = document.createElement('span');
+    words.textContent = (data.subjectName ? '[' + data.subjectName + '] ' : '') + data.text + ' (' + data.marks + (data.marks === 1 ? ' mark' : ' marks') + ')';
+    row.append(box, words);
+    otList.append(row);
+  }
+  if (!shown.length) { const none = document.createElement('p'); none.textContent = 'No questions for this class yet. Add them in the Question Bank.'; otList.append(none); }
+  else if (shown.length > OT_SHOW_LIMIT) { const more = document.createElement('p'); more.textContent = 'Showing the first ' + OT_SHOW_LIMIT + '. Use Subject or Search to narrow the list.'; otList.append(more); }
+  otSync();
+}
+function fillQuestionPicker() {
+  const select = otForm.elements.namedItem('questionIds');
+  select.replaceChildren();
+  for (const record of lists.questionbank.items) select.append(new Option(record.data().text.slice(0, 70), record.id));
+  otRender();
+}
+otForm.elements.namedItem('classId').addEventListener('change', () => { otSubject.value = ''; otRender(); });
+otSubject.addEventListener('change', otRender);
+otSearch.addEventListener('input', otRender);
+document.querySelector('#otpick-all').addEventListener('click', () => {
+  for (const record of otShown().slice(0, OT_SHOW_LIMIT)) otPicked.add(record.id);
+  otRender();
+});
+document.querySelector('#otpick-clear').addEventListener('click', () => { otPicked.clear(); otRender(); });
+document.querySelector('#otpick-random').addEventListener('click', () => {
+  const wanted = Number.parseInt(otCount.value, 10);
+  if (!(wanted >= 1 && wanted <= OT_MAX_QUESTIONS)) { otSummary.textContent = 'Type how many questions you need, from 1 to ' + OT_MAX_QUESTIONS + '.'; return; }
+  const pool = otShown();
+  if (!pool.length) { otSummary.textContent = 'There are no questions to pick from. Check the class, subject and search.'; return; }
+  for (let i = pool.length - 1; i > 0; i -= 1) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  otPicked.clear();
+  for (const record of pool.slice(0, wanted)) otPicked.add(record.id);
+  otRender();
+  if (wanted > pool.length) otSummary.textContent = 'Only ' + pool.length + ' question(s) are available, so all of them were picked. ' + otSummary.textContent;
+});
+otForm.addEventListener('reset', () => setTimeout(() => { otPicked.clear(); otSearch.value = ''; otRender(); }, 0));
 // Question Bank import (CSV file, pasted rows or a shared Google Sheet). Rows are checked first and only the good ones are saved.
 const qbStatus = document.querySelector('#qbimport-status');
 const qbText = document.querySelector('#qbimport-text');
