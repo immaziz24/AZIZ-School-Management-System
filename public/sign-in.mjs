@@ -5318,7 +5318,12 @@ const vaultFilter = document.querySelector('#staffdocs-filter');
 const vaultStaffFilter = document.querySelector('#staffdocs-staff');
 function vaultStaffChoices() {
   const people = [...lists.staffdir.items].sort((a, b) => a.data().name.localeCompare(b.data().name));
-  fillSelect(vaultForm.elements.namedItem('staffId'), people, (record) => record.data().name);
+  const staffSelect = vaultForm.elements.namedItem('staffId');
+  fillSelect(staffSelect, people, (record) => record.data().name);
+  if (!people.length) {
+    staffSelect.append(new Option('No staff yet - add them in Staff Directory first', ''));
+    vaultStatus.textContent = 'There are no staff members yet. Open Staff Directory, add the person, then come back here.';
+  }
   const keep = vaultStaffFilter.value;
   vaultStaffFilter.replaceChildren(new Option('All staff', ''), ...people.map((record) => new Option(record.data().name, record.id)));
   vaultStaffFilter.value = people.some((record) => record.id === keep) ? keep : '';
