@@ -5316,10 +5316,21 @@ const vaultAlert = document.querySelector('#staffdocs-alert');
 const vaultList = document.querySelector('#staffdocs-list');
 const vaultFilter = document.querySelector('#staffdocs-filter');
 const vaultStaffFilter = document.querySelector('#staffdocs-staff');
+let vaultPeople = [];
+// Everyone a document can belong to: the Staff Directory (job titles), the Staff Contact Directory and the teacher accounts.
+// The same name from two places is listed once.
+async function vaultCollectPeople() {
+  const found = new Map();
+  const add = (id, name) => { const key = String(name ?? '').trim().toLowerCase(); if (key && !found.has(key)) found.set(key, { id: String(id).slice(0, 40), name: String(name).trim() }); };
+  try { for (const record of (await staffDirectory.list()).docs) add(record.id, record.data().name); } catch { /* Not readable: skipped. */ }
+  for (const record of lists.staffdir.items) add(record.id, record.data().name);
+  for (const uid of staffRoster) add(uid, staffLabel(uid));
+  vaultPeople = [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
 function vaultStaffChoices() {
-  const people = [...lists.staffdir.items].sort((a, b) => a.data().name.localeCompare(b.data().name));
+  const people = vaultPeople.map((person) => ({ id: person.id, data: () => person }));
   const staffSelect = vaultForm.elements.namedItem('staffId');
-  fillSelect(staffSelect, people, (record) => record.data().name);
+  fillSelect(staffSelect, people, (person) => person.name);
   if (!people.length) {
     staffSelect.append(new Option('No staff yet - add them in Staff Directory first', ''));
     vaultStatus.textContent = 'There are no staff members yet. Open Staff Directory, add the person, then come back here.';
@@ -5375,6 +5386,7 @@ async function vaultLoad() {
   } catch {
     vaultStatus.textContent = 'Could not load the documents. Try again.';
   }
+  await vaultCollectPeople();
   vaultStaffChoices();
   vaultDraw();
   if (!document.querySelector('#storage').hidden) lists.storage.render();
@@ -5387,8 +5399,8 @@ vaultForm.addEventListener('submit', async (event) => {
   if (!academic || academic.busy) return;
   const fields = new FormData(vaultForm);
   const file = vaultForm.elements.namedItem('file').files[0];
-  const staff = lists.staffdir.items.find((record) => record.id === text(fields, 'staffId'));
-  if (!staff) { vaultStatus.textContent = 'Choose a staff member.'; return; }
+  const person = vaultPeople.find((entry) => entry.id === text(fields, 'staffId'));
+  if (!person) { vaultStatus.textContent = 'Choose a staff member.'; return; }
   if (!file) { vaultStatus.textContent = 'Choose a file.'; return; }
   const ext = file.name.split('.').pop().toLowerCase();
   const contentType = VAULT_TYPES[ext];
@@ -5402,7 +5414,7 @@ vaultForm.addEventListener('submit', async (event) => {
     return;
   }
   const id = newId('SD');
-  const data = { staffId: staff.id, staffName: staff.data().name, kind: text(fields, 'kind'), title: text(fields, 'title'), fileName: file.name.slice(-120),
+  const data = { staffId: person.id, staffName: person.name, kind: text(fields, 'kind'), title: text(fields, 'title'), fileName: file.name.slice(-120),
     contentType, sizeKb, uploadedOn: localToday(), by: academic.uid, ...(expiryOn ? { expiryOn } : {}), ...optional(fields, 'note') };
   academic.busy = true;
   vaultStatus.textContent = 'Uploading.';
