@@ -1330,6 +1330,15 @@
           <label>Skip students reminded in the last <select id="feereminders-skip"><option value="7">7 days</option><option value="3">3 days</option><option value="14">14 days</option><option value="0">0 days (always send)</option></select></label></p>
         <p><button id="feereminders-find" type="button">Find students with dues</button> <button id="feereminders-send" type="button">Send reminders</button></p>
         <ul id="feereminders-list"></ul>
+        <h4>Automatic reminders</h4>
+        <p>Switch this on and AZIZ checks fees every morning and sends a reminder to each family with overdue fees, with no clicking needed. Students reminded recently are skipped.</p>
+        <p id="autorem-status" role="status"></p>
+        <p><label><input id="autorem-on" type="checkbox"> Send reminders automatically every morning</label></p>
+        <p><label>Only dues of at least (Rs) <input id="autorem-min" type="number" min="1" step="1" value="1"></label>
+          <label>Do not remind the same student again for <select id="autorem-every"><option value="7">7 days</option><option value="3">3 days</option><option value="14">14 days</option><option value="30">30 days</option></select></label></p>
+        <p><label>Message (optional) <input id="autorem-message" type="text" maxlength="200"></label></p>
+        <p><button id="autorem-save" type="button">Save automatic reminders</button> <button id="autorem-run" type="button">Run it now</button></p>
+        <p id="autorem-last" role="status"></p>
         <h4>Recently sent</h4>
         <ul id="feereminders-history"></ul>
       </section>
@@ -1479,6 +1488,11 @@
         <h3 id="audit-log-title">Activity Log</h3>
         <p id="audit-log-status" role="status"></p>
         <button id="audit-refresh" type="button">Refresh log</button>
+        <h4>Security alerts</h4>
+        <p>AZIZ raises an alert when something sensitive happens: a voided payment, a removed student or fee record, a year closed, a backup restored, or many records removed quickly.</p>
+        <p id="alerts-status" role="status"></p>
+        <p><button id="alerts-seen" type="button">Mark all as seen</button></p>
+        <ul id="alerts-list"></ul>
         <h4>Security watch</h4>
         <ul id="audit-summary"></ul>
         <h4>Latest entries</h4>
@@ -1981,6 +1995,12 @@
     <section id="platform-section" hidden>
       <h2>Platform administration</h2>
       <p id="platform-status" role="status"></p>
+      <h3>System health</h3>
+      <p id="health-status" role="status"></p>
+      <p><button id="health-run" type="button">Check now</button></p>
+      <ul id="health-list"></ul>
+      <h4>Recent server jobs</h4>
+      <ul id="health-jobs"></ul>
       <h3>Revenue</h3>
       <p id="platform-revenue"></p>
       <div id="platform-revenue-chart" class="chart-box"></div>
@@ -2082,8 +2102,8 @@
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-64');
-      await import('./platform.mjs?v=batch-64');
+      await import('./sign-in.mjs?v=batch-68');
+      await import('./platform.mjs?v=batch-68');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

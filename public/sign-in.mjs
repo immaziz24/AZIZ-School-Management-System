@@ -3604,6 +3604,7 @@ async function loadAuditLog(request) {
 
 auditRefresh.addEventListener('click', () => {
   if (academic) loadAuditLog(schoolRequest);
+  if (academic) loadSecurityAlerts(schoolRequest);
 });
 
 // Pass marks and grades. The owner sets the pass percentage and the lowest percentage for each grade.
@@ -7215,7 +7216,7 @@ function refreshAttention() {
     item.textContent = number + ' ' + label;
     attentionList.append(item);
   }
-  const notes = [...securityNotes(), ...complianceNotes(), ...storageNotes(), ...vaultNotes()];
+  const notes = [...alertNotes(), ...securityNotes(), ...complianceNotes(), ...storageNotes(), ...vaultNotes()];
   for (const note of notes) listItem(attentionList, note);
   attentionStatus.textContent = checks.length || birthdays.length || notes.length ? '' : 'Nothing needs attention right now.';
 }
@@ -9359,6 +9360,7 @@ const resetOwnerLists = () => {
   hideReportSections();
   backupLog = null;
   auditItems = [];
+  alertItems = [];
   for (const api of ownerLists) api.reset();
   reminderPlan = []; reminderSent = []; reminderList.replaceChildren(); reminderHistory.replaceChildren(); reminderStatus.textContent = '';
   document.querySelector('#backup-auto').textContent = '';
@@ -10413,7 +10415,7 @@ onAuthStateChanged(auth, async (user) => {
       'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'
     );
     if (request !== schoolRequest) return;
-    firestoreTools = { collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, query, serverTimestamp, setDoc, where };
+    firestoreTools = { collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, query, serverTimestamp, setDoc, updateDoc, where };
     const schoolRef = doc(getFirestore(app), 'schools', SCHOOL_ID);
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     if (request !== schoolRequest) return;
@@ -11143,5 +11145,103 @@ materialsForm.addEventListener('submit', async (event) => {
     if (request === schoolRequest) teacherMaterialsStatus.textContent = 'Could not share it (' + (error?.code ?? 'error') + '). Check the link and try again.';
   } finally {
     context.busy = false;
+  }
+});
+
+
+// ---------- Batch 68 ----------
+// Security alerts (feature 091): the server writes an alert for each sensitive entry in the activity log.
+let alertItems = [];
+const alertList = document.querySelector('#alerts-list');
+const alertStatus = document.querySelector('#alerts-status');
+const ALERT_LEVEL = { high: 'HIGH', medium: 'Medium', low: 'Low' };
+function alertNotes() {
+  const open = alertItems.filter((record) => record.data().seen !== true);
+  const high = open.filter((record) => record.data().level === 'high').length;
+  return open.length ? [open.length + ' security alert(s) not yet seen' + (high ? ' (' + high + ' high)' : '') + '. Open Activity Log.'] : [];
+}
+function drawAlerts() {
+  alertList.replaceChildren();
+  const rows = [...alertItems].sort((a, b) => b.data().at.localeCompare(a.data().at)).slice(0, 40);
+  for (const record of rows) {
+    const item = record.data();
+    const hide = document.createElement('button');
+    hide.type = 'button';
+    hide.textContent = item.seen === true ? 'Delete' : 'Mark seen';
+    hide.addEventListener('click', async () => {
+      try {
+        const { doc, updateDoc, deleteDoc } = firestoreTools;
+        if (item.seen === true) await deleteDoc(doc(academic.schoolRef, 'securityAlerts', record.id));
+        else await updateDoc(doc(academic.schoolRef, 'securityAlerts', record.id), { seen: true });
+        await loadSecurityAlerts(schoolRequest);
+      } catch (error) { alertStatus.textContent = 'Could not update the alert (' + (error?.code ?? 'error') + ').'; }
+    });
+    listItem(alertList, (item.seen === true ? '' : 'NEW - ') + '[' + (ALERT_LEVEL[item.level] ?? item.level) + '] ' + new Date(item.at).toLocaleString() + ' - ' + item.title + ' - ' + item.detail, viewOnly ? undefined : hide);
+  }
+  const open = alertItems.filter((record) => record.data().seen !== true).length;
+  alertStatus.textContent = alertItems.length ? open + ' new, ' + alertItems.length + ' in total.' : 'No security alerts. That is good news.';
+}
+async function loadSecurityAlerts(request) {
+  try {
+    const saved = await academic.list('securityAlerts');
+    if (request !== schoolRequest) return;
+    alertItems = saved.docs;
+    drawAlerts();
+    refreshAttention();
+  } catch {
+    if (request === schoolRequest) alertStatus.textContent = 'Could not load security alerts.';
+  }
+}
+document.querySelector('#alerts-seen').addEventListener('click', async () => {
+  if (viewOnly || !academic) return;
+  try {
+    const { doc, updateDoc } = firestoreTools;
+    for (const record of alertItems.filter((found) => found.data().seen !== true)) await updateDoc(doc(academic.schoolRef, 'securityAlerts', record.id), { seen: true });
+    await loadSecurityAlerts(schoolRequest);
+  } catch (error) { alertStatus.textContent = 'Could not update the alerts (' + (error?.code ?? 'error') + ').'; }
+});
+document.querySelector('#audit-log').addEventListener('mod-open', () => { if (academic) loadSecurityAlerts(schoolRequest); });
+
+// Automatic fee reminders (feature 148): the owner's switch. The server does the sending every morning.
+const autoRemStatus = document.querySelector('#autorem-status');
+const autoRemLast = document.querySelector('#autorem-last');
+async function loadAutoReminders() {
+  if (!academic) return;
+  const request = schoolRequest;
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const [setting, log] = await Promise.all([getDocFromServer(doc(academic.schoolRef, 'settings', 'autoReminders')), getDocFromServer(doc(academic.schoolRef, 'settings', 'autoRemindersLog'))]);
+    if (request !== schoolRequest) return;
+    const data = setting.exists() ? setting.data() : { on: false, min: 1, everyDays: 7, message: '' };
+    document.querySelector('#autorem-on').checked = data.on === true;
+    document.querySelector('#autorem-min').value = String(data.min ?? 1);
+    document.querySelector('#autorem-every').value = String(data.everyDays ?? 7);
+    document.querySelector('#autorem-message').value = data.message ?? '';
+    autoRemStatus.textContent = data.on === true ? 'Automatic reminders are ON.' : 'Automatic reminders are off.';
+    autoRemLast.textContent = log.exists() ? 'Last automatic run: ' + log.data().date + ' - ' + log.data().sent + ' reminder(s) sent, ' + log.data().skipped + ' skipped.' : 'The automatic run has not happened yet.';
+  } catch { if (request === schoolRequest) autoRemStatus.textContent = 'Could not load the automatic reminder settings.'; }
+}
+document.querySelector('#feereminders').addEventListener('mod-open', loadAutoReminders);
+document.querySelector('#autorem-save').addEventListener('click', async () => {
+  if (viewOnly || !academic) { autoRemStatus.textContent = 'Only the owner can change this.'; return; }
+  const message = document.querySelector('#autorem-message').value.trim().slice(0, 200);
+  const data = { on: document.querySelector('#autorem-on').checked, min: Math.max(1, Number.parseInt(document.querySelector('#autorem-min').value || '1', 10) || 1),
+    everyDays: Number.parseInt(document.querySelector('#autorem-every').value, 10) || 7, ...(message ? { message } : {}) };
+  try {
+    await academic.save('settings', 'autoReminders', data);
+    autoRemStatus.textContent = data.on ? 'Saved. Reminders will go out automatically every morning.' : 'Saved. Automatic reminders are off.';
+  } catch (error) { autoRemStatus.textContent = 'Could not save (' + (error?.code ?? 'error') + ').'; }
+});
+document.querySelector('#autorem-run').addEventListener('click', async () => {
+  if (viewOnly || !academic) { autoRemStatus.textContent = 'Only the owner can do this.'; return; }
+  autoRemStatus.textContent = 'Running.';
+  try {
+    const result = await restoreCall('runFeeRemindersNow', {});
+    autoRemStatus.textContent = result.sent + ' reminder(s) sent, ' + result.skipped + ' skipped (reminded recently or below the minimum).';
+    loadAutoReminders();
+    loadReminderHistory();
+  } catch (error) {
+    autoRemStatus.textContent = error?.code === 'functions/failed-precondition' ? (error.message || 'Switch it on and save first.') : error?.code === 'functions/permission-denied' ? 'Only the school owner can do this.'
+      : 'Could not reach the reminder service. Check the functions are deployed.';
   }
 });

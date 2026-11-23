@@ -368,6 +368,7 @@ const FLAGS = [['website', 'Public website'], ['finance', 'Finance'], ['library'
 let allSchools = [];
 async function loadAdmin() {
   admin.section.hidden = false;
+  document.dispatchEvent(new Event('platform-admin-open'));
   admin.status.textContent = 'Loading schools.';
   try {
     const list = await getDocs(collection(db, 'schools'));
@@ -719,3 +720,50 @@ onAuthStateChanged(auth, async (user) => {
     if (mine === seen && platform.exists()) await loadAdmin();
   } catch { /* not a platform administrator */ }
 });
+
+
+// ---------- Batch 68: system health (feature 092) ----------
+// The server checks the database, file storage and the nightly backups every 6 hours and writes the result to platformJobs/health.
+async function callHealth(name) {
+  const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
+  return (await httpsCallable(getFunctions(app, 'asia-south1'), name)()).data;
+}
+function showHealth(data) {
+  const list = document.querySelector('#health-list');
+  const status = document.querySelector('#health-status');
+  const rows = [];
+  const ms = (value) => (value < 0 ? 'FAILED' : value + ' ms');
+  const at = typeof data.at === 'string' ? data.at : data.at?.toDate?.().toISOString();
+  rows.push('Last check: ' + (at ? new Date(at).toLocaleString() : 'unknown'));
+  rows.push('Database: ' + ms(data.firestoreMs) + '. File storage: ' + ms(data.storageMs) + '. Schools: ' + (data.schools ?? '-') + '.');
+  rows.push('Backups: ' + (data.backupFailed?.length ? data.backupFailed.length + ' failed' : 'none failed') + ', ' + (data.backupStale?.length ? data.backupStale.length + ' out of date' : 'none out of date') + '.');
+  for (const problem of data.problems ?? []) rows.push('PROBLEM: ' + problem);
+  const history = data.history ?? [];
+  const good = history.filter((item) => item.ok).length;
+  if (history.length) rows.push('Last ' + history.length + ' checks: ' + good + ' fully healthy (' + Math.round((good / history.length) * 100) + '%).');
+  fillList(list, rows.map((text) => [text]), '');
+  status.textContent = (data.problems ?? []).length ? 'Needs attention: ' + data.problems.length + ' problem(s).' : 'Everything looks healthy.';
+}
+async function loadHealth() {
+  const status = document.querySelector('#health-status');
+  try {
+    const found = await getDoc(doc(db, 'platformJobs', 'health'));
+    if (found.exists()) showHealth(found.data());
+    else status.textContent = 'No health check has run yet. Press Check now.';
+    const jobs = await getDocs(collection(db, 'platformJobs'));
+    const rows = jobs.docs.filter((item) => /^(backup|reminders)-/.test(item.id)).sort((a, b) => b.id.localeCompare(a.id)).slice(0, 10).map((item) => {
+      const d = item.data();
+      const label = item.id.startsWith('backup') ? 'Backup ' + item.id.slice(7) : 'Fee reminders ' + item.id.slice(10);
+      return label + ': ' + (item.id.startsWith('backup') ? d.done + ' of ' + d.schools + ' schools saved' : d.sent + ' reminders sent') + (d.failed?.length ? ', ' + d.failed.length + ' failed' : '');
+    });
+    fillList(document.querySelector('#health-jobs'), rows.map((text) => [text]), 'No server jobs have reported yet.');
+  } catch {
+    status.textContent = 'Could not load the health report.';
+  }
+}
+document.querySelector('#health-run').addEventListener('click', async () => {
+  const status = document.querySelector('#health-status');
+  status.textContent = 'Checking.';
+  try { showHealth(await callHealth('runHealthNow')); } catch { status.textContent = 'Could not run the check. Check the functions are deployed.'; }
+});
+document.addEventListener('platform-admin-open', loadHealth);

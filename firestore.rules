@@ -85,6 +85,13 @@ service cloud.firestore {
       allow get: if request.auth != null && request.auth.uid == uid;
     }
 
+    // Server job results (feature 092). platformJobs/{id}: the nightly backup, fee reminder and health check results. Written only by
+    // the server; the platform administrator reads them.
+    match /platformJobs/{jobId} {
+      allow get, list: if request.auth != null && isPlatformAdmin();
+      allow write: if false;
+    }
+
     // Custom domains (067). domainMap/{hostname}: schoolId, verifiedOn. Written only by the platform administrator
     // when a school's domain is marked verified. Anyone may look up one hostname (the public school page does this
     // to find out which school a custom address belongs to); nobody may list them all.
@@ -985,6 +992,37 @@ service cloud.firestore {
       match /settings/autoBackup {
         allow get: if viewerAuth(schoolId);
         allow create, update, delete: if false;
+      }
+
+      // Automatic fee reminders (feature 148). settings/autoReminders: the owner switches the nightly reminders on and sets the smallest due
+      // amount, how many days to wait before reminding the same student again, and an optional message. settings/autoRemindersLog is the
+      // server's note of its last run. The owner and principal read both.
+      match /settings/autoReminders {
+        allow get: if viewerAuth(schoolId);
+        allow create, update: if ownerAuth(schoolId)
+          && request.resource.data.keys().hasOnly(['on', 'min', 'everyDays', 'message'])
+          && request.resource.data.keys().hasAll(['on', 'min', 'everyDays'])
+          && request.resource.data.on is bool
+          && intIn(request.resource.data.min, 1, 100000000)
+          && intIn(request.resource.data.everyDays, 1, 60)
+          && optText(request.resource.data, 'message', 200);
+        allow delete: if false;
+      }
+      match /settings/autoRemindersLog {
+        allow get: if viewerAuth(schoolId);
+        allow create, update, delete: if false;
+      }
+
+      // Security alerts (feature 091). securityAlerts/{id}: written only by the server when the activity log shows something sensitive
+      // (a voided payment, a removed student, a year closed, a restore, a burst of removals). The owner and principal read them; the
+      // owner may mark one as seen or delete it, and cannot change anything else.
+      match /securityAlerts/{docId} {
+        allow get, list: if viewerAuth(schoolId);
+        allow create: if false;
+        allow update: if ownerAuth(schoolId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen'])
+          && request.resource.data.seen is bool;
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Assets register. assets/{id}: name, place, cost, condition, boughtOn. Owner only.

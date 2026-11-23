@@ -228,3 +228,202 @@ exports.restoreBackup = onCall({ memory: '1GiB', timeoutSeconds: 540 }, async (r
   logger.info('Restore', { school: schoolId, date, mode, total });
   return { restored: total, lists: done, safetyCopy: safetyName };
 });
+
+// ---- Batch 68 ----
+// 1. autoFeeReminders: every morning, sends a reminder to the family of each student whose fees are overdue, for schools whose owner
+//    switched this on (settings/autoReminders). runFeeRemindersNow lets the owner run it at once. Each reminder is a feeReminders
+//    record, so pushOnFeeReminder turns it into a phone notification and families see it on their dashboard.
+// 2. securityAlerts: every sensitive entry in a school's activity log (voided payment, removed student, year change, restore...)
+//    becomes a record in securityAlerts for the owner, and a burst of removals raises one extra alert.
+// 3. healthCheck: every 6 hours (and on request from the platform administrator) checks the database and file storage, and the
+//    latest backups, and writes the result to platformJobs/health.
+const money = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+
+async function overdueFor(schoolId) {
+  const base = 'schools/' + schoolId + '/';
+  const settings = await db.doc(base + 'settings/academic').get();
+  const yearId = settings.exists ? settings.data().activeYearId : null;
+  if (!yearId) return { yearId: null, rows: [] };
+  const [year, enrollments, students, structures, concessions, payments, riders, routes] = await Promise.all([
+    db.doc(base + 'academicYears/' + yearId).get(),
+    db.collection(base + 'enrollments').where('yearId', '==', yearId).get(),
+    db.collection(base + 'students').where('status', '==', 'active').get(),
+    db.collection(base + 'feeStructures').where('yearId', '==', yearId).get(),
+    db.collection(base + 'concessions').get(),
+    db.collection(base + 'payments').where('yearId', '==', yearId).get(),
+    db.collection(base + 'transportRiders').get(),
+    db.collection(base + 'routes').get(),
+  ]);
+  const today_ = today();
+  const span = year.exists ? year.data() : null;
+  const classOf = new Map(enrollments.docs.map((record) => [record.data().studentId, record.data().classId]));
+  const heads = new Map();
+  for (const record of structures.docs) {
+    const item = record.data();
+    if (!heads.has(item.classId)) heads.set(item.classId, []);
+    heads.get(item.classId).push(item);
+  }
+  const concessionOf = new Map();
+  for (const record of concessions.docs) {
+    const item = record.data();
+    if (span && !(item.givenOn >= span.startDate && item.givenOn <= span.endDate)) continue;
+    concessionOf.set(item.studentId, (concessionOf.get(item.studentId) ?? 0) + money(item.amount));
+  }
+  const paidOf = new Map();
+  for (const record of payments.docs) {
+    const item = record.data();
+    if (item.voided === true) continue;
+    paidOf.set(item.studentId, (paidOf.get(item.studentId) ?? 0) + money(item.amount));
+  }
+  const monthly = new Map(routes.docs.map((record) => [record.id, money(record.data().monthlyFee)]));
+  const transportOf = new Map(riders.docs.map((record) => [record.id, (monthly.get(record.data().routeId) ?? 0) * money(record.data().months)]));
+  const rows = [];
+  for (const student of students.docs) {
+    const classId = classOf.get(student.id);
+    if (!classId) continue;
+    const list = heads.get(classId) ?? [];
+    const transport = transportOf.get(student.id) ?? 0;
+    const gross = list.reduce((sum, item) => sum + money(item.amount), 0) + transport;
+    const concession = concessionOf.get(student.id) ?? 0;
+    const dueByToday = list.filter((item) => !item.dueOn || item.dueOn <= today_).reduce((sum, item) => sum + money(item.amount), 0) + transport;
+    const concessionOnPast = Math.max(0, concession - (gross - dueByToday));
+    const overdue = Math.max(0, dueByToday - concessionOnPast - (paidOf.get(student.id) ?? 0));
+    if (overdue > 0) rows.push({ studentId: student.id, studentName: String(student.data().name || '').slice(0, 80), amount: Math.round(overdue) });
+  }
+  return { yearId, rows };
+}
+
+async function sendAutoReminders(schoolId) {
+  const base = 'schools/' + schoolId + '/';
+  const setting = await db.doc(base + 'settings/autoReminders').get();
+  const on = setting.exists && setting.data().on === true;
+  if (!on) return { sent: 0, skipped: 0, ran: false };
+  const minimum = Math.max(1, Math.round(money(setting.data().min)) || 1);
+  const everyDays = Math.max(1, Math.round(money(setting.data().everyDays)) || 7);
+  const message = typeof setting.data().message === 'string' ? setting.data().message.slice(0, 200) : '';
+  const day = today();
+  const since = new Date(Date.parse(day) - everyDays * 86400000).toISOString().slice(0, 10);
+  const { rows } = await overdueFor(schoolId);
+  const recent = await db.collection(base + 'feeReminders').where('createdOn', '>=', since).get();
+  const reminded = new Set(recent.docs.map((record) => record.data().studentId));
+  const todo = rows.filter((row) => row.amount >= minimum && !reminded.has(row.studentId)).sort((a, b) => b.amount - a.amount).slice(0, 500);
+  for (let start = 0; start < todo.length; start += 400) {
+    const batch = db.batch();
+    for (const row of todo.slice(start, start + 400)) {
+      batch.set(db.collection(base + 'feeReminders').doc('FR-' + db.collection('x').doc().id), {
+        studentId: row.studentId, studentName: row.studentName, amount: row.amount, createdOn: day, ...(message ? { message } : {}), by: 'auto',
+      });
+    }
+    await batch.commit();
+  }
+  const skipped = rows.length - todo.length;
+  await db.doc(base + 'settings/autoRemindersLog').set({ date: day, sent: todo.length, skipped, at: Timestamp.now() });
+  return { sent: todo.length, skipped, ran: true };
+}
+
+exports.autoFeeReminders = onSchedule({ schedule: '0 9 * * *', timeZone: 'Asia/Kolkata', memory: '512MiB', timeoutSeconds: 540 }, async () => {
+  const schools = await db.collection('schools').select().get();
+  let sent = 0;
+  const failed = [];
+  for (const school of schools.docs) {
+    try {
+      const billing = await db.doc('schools/' + school.id + '/billing/main').get();
+      if (billing.exists && ['suspended', 'cancelled'].includes(billing.data().status)) continue;
+      sent += (await sendAutoReminders(school.id)).sent;
+    } catch (error) {
+      failed.push(school.id);
+      logger.error('Auto reminders failed for ' + school.id, error);
+    }
+  }
+  await db.doc('platformJobs/reminders-' + today()).set({ at: Timestamp.now(), schools: schools.size, sent, failed });
+});
+
+exports.runFeeRemindersNow = onCall({ memory: '512MiB', timeoutSeconds: 120 }, async (request) => {
+  const schoolId = await requireOwner(request);
+  const setting = await db.doc('schools/' + schoolId + '/settings/autoReminders').get();
+  if (!setting.exists || setting.data().on !== true) throw new HttpsError('failed-precondition', 'Switch automatic reminders on and save first.');
+  return sendAutoReminders(schoolId);
+});
+
+// Which activity-log entries raise a security alert.
+const ALERT_RULES = {
+  void: ['high', 'A payment was voided'],
+  'close-year': ['high', 'An academic year was closed'],
+  'activate-year': ['medium', 'An academic year was activated'],
+  bulk: ['medium', 'A bulk change was made'],
+  restore: ['high', 'A backup was restored'],
+};
+const SENSITIVE_REMOVALS = new Set(['students', 'payments', 'feeStructures', 'members', 'staffDirectory', 'marks', 'enrollments']);
+
+exports.securityAlerts = onDocumentCreated('schools/{schoolId}/auditLog/{logId}', async (event) => {
+  const entry = event.data?.data();
+  if (!entry || typeof entry.action !== 'string') return;
+  const { schoolId, logId } = event.params;
+  const col = db.collection('schools/' + schoolId + '/securityAlerts');
+  const at = typeof entry.at === 'string' ? entry.at : new Date().toISOString();
+  const made = [];
+  const rule = ALERT_RULES[entry.action];
+  if (rule) {
+    made.push({ id: 'A-' + logId, level: rule[0], title: rule[1], detail: (entry.target + ' ' + entry.docId + (entry.detail ? ' (' + entry.detail + ')' : '')).slice(0, 200) });
+  } else if (entry.action === 'remove' && SENSITIVE_REMOVALS.has(entry.target)) {
+    made.push({ id: 'A-' + logId, level: 'medium', title: 'A ' + entry.target + ' record was removed', detail: (entry.target + ' ' + entry.docId).slice(0, 200) });
+  }
+  // A night-time change (11 pm to 5 am, Indian time) by anyone.
+  const hour = new Date(Date.parse(at) + 330 * 60000).getUTCHours();
+  if (!made.length && ['save', 'remove', 'bulk'].includes(entry.action) && (hour >= 23 || hour < 5) && !String(logId).startsWith('L-RESTORE')) {
+    made.push({ id: 'N-' + logId, level: 'low', title: 'A change was made at night', detail: (entry.action + ' ' + entry.target + ' ' + entry.docId).slice(0, 200) });
+  }
+  // A burst: 8 or more removals by one person in the last hour raises one alert for that hour.
+  if (entry.action === 'remove') {
+    const from = new Date(Date.parse(at) - 3600000).toISOString();
+    const recent = await db.collection('schools/' + schoolId + '/auditLog').where('at', '>=', from).get();
+    const mine = recent.docs.filter((record) => record.data().actor === entry.actor && record.data().action === 'remove').length;
+    if (mine >= 8) made.push({ id: 'B-' + String(entry.actor).slice(0, 8) + '-' + at.slice(0, 13).replace(/[^0-9]/g, ''), level: 'high', title: mine + ' records removed within an hour', detail: 'One account removed many records quickly. Check the activity log.' });
+  }
+  for (const item of made) {
+    // create() fails if the alert already exists, so repeated runs never make a second copy or undo "seen".
+    await col.doc(item.id).create({ at, level: item.level, title: item.title, detail: item.detail, actor: String(entry.actor || '').slice(0, 60), seen: false }).catch(() => {});
+  }
+});
+
+async function runHealth() {
+  const out = { at: Timestamp.now(), ok: true, problems: [] };
+  let started = Date.now();
+  try { await db.doc('platformJobs/ping').set({ at: Timestamp.now() }); await db.doc('platformJobs/ping').get(); out.firestoreMs = Date.now() - started; } catch (error) { out.ok = false; out.firestoreMs = -1; out.problems.push('Database check failed.'); }
+  started = Date.now();
+  try { await getStorage().bucket().getFiles({ prefix: 'backups/', maxResults: 1 }); out.storageMs = Date.now() - started; } catch (error) { out.ok = false; out.storageMs = -1; out.problems.push('File storage check failed.'); }
+  try {
+    const schools = await db.collection('schools').select().get();
+    out.schools = schools.size;
+    const day = today();
+    const yesterday = new Date(Date.parse(day) - 86400000).toISOString().slice(0, 10);
+    const stale = [];
+    const failed = [];
+    for (const school of schools.docs) {
+      const log = await db.doc('schools/' + school.id + '/settings/autoBackup').get();
+      if (!log.exists) stale.push(school.id);
+      else if (log.data().ok !== true) failed.push(school.id);
+      else if (log.data().date < yesterday) stale.push(school.id);
+    }
+    out.backupFailed = failed.slice(0, 20);
+    out.backupStale = stale.slice(0, 20);
+    if (failed.length) { out.ok = false; out.problems.push(failed.length + ' school(s) had a failed backup.'); }
+    if (stale.length) out.problems.push(stale.length + ' school(s) have no backup from the last 2 days.');
+  } catch (error) { out.ok = false; out.problems.push('Could not read the schools list.'); }
+  if (out.firestoreMs > 3000 || out.storageMs > 3000) out.problems.push('Responses are slow (over 3 seconds).');
+  const previous = await db.doc('platformJobs/health').get().catch(() => null);
+  const history = ((previous && previous.exists && previous.data().history) || []).slice(-27);
+  history.push({ at: out.at.toDate().toISOString(), ok: out.ok && !out.problems.length, firestoreMs: out.firestoreMs, storageMs: out.storageMs });
+  out.history = history;
+  await db.doc('platformJobs/health').set(out);
+  return { ...out, at: out.at.toDate().toISOString() };
+}
+
+exports.healthCheck = onSchedule({ schedule: '15 */6 * * *', timeZone: 'Asia/Kolkata', memory: '512MiB', timeoutSeconds: 240 }, async () => { await runHealth(); });
+
+exports.runHealthNow = onCall({ memory: '512MiB', timeoutSeconds: 240 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const admin = await db.doc('platformAdmins/' + request.auth.uid).get();
+  if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
+  return runHealth();
+});
