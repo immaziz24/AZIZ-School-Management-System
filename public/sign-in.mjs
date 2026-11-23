@@ -7841,6 +7841,7 @@ async function loadSettings(request) {
     if (request !== schoolRequest) return;
     const extra = extras.exists() ? extras.data() : {};
     siteExtrasCurrent = extra;
+    await addMarketplaceThemes();
     siteExtrasForm.elements.namedItem('theme').value = extra.theme ?? 'classic';
     markTheme();
     extraLabels = [];
@@ -7958,7 +7959,7 @@ function markTheme() {
   bar.textContent = 'Preview: ' + label + ' - your school name and tagline look like this on the public page.';
   themePreview.append(bar);
 }
-for (const [key, label, navy, ivory, gold] of THEME_CARDS) {
+function makeThemeCard([key, label, navy, ivory, gold]) {
   const card = document.createElement('button');
   card.type = 'button';
   card.dataset.theme = key;
@@ -7980,6 +7981,30 @@ for (const [key, label, navy, ivory, gold] of THEME_CARDS) {
   card.append(swatch, name);
   card.addEventListener('click', () => { themeSelect.value = key; markTheme(); });
   themeGallery.append(card);
+}
+for (const entry of THEME_CARDS) makeThemeCard(entry);
+// Marketplace themes (feature 068): extra palettes the platform administrator publishes. They join the gallery and the theme list.
+let marketplaceLoaded = false;
+async function addMarketplaceThemes() {
+  if (marketplaceLoaded || !academic) return;
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const found = await getDocFromServer(doc(academic.schoolRef.firestore, 'platformConfig', 'marketplace'));
+    const hex = /^#[0-9a-fA-F]{6}$/;
+    const items = (found.exists() ? found.data().items ?? [] : []).filter((item) => item && /^mk-[a-z0-9]{3,12}$/.test(item.key) && typeof item.label === 'string'
+      && hex.test(item.navy) && hex.test(item.ivory) && hex.test(item.gold));
+    if (!items.length) { marketplaceLoaded = true; return; }
+    const group = document.createElement('optgroup');
+    group.label = 'Marketplace themes';
+    for (const item of items) {
+      const entry = [item.key, item.label.slice(0, 40), item.navy, item.ivory, item.gold];
+      THEME_CARDS.push(entry);
+      group.append(new Option(entry[1], item.key));
+      makeThemeCard(entry);
+    }
+    themeSelect.append(group);
+    marketplaceLoaded = true;
+  } catch { /* the fixed themes still work */ }
 }
 themeSelect.addEventListener('change', markTheme);
 markTheme();

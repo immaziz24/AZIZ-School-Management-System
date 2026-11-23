@@ -107,6 +107,10 @@ service cloud.firestore {
     // platformConfig/flags: feature switches the platform administrator controls. Any signed-in user reads.
     match /platformConfig/{docId} {
       allow get: if request.auth != null && docId in ['flags', 'templates'];
+      // platformConfig/marketplace: extra colour themes the platform administrator publishes. Anyone may read it, because the public school page applies them.
+      allow get: if docId == 'marketplace';
+      allow create, update: if isPlatformAdmin() && docId == 'marketplace' && request.resource.data.keys().hasOnly(['items'])
+        && request.resource.data.items is list && request.resource.data.items.size() <= 12;
       allow create, update: if isPlatformAdmin() && docId == 'flags';
       // platformConfig/templates: the newest school-page template version and what changed in it.
       allow create, update: if isPlatformAdmin() && docId == 'templates' && validTemplateConfig(request.resource.data);
@@ -2928,7 +2932,7 @@ service cloud.firestore {
       return item.keys().hasOnly(['theme', 'tv', 'tvPrev', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'])
         && (!item.keys().hasAny(['tv']) || (intIn(item.tv, 1, 20)))
         && (!item.keys().hasAny(['tvPrev']) || (item.keys().hasAny(['tv']) && intIn(item.tvPrev, 1, 20)))
-        && (!item.keys().hasAny(['theme']) || item.theme in ['classic', 'royal', 'emerald', 'crimson', 'midnight', 'saffron', 'ocean', 'slate', 'teal', 'maroon', 'indigo', 'forest', 'sunrise', 'rose', 'charcoal', 'sky',
+        && (!item.keys().hasAny(['theme']) || (item.theme is string && item.theme.matches('mk-[a-z0-9]{3,12}')) || item.theme in ['classic', 'royal', 'emerald', 'crimson', 'midnight', 'saffron', 'ocean', 'slate', 'teal', 'maroon', 'indigo', 'forest', 'sunrise', 'rose', 'charcoal', 'sky',
           'obsidian', 'champagne', 'sapphire', 'emerald-noir', 'ruby', 'rose-gold', 'sandstone', 'lavender', 'sage', 'blush', 'pearl', 'platinum', 'copper', 'abyss', 'amethyst', 'bordeaux', 'olive', 'denim', 'mocha', 'aurora'])
         && fieldSlot(item, 'f1') && fieldSlot(item, 'f2') && fieldSlot(item, 'f3')
         && fieldSlot(item, 'f4') && fieldSlot(item, 'f5') && fieldSlot(item, 'f6');

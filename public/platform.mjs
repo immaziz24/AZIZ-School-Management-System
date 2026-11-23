@@ -805,12 +805,18 @@ async function loadStorageRequests() {
       const r = d.data();
       const decide = (status) => run(admin.status, async () => {
         const reply = status === 'rejected' ? (prompt('Reason (optional):') ?? '') : '';
+        const price = status === 'approved' ? Math.max(0, Math.round(Number(prompt('Price to charge for ' + askMb(r.mb) + ' in Rs (leave empty or 0 for free):') || 0)) || 0) : 0;
         const batch = writeBatch(db);
         batch.update(d.ref, { status, decidedOn: today(), ...(reply.trim() ? { reply: reply.trim().slice(0, 300) } : {}) });
         if (status === 'approved') {
           const billing = await getDoc(doc(db, 'schools', r.schoolId, 'billing', 'main'));
           if (!billing.exists()) throw new Error('This school has no plan record yet.');
           batch.update(billing.ref, { storageMb: (billing.data().storageMb ?? 0) + r.mb });
+          // A priced add-on becomes an invoice for the school, due in 7 days.
+          if (price > 0) {
+            batch.set(doc(db, 'schools', r.schoolId, 'invoices', 'INV-' + d.id), { period: today().slice(0, 7), amount: Math.min(price, 100000000),
+              dueOn: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), status: 'due', note: ('Extra storage ' + askMb(r.mb)).slice(0, 200) });
+          }
         }
         await batch.commit();
         await loadStorageRequests();
@@ -830,4 +836,59 @@ document.querySelector('#billing-run')?.addEventListener('click', async () => {
     admin.status.textContent = 'Billing check done: ' + r.invoices + ' invoice(s) created, ' + r.overdue + ' marked overdue, ' + r.renewed + ' renewed, ' + r.suspended + ' suspended.';
     if (chosenSchool) await openSchool(chosenSchool);
   } catch { admin.status.textContent = 'Could not run the billing check. Check the functions are deployed.'; }
+});
+
+
+// ---------- Batch 72: theme marketplace (068) and billing reconciliation (071, 157) ----------
+const marketList = document.querySelector('#market-list');
+async function loadMarket() {
+  try {
+    const found = await getDoc(doc(db, 'platformConfig', 'marketplace'));
+    const items = found.exists() ? found.data().items ?? [] : [];
+    fillList(marketList, items.map((item) => [item.label + ' (' + item.navy + ', ' + item.ivory + ', ' + item.gold + ')',
+      button('Remove', () => run(admin.status, async () => { await setDoc(doc(db, 'platformConfig', 'marketplace'), { items: items.filter((entry) => entry.key !== item.key) }); await loadMarket(); }, 'Theme removed.'))]),
+      'No marketplace themes published yet.');
+  } catch { fillList(marketList, [], 'Marketplace themes could not be loaded.'); }
+}
+document.addEventListener('platform-admin-open', loadMarket);
+document.querySelector('#market-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const label = String(form.get('label') ?? '').trim().slice(0, 40);
+  const hex = /^#[0-9a-fA-F]{6}$/;
+  const colors = ['navy', 'ivory', 'gold'].map((name) => String(form.get(name)));
+  if (!label || !colors.every((color) => hex.test(color))) { admin.status.textContent = 'Give the theme a name and three colours.'; return; }
+  run(admin.status, async () => {
+    const found = await getDoc(doc(db, 'platformConfig', 'marketplace'));
+    const items = found.exists() ? found.data().items ?? [] : [];
+    if (items.length >= 12) throw new Error('Remove a theme first. Twelve is the limit.');
+    const key = 'mk-' + Math.random().toString(36).slice(2, 8);
+    await setDoc(doc(db, 'platformConfig', 'marketplace'), { items: [...items, { key, label, navy: colors[0], ivory: colors[1], gold: colors[2] }] });
+    event.currentTarget.reset();
+    await loadMarket();
+  }, 'Theme published. School owners see it in their theme gallery.');
+});
+
+// Reconciliation: every school's invoices, then a total for each school.
+document.querySelector('#reconcile-csv').addEventListener('click', () => {
+  const cell = (value) => '"' + String(value ?? '').replaceAll('"', '""') + '"';
+  const lines = [['Row', 'School id', 'School', 'Period', 'Amount (Rs)', 'Due on', 'Status', 'Paid on', 'Note']];
+  const totals = [];
+  for (const s of allSchools) {
+    let billed = 0, paid = 0;
+    for (const i of [...s.invoices].sort((a, b) => a.period.localeCompare(b.period))) {
+      lines.push(['Invoice', s.id, s.name, i.period, i.amount, i.dueOn, i.status, i.paidOn ?? '', i.note ?? '']);
+      billed += i.amount;
+      if (i.status === 'paid') paid += i.amount;
+    }
+    totals.push(['Total', s.id, s.name, '', '', '', 'billed ' + billed + ' / paid ' + paid + ' / unpaid ' + (billed - paid), '', '']);
+  }
+  const text = '\ufeff' + [...lines, ...totals].map((line) => line.map(cell).join(',')).join('\r\n');
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  link.download = 'billing-reconciliation-' + today() + '.csv';
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 });

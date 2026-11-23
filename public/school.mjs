@@ -98,7 +98,19 @@ async function loadExtras() {
     if (!extras.exists()) return;
     const data = extras.data();
     if (data.tv === 2) document.body.classList.add('tv2'); // Template version chosen by the school.
-    const theme = THEMES[data.theme];
+    let theme = THEMES[data.theme];
+    // A theme from the marketplace (published by the platform administrator): only plain hex colours are ever applied.
+    if (!theme && /^mk-[a-z0-9]{3,12}$/.test(String(data.theme ?? ''))) {
+      try {
+        const market = await getDoc(doc(db, 'platformConfig', 'marketplace'));
+        const found = (market.exists() ? market.data().items ?? [] : []).find((item) => item && item.key === data.theme);
+        const hex = /^#[0-9a-fA-F]{6}$/;
+        if (found && hex.test(found.navy) && hex.test(found.ivory) && hex.test(found.gold)) {
+          const dim = (color) => '#' + [1, 3, 5].map((at) => Math.round(parseInt(color.slice(at, at + 2), 16) * 0.75).toString(16).padStart(2, '0')).join('');
+          theme = [found.navy, found.ivory, found.gold, dim(found.navy)];
+        }
+      } catch { /* the base colours stay */ }
+    }
     if (theme) {
       const root = document.documentElement.style;
       root.setProperty('--navy', theme[0]); root.setProperty('--ivory', theme[1]); root.setProperty('--gold', theme[2]);

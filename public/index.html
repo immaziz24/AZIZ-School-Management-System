@@ -2041,6 +2041,19 @@
       <ul id="health-list"></ul>
       <h4>Storage requests from schools</h4>
       <ul id="storagereq-list"></ul>
+      <h4>Theme marketplace</h4>
+      <p>Publish extra colour themes. Every school owner then sees them in the theme gallery, with up to 12 published at a time.</p>
+      <form id="market-form">
+        <p><label>Theme name <input name="label" type="text" maxlength="40" required></label></p>
+        <p><label>Main colour <input name="navy" type="color" value="#14243d"></label>
+          <label>Background <input name="ivory" type="color" value="#faf6ec"></label>
+          <label>Accent <input name="gold" type="color" value="#b8913a"></label></p>
+        <button type="submit">Publish theme</button>
+      </form>
+      <ul id="market-list"></ul>
+      <h4>Billing reconciliation</h4>
+      <p>Downloads every school's invoices with what was billed, paid and is still unpaid, so you can match them with your bank statement.</p>
+      <p><button id="reconcile-csv" type="button">Download billing reconciliation (CSV)</button></p>
       <h4>Automatic billing</h4>
       <p>Every night AZIZ looks after schools that have "Automatic billing" ticked in their plan. It makes the next invoice 7 days before renewal, marks unpaid invoices overdue, moves the renewal date forward once an invoice is paid, and makes a school read-only after its grace days. It never charges anyone.</p>
       <p><button id="billing-run" type="button">Run billing check now</button></p>
@@ -2148,8 +2161,8 @@
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-70');
-      await import('./platform.mjs?v=batch-71');
+      await import('./sign-in.mjs?v=batch-72');
+      await import('./platform.mjs?v=batch-72');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
