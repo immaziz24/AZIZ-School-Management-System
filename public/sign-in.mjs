@@ -7216,7 +7216,7 @@ function refreshAttention() {
     item.textContent = number + ' ' + label;
     attentionList.append(item);
   }
-  const notes = [...alertNotes(), ...securityNotes(), ...complianceNotes(), ...storageNotes(), ...vaultNotes()];
+  const notes = [...approvalNotes(), ...alertNotes(), ...securityNotes(), ...complianceNotes(), ...storageNotes(), ...vaultNotes()];
   for (const note of notes) listItem(attentionList, note);
   attentionStatus.textContent = checks.length || birthdays.length || notes.length ? '' : 'Nothing needs attention right now.';
 }
@@ -9104,7 +9104,7 @@ const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'staffDocuments'
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
   'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
   'enquiries', 'eventRegistrations', 'familyAccess', 'classTeachers', 'auditLog', 'scholarships', 'scholarshipApps', 'consentForms', 'consentResponses', 'staffProfiles',
-  'hostelRooms', 'hostelStays', 'canteenMenu', 'canteenPlans', 'bookReservations', 'workflowRules', 'questionBank', 'onlineTests', 'onlineTestKeys', 'onlineAttempts', 'pickupPeople', 'pickupLogs', 'feeReminders'];
+  'hostelRooms', 'hostelStays', 'canteenMenu', 'canteenPlans', 'bookReservations', 'workflowRules', 'approvalRequests', 'questionBank', 'onlineTests', 'onlineTestKeys', 'onlineAttempts', 'pickupPeople', 'pickupLogs', 'feeReminders'];
 
 // School data pack: every list as a CSV file inside one ZIP (stored, not compressed) built here in the browser.
 const CRC_TABLE = (() => {
@@ -9361,6 +9361,7 @@ const resetOwnerLists = () => {
   backupLog = null;
   auditItems = [];
   alertItems = [];
+  approvalItems = []; approvalsSection.hidden = true;
   for (const api of ownerLists) api.reset();
   reminderPlan = []; reminderSent = []; reminderList.replaceChildren(); reminderHistory.replaceChildren(); reminderStatus.textContent = '';
   document.querySelector('#backup-auto').textContent = '';
@@ -10225,6 +10226,7 @@ onAuthStateChanged(auth, async (user) => {
   noticeData = [];
   noticeAssignedClass = '';
   teacherNoticesSection.hidden = true;
+  document.querySelector('#teacher-requests').hidden = true;
   teacherNoticesStatus.textContent = '';
   teacherNoticesList.replaceChildren();
   portalNoticesSection.hidden = true;
@@ -10461,7 +10463,7 @@ onAuthStateChanged(auth, async (user) => {
       const isClassTeacher = myClassIds.length > 0;
       if (request !== schoolRequest) return;
       for (const id of ['my-attendance', 'leave-request', 'teacher-homework', 'teacher-timetable', 'teacher-calendar', 'teacher-cover',
-        'teacher-lessons', 'teacher-notices', 'teacher-submissions', 'teacher-assessments']) document.querySelector('#' + id).hidden = false;
+        'teacher-lessons', 'teacher-notices', 'teacher-submissions', 'teacher-assessments', 'teacher-requests']) document.querySelector('#' + id).hidden = false;
       attMarkSection.hidden = !isClassTeacher;
       teacherStudentLeaveSection.hidden = !isClassTeacher;
       teacherMaterialsSection.hidden = !teacherHomework;
@@ -10483,6 +10485,7 @@ onAuthStateChanged(auth, async (user) => {
         loadTeacherLessons(request),
         loadTeacherSubmissions(request),
         loadTeacherAssessments(request),
+        loadTeacherRequests(request, schoolRef, user),
         loadUpcomingEvents(schoolRef, teacherCalendarSection, teacherCalendarStatus, teacherCalendarList),
       ]);
       return;
@@ -10636,7 +10639,7 @@ onAuthStateChanged(auth, async (user) => {
       await Promise.allSettled([
         roster.then(() => (request === schoolRequest ? renderLeaveReview() : undefined)),
         roster.then(() => (request === schoolRequest ? loadOwnerLists(request) : undefined)),
-        loadFees(request), loadNotices(request), loadAuditLog(request), loadTimetable(request), loadOwnerHomework(request),
+        loadFees(request), loadApprovals(request), loadNotices(request), loadAuditLog(request), loadTimetable(request), loadOwnerHomework(request),
         loadCalendar(request), loadLibrary(request), loadVisitors(request), loadBehaviour(request), loadWebsite(request), loadSettings(request),
       ]);
     }
@@ -11244,4 +11247,139 @@ document.querySelector('#autorem-run').addEventListener('click', async () => {
     autoRemStatus.textContent = error?.code === 'functions/failed-precondition' ? (error.message || 'Switch it on and save first.') : error?.code === 'functions/permission-denied' ? 'Only the school owner can do this.'
       : 'Could not reach the reminder service. Check the functions are deployed.';
   }
+});
+
+
+// ---------- Batch 69 ----------
+// Approval requests (feature 156): teachers and the principal ask, the owner decides.
+const APPROVAL_KINDS = { purchase: 'Purchase', expense: 'Expense', repair: 'Repair', event: 'Event', other: 'Other' };
+const APPROVAL_STATE = { pending: 'WAITING', approved: 'APPROVED', rejected: 'REJECTED' };
+let approvalItems = [];
+const approvalsSection = document.querySelector('#approvals');
+const approvalsStatus = document.querySelector('#approvals-status');
+const approvalsList = document.querySelector('#approvals-list');
+const approvalsForm = document.querySelector('#approvals-form');
+function approvalLine(item) {
+  return '[' + APPROVAL_STATE[item.status] + '] ' + item.createdOn + ' - ' + (APPROVAL_KINDS[item.kind] ?? item.kind) + ': ' + item.title
+    + (item.amount ? ' - ' + rupees(item.amount) : '') + ' - from ' + item.requestedByName + (item.note ? ' (' + item.note + ')' : '')
+    + (item.status !== 'pending' && item.decidedOn ? ' - decided ' + item.decidedOn + (item.decisionNote ? ': ' + item.decisionNote : '') : '');
+}
+function approvalNotes() {
+  const waiting = approvalItems.filter((record) => record.data().status === 'pending').length;
+  return waiting && !viewOnly ? [waiting + ' approval request(s) waiting for your decision. Open Approval Requests.'] : [];
+}
+function approvalData(form, who) {
+  const fields = new FormData(form);
+  const title = String(fields.get('title') ?? '').trim().slice(0, 80);
+  const amount = Number.parseInt(String(fields.get('amount') ?? ''), 10);
+  const note = String(fields.get('note') ?? '').trim().slice(0, 300);
+  if (!title) return null;
+  return { kind: String(fields.get('kind')), title, ...(amount > 0 ? { amount: Math.min(amount, 100000000) } : {}), ...(note ? { note } : {}),
+    requestedBy: who.uid, requestedByName: String(who.name || 'Staff').slice(0, 60), createdOn: localToday(), status: 'pending' };
+}
+function drawApprovals() {
+  approvalsList.replaceChildren();
+  const rows = [...approvalItems].sort((a, b) => (a.data().status === 'pending' ? 0 : 1) - (b.data().status === 'pending' ? 0 : 1) || b.data().createdOn.localeCompare(a.data().createdOn)).slice(0, 60);
+  for (const record of rows) {
+    const item = record.data();
+    const buttons = [];
+    if (item.status === 'pending' && !viewOnly) {
+      for (const [label, next] of [['Approve', 'approved'], ['Reject', 'rejected']]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.addEventListener('click', async () => {
+          try {
+            const { doc, updateDoc } = firestoreTools;
+            const note = document.querySelector('#approvals-note').value.trim().slice(0, 200);
+            await updateDoc(doc(academic.schoolRef, 'approvalRequests', record.id), { status: next, decidedBy: schoolUid, decidedOn: localToday(), ...(note ? { decisionNote: note } : {}) });
+            document.querySelector('#approvals-note').value = '';
+            await loadApprovals(schoolRequest);
+          } catch (error) { approvalsStatus.textContent = 'Could not save the decision (' + (error?.code ?? 'error') + ').'; }
+        });
+        buttons.push(button, ' ');
+      }
+    }
+    listItem(approvalsList, approvalLine(item));
+    approvalsList.lastElementChild.append(...buttons);
+  }
+  const waiting = approvalItems.filter((record) => record.data().status === 'pending').length;
+  approvalsStatus.textContent = approvalItems.length ? waiting + ' waiting, ' + approvalItems.length + ' in total.' : 'No requests yet.';
+}
+async function loadApprovals(request) {
+  if (!academic) return;
+  try {
+    const saved = await academic.list('approvalRequests');
+    if (request !== schoolRequest) return;
+    approvalItems = saved.docs;
+    approvalsSection.hidden = false;
+    approvalsForm.hidden = !viewOnly;
+    document.querySelector('#approvals-notebox').hidden = viewOnly;
+    drawApprovals();
+    refreshAttention();
+  } catch {
+    if (request === schoolRequest) { approvalsSection.hidden = false; approvalsStatus.textContent = 'Could not load approval requests.'; }
+  }
+}
+approvalsForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!viewOnly || !academic) return;
+  const data = approvalData(approvalsForm, { uid: schoolUid, name: 'Principal' });
+  if (!data) { approvalsStatus.textContent = 'Write what the request is for.'; return; }
+  try {
+    const { doc, setDoc } = firestoreTools;
+    await setDoc(doc(academic.schoolRef, 'approvalRequests', newId('AR')), data);
+    approvalsForm.reset();
+    await loadApprovals(schoolRequest);
+    approvalsStatus.textContent = 'Request sent to the owner.';
+  } catch (error) { approvalsStatus.textContent = 'Could not send the request (' + (error?.code ?? 'error') + ').'; }
+});
+
+// The teacher's side: ask, and see the answer.
+const teacherRequestsForm = document.querySelector('#teacher-requests-form');
+const teacherRequestsList = document.querySelector('#teacher-requests-list');
+const teacherRequestsStatus = document.querySelector('#teacher-requests-status');
+let teacherRequestsContext = null;
+async function loadTeacherRequests(request, schoolRef, user) {
+  teacherRequestsContext = { schoolRef, uid: user.uid, name: user.displayName || (user.email ? user.email.split('@')[0] : 'Teacher') };
+  try {
+    const { collection, query, where, getDocsFromServer } = firestoreTools;
+    const found = await getDocsFromServer(query(collection(schoolRef, 'approvalRequests'), where('requestedBy', '==', user.uid)));
+    if (request !== schoolRequest) return;
+    teacherRequestsList.replaceChildren();
+    const rows = found.docs.map((record) => ({ id: record.id, data: record.data() })).sort((a, b) => b.data.createdOn.localeCompare(a.data.createdOn));
+    for (const row of rows) {
+      let withdraw;
+      if (row.data.status === 'pending') {
+        withdraw = document.createElement('button');
+        withdraw.type = 'button';
+        withdraw.textContent = 'Withdraw';
+        withdraw.addEventListener('click', async () => {
+          try {
+            const { doc, deleteDoc } = firestoreTools;
+            await deleteDoc(doc(schoolRef, 'approvalRequests', row.id));
+            await loadTeacherRequests(schoolRequest, schoolRef, user);
+          } catch { teacherRequestsStatus.textContent = 'Could not withdraw the request.'; }
+        });
+      }
+      listItem(teacherRequestsList, approvalLine(row.data), withdraw);
+    }
+    teacherRequestsStatus.textContent = rows.length ? '' : 'You have not asked for anything yet.';
+  } catch {
+    if (request === schoolRequest) teacherRequestsStatus.textContent = 'Could not load your requests.';
+  }
+}
+teacherRequestsForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const context = teacherRequestsContext;
+  if (!context) return;
+  const data = approvalData(teacherRequestsForm, { uid: context.uid, name: context.name });
+  if (!data) { teacherRequestsStatus.textContent = 'Write what the request is for.'; return; }
+  try {
+    const { doc, setDoc } = firestoreTools;
+    await setDoc(doc(context.schoolRef, 'approvalRequests', newId('AR')), data);
+    teacherRequestsForm.reset();
+    await loadTeacherRequests(schoolRequest, context.schoolRef, { uid: context.uid, displayName: context.name });
+    teacherRequestsStatus.textContent = 'Request sent to the owner.';
+  } catch (error) { teacherRequestsStatus.textContent = 'Could not send the request (' + (error?.code ?? 'error') + ').'; }
 });

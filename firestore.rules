@@ -877,6 +877,24 @@ service cloud.firestore {
         allow delete: if ownerAuth(schoolId);
       }
 
+      // Approval requests (feature 156). approvalRequests/{id}: a teacher or the principal asks the owner to approve a purchase, an expense, a
+      // repair, an event or something else. The requester creates it as pending, reads their own, and may withdraw it while pending.
+      // The owner and principal read all; only the owner decides, once, with an optional note.
+      match /approvalRequests/{docId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || resource.data.requestedBy == request.auth.uid);
+        allow create: if request.auth != null && (isActiveTeacher() || isActivePrincipal(schoolId))
+          && docId.matches('AR-[A-Za-z0-9-]{1,27}') && validApprovalRequest(request.resource.data)
+          && request.resource.data.status == 'pending'
+          && request.resource.data.requestedBy == request.auth.uid
+          && !request.resource.data.keys().hasAny(['decidedBy', 'decidedOn', 'decisionNote']);
+        allow update: if ownerAuth(schoolId) && resource.data.status == 'pending'
+          && request.resource.data.status in ['approved', 'rejected']
+          && request.resource.data.decidedBy == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy', 'decidedOn', 'decisionNote'])
+          && validApprovalRequest(request.resource.data);
+        allow delete: if ownerAuth(schoolId) || (request.auth != null && resource.data.requestedBy == request.auth.uid && resource.data.status == 'pending');
+      }
+
       // Student pickup (feature 146). pickupPeople/{id}: a person allowed to collect a student, with a 6-digit code the
       // person shows at the gate. A family adds and changes its own student's people; the school sees them all.
       // pickupLogs/{id}: one record each time a child is handed over (owner or principal), written once with the server time.
@@ -1934,6 +1952,22 @@ service cloud.firestore {
         && textLen(item.name, 1, 80)
         && item.kind == 'expense'
         && intIn(item.over, 1, 100000000);
+    }
+
+    function validApprovalRequest(item) {
+      return item.keys().hasOnly(['kind', 'title', 'amount', 'note', 'requestedBy', 'requestedByName', 'createdOn', 'status', 'decidedBy', 'decidedOn', 'decisionNote'])
+        && item.keys().hasAll(['kind', 'title', 'requestedBy', 'requestedByName', 'createdOn', 'status'])
+        && item.kind in ['purchase', 'expense', 'repair', 'event', 'other']
+        && textLen(item.title, 1, 80)
+        && (!item.keys().hasAny(['amount']) || intIn(item.amount, 0, 100000000))
+        && optText(item, 'note', 300)
+        && item.requestedBy is string
+        && textLen(item.requestedByName, 1, 60)
+        && dateText(item.createdOn)
+        && item.status in ['pending', 'approved', 'rejected']
+        && (!item.keys().hasAny(['decidedBy']) || item.decidedBy is string)
+        && (!item.keys().hasAny(['decidedOn']) || dateText(item.decidedOn))
+        && optText(item, 'decisionNote', 200);
     }
 
     function validPickupPerson(item) {

@@ -12,7 +12,7 @@ const iconFor = (text) => (ICONS.find(([re]) => re.test(text.toLowerCase())) ?? 
 // Categories for the module home screen. Each list is in the order the modules should appear; a module that is not listed
 // goes to the last group, so a new module is never lost. Keys are section ids, or a lowercase title for loose headings.
 const OWNER_CATS = [
-  ['Daily work', ['attention', 'summary', 'checklist', 'attendance-review', 'student-leave', 'notices', 'inbox', 'calendar', 'timetable', 'substitutions', 'visitors', 'pickupgate', 'attendance-report']],
+  ['Daily work', ['attention', 'approvals', 'summary', 'checklist', 'attendance-review', 'student-leave', 'notices', 'inbox', 'calendar', 'timetable', 'substitutions', 'visitors', 'pickupgate', 'attendance-report']],
   ['Students and admissions', ['qrcards', 'student-roster', 'roster', 'profile360', 'family-access', 'enquiries', 'bulk-import', 'promotion', 'cards', 'certificates', 'health', 'behaviour', 'achievements', 'alumni', 'hostelrooms', 'hostelstays', 'canteenmenu', 'canteenplans', 'pickuppeople']],
   ['Classes and exams', ['ebooks', 'academic-setup', 'class-teachers', 'exam-setup', 'marks-review', 'report-card', 'grading', 'homework-owner', 'lessons-owner', 'syllabus', 'onlinetests', 'questionbank', 'riskboard', 'library', 'bookreservations', 'diary']],
   ['Fees and accounts', ['fees', 'defaulters', 'feereminders', 'concessions', 'scholarships', 'scholarshipapps', 'expenses', 'ledger', 'finance', 'sales', 'workflowrules', 'reports']],
@@ -23,7 +23,7 @@ const OWNER_CATS = [
 ];
 const TEACHER_CATS = [
   ['Teaching', ['attendance-mark', 'exam-marks', 'teacher-homework', 'teacher-assessments', 'teacher-submissions', 'teacher-lessons', 'teacher-materials', 'teacher-studentleave']],
-  ['My work', ['checkin', 'dispute', 'my-attendance', 'leave-request', 'my-pay']],
+  ['My work', ['checkin', 'dispute', 'my-attendance', 'leave-request', 'teacher-requests', 'my-pay']],
   ['School', ['teacher-timetable', 'teacher-cover', 'teacher-calendar', 'teacher-notices']],
 ];
 const PORTAL_CATS = [
@@ -174,6 +174,19 @@ function prepare(dash, label) {
 
 const LABELS = new Map([[owner, 'Your school'], [teacher, 'Your classroom'], [portal, 'Your family portal'], [platform, 'Platform']]);
 for (const dash of dashes) prepare(dash, LABELS.get(dash));
+
+// A shortcut for a platform administrator: the Platform panel sits below the school's own modules.
+if (platform && owner) {
+  const jump = document.createElement('button');
+  jump.type = 'button';
+  jump.textContent = 'Platform administration ↓';
+  jump.hidden = true;
+  (owner.querySelector('.launch-head') ?? owner).append(jump);
+  const sync = () => { jump.hidden = platform.hidden; };
+  new MutationObserver(sync).observe(platform, { attributes: true, attributeFilter: ['hidden'] });
+  sync();
+  jump.addEventListener('click', () => platform.scrollIntoView({ behavior: 'smooth' }));
+}
 
 function refreshShell() {
   const active = dashes.some((d) => !d.hidden);

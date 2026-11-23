@@ -1223,6 +1223,20 @@
         </form>
         <ul id="workflowrules-list"></ul>
       </section>
+      <section id="approvals" aria-labelledby="approvals-title" hidden>
+        <h3 id="approvals-title">Approval Requests</h3>
+        <p>Teachers and the principal ask here for a purchase, an expense, a repair or an event. The owner approves or rejects each request, with an optional note, and the person sees the answer.</p>
+        <p id="approvals-status" role="status"></p>
+        <form id="approvals-form" hidden>
+          <p><label>What is it for <select name="kind"><option value="purchase">Purchase</option><option value="expense">Expense</option><option value="repair">Repair</option><option value="event">Event</option><option value="other">Other</option></select></label></p>
+          <p><label>Request <input name="title" type="text" maxlength="80" required></label></p>
+          <p><label>Amount in Rs (optional) <input name="amount" type="number" min="0" max="100000000" step="1"></label></p>
+          <p><label>Details (optional) <input name="note" type="text" maxlength="300"></label></p>
+          <button type="submit">Send request</button>
+        </form>
+        <p id="approvals-notebox"><label>Note with my decision (optional) <input id="approvals-note" type="text" maxlength="200"></label></p>
+        <ul id="approvals-list"></ul>
+      </section>
       <section id="questionbank" aria-labelledby="questionbank-title" hidden>
         <h3 id="questionbank-title">Question Bank</h3>
         <p>Multiple-choice questions you can reuse in online tests. Fill at least two options.</p>
@@ -1635,6 +1649,19 @@
           <thead><tr><th>From</th><th>To</th><th>Reason</th><th>Status</th></tr></thead>
           <tbody id="leave-request-body"></tbody>
         </table>
+      </section>
+      <section id="teacher-requests" aria-labelledby="teacher-requests-title" hidden>
+        <h3 id="teacher-requests-title">Ask for Approval</h3>
+        <p>Ask the owner to approve a purchase, an expense, a repair or an event, and see the answer here.</p>
+        <p id="teacher-requests-status" role="status"></p>
+        <form id="teacher-requests-form">
+          <p><label>What is it for <select name="kind"><option value="purchase">Purchase</option><option value="expense">Expense</option><option value="repair">Repair</option><option value="event">Event</option><option value="other">Other</option></select></label></p>
+          <p><label>Request <input name="title" type="text" maxlength="80" required></label></p>
+          <p><label>Amount in Rs (optional) <input name="amount" type="number" min="0" max="100000000" step="1"></label></p>
+          <p><label>Details (optional) <input name="note" type="text" maxlength="300"></label></p>
+          <button type="submit">Send request</button>
+        </form>
+        <ul id="teacher-requests-list"></ul>
       </section>
       <section id="teacher-homework" aria-labelledby="teacher-homework-title" hidden>
         <h3 id="teacher-homework-title">Homework</h3>
@@ -2096,14 +2123,14 @@
       box.focus();
     });
     try {
-      await import('./ui.mjs?v=batch-64');
+      await import('./ui.mjs?v=batch-69');
       await import('./i18n.mjs?v=batch-64');
     } catch (error) {
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-68');
-      await import('./platform.mjs?v=batch-68');
+      await import('./sign-in.mjs?v=batch-69');
+      await import('./platform.mjs?v=batch-69');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
