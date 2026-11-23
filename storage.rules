@@ -6,11 +6,14 @@ service firebase.storage {
     function member(schoolId) {
       return firestore.get(/databases/(default)/documents/schools/$(schoolId)/members/$(request.auth.uid)).data;
     }
+    function hasMember(schoolId) {
+      return firestore.exists(/databases/(default)/documents/schools/$(schoolId)/members/$(request.auth.uid));
+    }
     function isOwner(schoolId) {
-      return request.auth != null && member(schoolId).active == true && member(schoolId).role == 'owner';
+      return request.auth != null && hasMember(schoolId) && member(schoolId).active == true && member(schoolId).role == 'owner';
     }
     function isViewer(schoolId) {
-      return request.auth != null && member(schoolId).active == true && member(schoolId).role in ['owner', 'principal'];
+      return request.auth != null && hasMember(schoolId) && member(schoolId).active == true && member(schoolId).role in ['owner', 'principal'];
     }
 
     // Staff document vault (feature 141): one PDF, JPG or PNG of at most 5 MB per document. A file is written once and never
@@ -21,6 +24,24 @@ service firebase.storage {
         && docId.matches('SD-[A-Za-z0-9-]{1,30}')
         && request.resource.size > 0 && request.resource.size <= 5 * 1024 * 1024
         && request.resource.contentType.matches('application/pdf|image/jpeg|image/png');
+      allow update: if false;
+      allow delete: if isOwner(schoolId);
+    }
+
+    // E-library (feature 136): one PDF of at most 20 MB per book. The owner adds and removes; owner, principal, teachers and
+    // families with active access can read.
+    function canReadLibrary(schoolId) {
+      return request.auth != null && (isViewer(schoolId)
+        || (hasMember(schoolId) && member(schoolId).active == true && member(schoolId).role == 'teacher')
+        || (firestore.exists(/databases/(default)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid))
+          && firestore.get(/databases/(default)/documents/schools/$(schoolId)/familyAccess/$(request.auth.uid)).data.active == true));
+    }
+    match /schools/{schoolId}/ebooks/{docId} {
+      allow read: if canReadLibrary(schoolId);
+      allow create: if isOwner(schoolId)
+        && docId.matches('EB-[A-Za-z0-9-]{1,30}')
+        && request.resource.size > 0 && request.resource.size <= 20 * 1024 * 1024
+        && request.resource.contentType == 'application/pdf';
       allow update: if false;
       allow delete: if isOwner(schoolId);
     }

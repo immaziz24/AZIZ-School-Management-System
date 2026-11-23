@@ -246,7 +246,7 @@ async function recountUsage() {
   const [students, staff, classes] = await Promise.all(['students', 'staff', 'classes'].map((n) => getDocs(collection(schoolRef, n))));
   // Storage counts the hand-kept records and the files uploaded to the staff document vault.
   let storageKb = 0;
-  for (const name of ['storageRecords', 'staffDocuments']) {
+  for (const name of ['storageRecords', 'staffDocuments', 'eBooks']) {
     try { storageKb += (await getDocs(collection(schoolRef, name))).docs.reduce((total, d) => total + (d.data().sizeKb ?? 0), 0); } catch { /* Not readable: counts as nothing. */ }
   }
   const storageMb = Math.ceil(storageKb / 1024);

@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./sign-in.css?v=batch-66a">
+  <link rel="stylesheet" href="./sign-in.css?v=batch-67a">
 </head>
 <body>
   <main>
@@ -456,6 +456,23 @@
           <p><label>Days to keep it <input name="days" type="number" min="1" max="90" step="1" value="14" required></label></p>
           <button type="submit">Issue book</button>
         </form>
+        <h4>Scan desk</h4>
+        <p>Each book has its own QR label, and each student has a QR card (Scan Attendance page). Scan a student card, then a book, to issue it for 14 days. Scan a book that is out, with no student first, to return it. A USB scanner works too: click the box and scan.</p>
+        <p id="libscan-status" role="status"></p>
+        <p id="libscan-who" role="status"></p>
+        <p><label>Scan or type a code <input id="libscan-code" type="text" maxlength="40" autocomplete="off" spellcheck="false"></label>
+          <button id="libscan-go" type="button">Use code</button>
+          <button id="libscan-camera" type="button">Use camera</button>
+          <button id="libscan-clear" type="button">Clear student</button></p>
+        <video id="libscan-video" playsinline muted hidden style="width:100%;max-width:320px;border-radius:8px"></video>
+        <p><button id="book-labels" type="button">Print book QR labels</button></p>
+        <h4>Stock check</h4>
+        <p>Walk the shelves and scan every book. Then finish the check to see which books are missing or extra.</p>
+        <p id="libaudit-status" role="status"></p>
+        <p><button id="libaudit-start" type="button">Start stock check</button>
+          <button id="libaudit-finish" type="button" hidden>Finish and show result</button>
+          <button id="libaudit-csv" type="button" hidden>Download result (CSV)</button></p>
+        <ul id="libaudit-list"></ul>
         <h4>Books</h4>
         <ul id="book-list"></ul>
         <h4>Books out</h4>
@@ -924,6 +941,25 @@
           <button type="submit">Add ticket</button>
         </form>
         <ul id="tickets-list"></ul>
+      </section>
+      <section id="qrcards" aria-labelledby="qrcards-title" hidden>
+        <h3 id="qrcards-title">Student QR Cards</h3>
+        <p>Print a QR card for every student in a class. Class teachers scan the card in Daily Attendance to mark a student present, and the library desk scans it to issue books. Cut the cards out and hand them to the students.</p>
+        <p id="qrcards-status" role="status"></p>
+        <p><label>Class <select id="qrcards-class"></select></label> <button id="qrcards-print" type="button">Print QR cards</button></p>
+      </section>
+      <section id="ebooks" aria-labelledby="ebooks-title" hidden>
+        <h3 id="ebooks-title">E-Library</h3>
+        <p>Upload e-books and study PDFs (up to 20 MB each) to your school's private storage. Students, parents and teachers read them from their own screens. Files count against your plan's storage.</p>
+        <p id="ebooks-status" role="status"></p>
+        <form id="ebooks-form">
+          <p><label>Title <input name="title" type="text" maxlength="120" required></label></p>
+          <p><label>Author (optional) <input name="author" type="text" maxlength="80"></label></p>
+          <p><label>Subject (optional) <input name="subject" type="text" maxlength="60"></label></p>
+          <p><label>PDF file (up to 20 MB) <input name="file" type="file" accept=".pdf,application/pdf" required></label></p>
+          <button type="submit">Upload e-book</button>
+        </form>
+        <ul id="ebooks-list"></ul>
       </section>
       <section id="staffdocs" aria-labelledby="staffdocs-title" hidden>
         <h3 id="staffdocs-title">Staff Document Vault</h3>
@@ -1486,6 +1522,17 @@
         <p id="attendance-mark-status" role="status"></p>
         <p><label>Class <select id="attendance-class"></select></label></p>
         <p><label>Date <input id="attendance-date" type="date"></label></p>
+        <details id="attscan">
+          <summary>Scan student QR cards</summary>
+          <p>Scan a student's QR card with the camera or a USB scanner. The student is marked in the table below. Then press Save attendance. Cards are printed by the school owner.</p>
+          <p id="attscan-status" role="status"></p>
+          <p><label>Mark scanned students as <select id="attscan-mode"><option value="present">Present</option><option value="late">Late</option></select></label>
+            <label>Scan or type a code <input id="attscan-code" type="text" maxlength="40" autocomplete="off" spellcheck="false"></label>
+            <button id="attscan-go" type="button">Use code</button>
+            <button id="attscan-camera" type="button">Use camera</button></p>
+          <video id="attscan-video" playsinline muted hidden style="width:100%;max-width:320px;border-radius:8px"></video>
+          <ul id="attscan-list"></ul>
+        </details>
         <form id="attendance-form">
           <table>
             <thead><tr><th>Section</th><th>Roll</th><th>Student</th><th>Attendance</th></tr></thead>
@@ -1843,6 +1890,12 @@
         <h3 id="portal-materials-title">Study Materials</h3>
         <p id="portal-materials-status" role="status"></p>
         <ul id="portal-materials-list"></ul>
+      </section>
+      <section id="portal-ebooks" aria-labelledby="portal-ebooks-title" hidden>
+        <h3 id="portal-ebooks-title">E-Library</h3>
+        <p id="portal-ebooks-status" role="status"></p>
+        <p><label>Search <input id="portal-ebooks-search" type="search" maxlength="60" autocomplete="off"></label></p>
+        <ul id="portal-ebooks-list"></ul>
       </section>
       <section id="portal-leave" aria-labelledby="portal-leave-title" hidden>
         <h3 id="portal-leave-title">Leave Request</h3>

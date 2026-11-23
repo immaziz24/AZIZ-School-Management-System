@@ -1185,6 +1185,7 @@ async function loadPortal(tools, request) {
     loadPortalAttendance(tools, request, studentId);
     loadPortalFees(tools, request, studentId);
     loadPortalNotices(tools, request, studentId);
+    loadPortalEbooks(tools, request);
     loadPortalSchoolwork(tools, request, studentId);
     loadPortalLife(tools, request, studentId);
     loadPortalCommunity(tools, request, studentId);
@@ -3365,6 +3366,7 @@ const portalNoticesSection = document.querySelector('#portal-notices');
 const portalNoticesStatus = document.querySelector('#portal-notices-status');
 const portalNoticesList = document.querySelector('#portal-notices-list');
 let noticeData = [];
+let noticeAckCount = new Map();
 let noticeAssignedClass = '';
 
 const newestFirst = (a, b) => b.data.createdAt.localeCompare(a.data.createdAt) || b.id.localeCompare(a.id);
@@ -3397,7 +3399,7 @@ function renderNotices() {
         academic.busy = false;
       }
     });
-    listItem(noticeList, '[' + audienceLabel(item.data) + '] ' + noticeText(item.data), button);
+    listItem(noticeList, '[' + audienceLabel(item.data) + '] ' + noticeText(item.data) + (noticeAckCount.get(item.id) ? ' - confirmed by ' + noticeAckCount.get(item.id) + ' famil' + (noticeAckCount.get(item.id) === 1 ? 'y' : 'ies') : ''), button);
   }
   if (!noticeData.length) noticesStatus.textContent = 'No notices yet.';
 }
@@ -3407,6 +3409,8 @@ async function loadNotices(request) {
     const saved = await academic.list('notices');
     if (request !== schoolRequest) return;
     noticeData = saved.docs.map((record) => ({ id: record.id, data: record.data() }));
+    noticeAckCount = new Map();
+    try { for (const record of (await academic.list('noticeAcks')).docs) noticeAckCount.set(record.data().noticeId, (noticeAckCount.get(record.data().noticeId) ?? 0) + 1); } catch { /* No counts shown. */ }
     noticesSection.hidden = false;
     noticesStatus.textContent = '';
     renderNotices();
@@ -3501,9 +3505,42 @@ async function loadPortalNotices(tools, request, studentId) {
     if (request !== schoolRequest) return;
     showNotices(portalNoticesList, items);
     portalNoticesStatus.textContent = items.length ? '' : 'No notices yet.';
+    await addNoticeAcks(tools, studentId, items);
   } catch {
     if (request === schoolRequest) portalNoticesStatus.textContent = 'Could not load notices. Try again.';
   }
+}
+
+// Acknowledgements (feature 150): the family taps "Got it" once on a notice; the school sees how many have.
+async function addNoticeAcks(tools, studentId, items) {
+  const { schoolRef, collection, getDocsFromServer, query, where } = tools;
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
+  let done;
+  try {
+    done = new Set((await getDocsFromServer(query(collection(schoolRef, 'noticeAcks'), where('by', '==', uid)))).docs.map((record) => record.id));
+  } catch { return; }
+  [...portalNoticesList.children].forEach((row, index) => {
+    const item = items[index];
+    if (!item) return;
+    const ackId = item.id + '_' + studentId;
+    if (done.has(ackId)) { row.append(' (You confirmed you have seen this.)'); return; }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Got it';
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const { doc, setDoc } = firestoreTools;
+        await setDoc(doc(schoolRef, 'noticeAcks', ackId), { noticeId: item.id, studentId, studentName: portalHome.name || studentId, by: uid, on: localToday() });
+        button.replaceWith(document.createTextNode('(You confirmed you have seen this.)'));
+      } catch {
+        button.disabled = false;
+        portalNoticesStatus.textContent = 'Could not save. Check your connection and try again.';
+      }
+    });
+    row.append(' ', button);
+  });
 }
 
 // Activity log. Read-only list of the owner's recent changes, newest first.
@@ -4654,6 +4691,341 @@ loanForm.addEventListener('submit', (event) => {
     'Book issued. Due ' + addDays(issuedOn, days) + '.');
 });
 
+
+// ---- Batch 67: QR codes for the library (135) and attendance (129), the e-library (136) and notice acknowledgements (150) ----
+// A student card carries AZSTU:<admission number>; a book label carries AZBK:<book id>. Cameras read them with BarcodeDetector where the
+// browser has it; a USB scanner types the code into the box and presses Enter, and a code can also be typed by hand.
+function qrScanner(video, onCode, onState) {
+  let live = false;
+  let stream = null;
+  let lastCode = '';
+  let lastAt = 0;
+  const stop = () => {
+    live = false;
+    if (stream) for (const track of stream.getTracks()) track.stop();
+    stream = null;
+    video.srcObject = null;
+    video.hidden = true;
+    onState(false);
+  };
+  const start = async () => {
+    if (live) { stop(); return ''; }
+    if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) return 'This browser cannot scan with the camera. Use a USB scanner or type the code.';
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      live = true;
+      video.srcObject = stream;
+      video.hidden = false;
+      await video.play();
+      onState(true);
+      (async () => {
+        while (live) {
+          const codes = await detector.detect(video).catch(() => []);
+          for (const item of codes) {
+            const value = String(item.rawValue ?? '');
+            if (/^AZ(STU|BK):/.test(value) && (value !== lastCode || Date.now() - lastAt > 4000)) {
+              lastCode = value;
+              lastAt = Date.now();
+              onCode(value);
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+      })();
+      return '';
+    } catch {
+      stop();
+      return 'Could not use the camera. Allow camera access for this site, or type the code.';
+    }
+  };
+  return { start, stop };
+}
+// Opens a clean page of QR labels and starts printing. Text is placed with textContent only.
+async function printQrSheet(title, items, statusEl) {
+  const win = window.open('', '_blank');
+  if (!win) { statusEl.textContent = 'Your browser blocked the print window. Allow pop-ups for this site and try again.'; return; }
+  const { drawQr } = await import('./qr.mjs?v=batch-64');
+  const sheet = win.document;
+  sheet.title = title;
+  const style = sheet.createElement('style');
+  style.textContent = 'body{font-family:Arial,sans-serif;margin:12px}h1{font-size:16px}.grid{display:flex;flex-wrap:wrap;gap:8px}'
+    + '.tag{width:190px;border:1px dashed #666;padding:8px;text-align:center;break-inside:avoid}.tag img{width:150px;height:150px}.tag b{display:block;font-size:13px}.tag span{font-size:11px;color:#333}';
+  sheet.head.append(style);
+  const heading = sheet.createElement('h1');
+  heading.textContent = title;
+  const grid = sheet.createElement('div');
+  grid.className = 'grid';
+  for (const item of items) {
+    const canvas = document.createElement('canvas');
+    drawQr(canvas, item.code, 150);
+    const tag = sheet.createElement('div');
+    tag.className = 'tag';
+    const image = sheet.createElement('img');
+    image.src = canvas.toDataURL('image/png');
+    image.alt = 'QR code';
+    const first = sheet.createElement('b');
+    first.textContent = item.first;
+    const second = sheet.createElement('span');
+    second.textContent = item.second ?? '';
+    tag.append(image, first, second);
+    grid.append(tag);
+  }
+  sheet.body.append(heading, grid);
+  setTimeout(() => win.print(), 500);
+}
+const parseScan = (raw, prefix) => { const value = String(raw ?? '').trim(); const match = new RegExp('^AZ' + prefix + ':(.+)$').exec(value); return match ? match[1] : value; };
+
+// -- Library scan desk, book labels and stock check (135) --
+const libscanStatus = document.querySelector('#libscan-status');
+const libscanWho = document.querySelector('#libscan-who');
+const libscanCode = document.querySelector('#libscan-code');
+const libauditStatus = document.querySelector('#libaudit-status');
+const libauditList = document.querySelector('#libaudit-list');
+let libScanStudent = null;
+let libAudit = null;
+const libauditRows = () => [...libBooks].sort((a, b) => a.data().title.localeCompare(b.data().title)).map((record) => {
+  const out = libLoans.filter((loan) => loan.data().bookId === record.id && !loan.data().returnedOn).length;
+  const expected = record.data().copies - out;
+  const scanned = libAudit.get(record.id) ?? 0;
+  return { title: record.data().title, expected, scanned, result: scanned === expected ? 'OK' : scanned < expected ? (expected - scanned) + ' missing' : (scanned - expected) + ' extra' };
+});
+function showLibScanWho() {
+  libscanWho.textContent = libScanStudent ? 'Student: ' + libScanStudent.data().name + ' (' + libScanStudent.id + '). Now scan the book to issue.' : 'No student chosen. Scanning a book that is out returns it.';
+}
+async function handleLibraryCode(raw) {
+  const value = String(raw ?? '').trim();
+  if (!value) return;
+  const wantsStudent = /^AZSTU:/.test(value);
+  const wantsBook = /^AZBK:/.test(value);
+  const student = !wantsBook && studentRecords.find((record) => record.id === parseScan(value, 'STU'));
+  const book = !wantsStudent && libBooks.find((record) => record.id === parseScan(value, 'BK'));
+  if (student) {
+    if (student.data().status !== 'active') { libscanStatus.textContent = student.data().name + ' is not an active student.'; return; }
+    libScanStudent = student;
+    showLibScanWho();
+    libscanStatus.textContent = 'Student chosen.';
+    return;
+  }
+  if (!book) { libscanStatus.textContent = 'This code is not a student card or a book label of this school.'; return; }
+  if (libAudit) {
+    libAudit.set(book.id, (libAudit.get(book.id) ?? 0) + 1);
+    libscanStatus.textContent = 'Counted: ' + book.data().title + ' (' + libAudit.get(book.id) + ').';
+    libauditStatus.textContent = 'Stock check running: ' + [...libAudit.values()].reduce((sum, count) => sum + count, 0) + ' book(s) scanned.';
+    return;
+  }
+  if (!academic || academic.busy) { libscanStatus.textContent = 'Wait a moment and scan again.'; return; }
+  const request = schoolRequest;
+  const out = libLoans.filter((record) => record.data().bookId === book.id && !record.data().returnedOn).sort((a, b) => a.data().dueOn.localeCompare(b.data().dueOn));
+  academic.busy = true;
+  try {
+    if (libScanStudent) {
+      if (out.length >= book.data().copies) { libscanStatus.textContent = 'All copies of "' + book.data().title + '" are out.'; return; }
+      const issuedOn = localToday();
+      await academic.save('loans', newId('LN'), { bookId: book.id, studentId: libScanStudent.id, issuedOn, dueOn: addDays(issuedOn, 14), issuedBy: schoolUid });
+      libscanStatus.textContent = 'Issued "' + book.data().title + '" to ' + libScanStudent.data().name + '. Due ' + addDays(issuedOn, 14) + '.';
+      libScanStudent = null;
+    } else if (out.length) {
+      await academic.save('loans', out[0].id, { ...out[0].data(), returnedOn: localToday() });
+      libscanStatus.textContent = 'Returned "' + book.data().title + '" from ' + nameOfStudent(out[0].data().studentId) + '.';
+    } else {
+      libscanStatus.textContent = '"' + book.data().title + '" is not out. Scan a student card first to issue it.';
+    }
+  } catch {
+    libscanStatus.textContent = 'That did not work. Check the details and try again.';
+  } finally {
+    academic.busy = false;
+  }
+  if (request === schoolRequest) { await loadLibrary(request); showLibScanWho(); }
+}
+const libCamera = qrScanner(document.querySelector('#libscan-video'), handleLibraryCode, (on) => { document.querySelector('#libscan-camera').textContent = on ? 'Stop camera' : 'Use camera'; });
+document.querySelector('#libscan-camera').addEventListener('click', async () => { libscanStatus.textContent = (await libCamera.start()) || libscanStatus.textContent; });
+document.querySelector('#libscan-go').addEventListener('click', () => { const value = libscanCode.value; libscanCode.value = ''; handleLibraryCode(value); });
+libscanCode.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); const value = libscanCode.value; libscanCode.value = ''; handleLibraryCode(value); } });
+document.querySelector('#libscan-clear').addEventListener('click', () => { libScanStudent = null; showLibScanWho(); libscanStatus.textContent = ''; });
+document.querySelector('#book-labels').addEventListener('click', () => {
+  if (!libBooks.length) { libraryStatus.textContent = 'Add books first.'; return; }
+  printQrSheet('Book QR labels', [...libBooks].sort((a, b) => a.data().title.localeCompare(b.data().title)).map((record) => ({ code: 'AZBK:' + record.id, first: record.data().title.slice(0, 40), second: record.data().author ?? '' })), libraryStatus);
+});
+document.querySelector('#libaudit-start').addEventListener('click', () => {
+  libAudit = new Map();
+  libauditList.replaceChildren();
+  libauditStatus.textContent = 'Stock check running. Scan every book on the shelves.';
+  document.querySelector('#libaudit-finish').hidden = false;
+  document.querySelector('#libaudit-csv').hidden = true;
+});
+document.querySelector('#libaudit-finish').addEventListener('click', () => {
+  if (!libAudit) return;
+  const rows = libauditRows();
+  libauditList.replaceChildren();
+  for (const row of rows) listItem(libauditList, row.title + ' - should be on shelf ' + row.expected + ', scanned ' + row.scanned + ' - ' + row.result);
+  const bad = rows.filter((row) => row.result !== 'OK').length;
+  libauditStatus.textContent = 'Stock check done: ' + (bad ? bad + ' title(s) do not match.' : 'every title matches.');
+  document.querySelector('#libaudit-finish').hidden = true;
+  document.querySelector('#libaudit-csv').hidden = false;
+  libAuditDone = rows;
+  libAudit = null;
+});
+let libAuditDone = [];
+document.querySelector('#libaudit-csv').addEventListener('click', () => {
+  downloadCsv('library-stock-check', [['Title', 'Should be on shelf', 'Scanned', 'Result'], ...libAuditDone.map((row) => [row.title, row.expected, row.scanned, row.result])]);
+});
+
+// -- Student QR cards (owner) and scanning in Daily Attendance (class teacher) (129) --
+const qrcardsSection = document.querySelector('#qrcards');
+const qrcardsClass = document.querySelector('#qrcards-class');
+const qrcardsStatus = document.querySelector('#qrcards-status');
+qrcardsSection.addEventListener('mod-open', () => { fillSelect(qrcardsClass, [...examData.classes].sort(byClassOrder), (item) => item.name); });
+document.querySelector('#qrcards-print').addEventListener('click', () => {
+  const year = activeYearRecord();
+  if (!year) { qrcardsStatus.textContent = 'Activate an academic year first.'; return; }
+  const ids = new Set(placementData.enrollments.filter((record) => record.data().yearId === year.id && record.data().classId === qrcardsClass.value).map((record) => record.data().studentId));
+  const people = studentRecords.filter((record) => ids.has(record.id) && record.data().status === 'active').sort(byStudentName);
+  if (!people.length) { qrcardsStatus.textContent = 'No active students in this class this year.'; return; }
+  const school = document.querySelector('#school-name').textContent.trim() || 'School';
+  printQrSheet(school + ' - student QR cards - ' + nameOfClass(qrcardsClass.value), people.map((record) => ({
+    code: 'AZSTU:' + record.id, first: record.data().name, second: nameOfClass(qrcardsClass.value) + ' - Adm ' + record.data().admissionNo })), qrcardsStatus);
+});
+const attscanStatus = document.querySelector('#attscan-status');
+const attscanCode = document.querySelector('#attscan-code');
+const attscanList = document.querySelector('#attscan-list');
+function handleAttendanceCode(raw) {
+  const id = parseScan(raw, 'STU');
+  if (!id) return;
+  const select = attSelects().find((item) => item.dataset.student === id);
+  if (!select) { attscanStatus.textContent = 'This student is not in the class and date shown below.'; return; }
+  const name = select.closest('tr')?.cells[2]?.textContent ?? id;
+  if (select.dataset.original !== '' && select.dataset.original !== select.value) { attscanStatus.textContent = name + ' was already marked ' + select.dataset.original + '. Left as it is.'; return; }
+  if (select.dataset.original !== '') { attscanStatus.textContent = name + ' is already saved as ' + select.dataset.original + '.'; return; }
+  const mode = document.querySelector('#attscan-mode').value;
+  select.value = mode;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  updateAttendanceCounts();
+  listItem(attscanList, name + ' - ' + mode);
+  attscanStatus.textContent = name + ' marked ' + mode + '. Press Save attendance when you are done.';
+}
+const attCamera = qrScanner(document.querySelector('#attscan-video'), handleAttendanceCode, (on) => { document.querySelector('#attscan-camera').textContent = on ? 'Stop camera' : 'Use camera'; });
+document.querySelector('#attscan-camera').addEventListener('click', async () => { attscanStatus.textContent = (await attCamera.start()) || attscanStatus.textContent; });
+document.querySelector('#attscan-go').addEventListener('click', () => { const value = attscanCode.value; attscanCode.value = ''; handleAttendanceCode(value); });
+attscanCode.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); const value = attscanCode.value; attscanCode.value = ''; handleAttendanceCode(value); } });
+document.querySelector('#attendance-class').addEventListener('change', () => { attscanList.replaceChildren(); });
+
+// -- E-library (136): the owner uploads PDFs, everyone reads them --
+let ebookItems = [];
+const EBOOK_MAX_KB = 20480;
+const ebooksSection = document.querySelector('#ebooks');
+const ebooksStatus = document.querySelector('#ebooks-status');
+const ebooksForm = document.querySelector('#ebooks-form');
+const ebooksList = document.querySelector('#ebooks-list');
+async function ebookUrl(id) {
+  const { getStorage, ref, getDownloadURL } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js');
+  return getDownloadURL(ref(getStorage(app), 'schools/' + SCHOOL_ID + '/ebooks/' + id));
+}
+async function openEbook(id, statusEl) {
+  statusEl.textContent = 'Opening.';
+  try {
+    const url = await ebookUrl(id);
+    statusEl.textContent = window.open(url, '_blank', 'noopener') ? '' : 'Your browser blocked the new window. Allow pop-ups for this site and try again.';
+  } catch { statusEl.textContent = 'Could not open the book.'; }
+}
+const ebookLine = (item) => item.title + (item.author ? ' - ' + item.author : '') + (item.subject ? ' (' + item.subject + ')' : '') + ' - ' + Math.round(item.sizeKb / 102.4) / 10 + ' MB';
+function drawEbooks() {
+  ebooksList.replaceChildren();
+  if (!ebookItems.length) { listItem(ebooksList, 'No e-books yet.'); return; }
+  for (const record of [...ebookItems].sort((a, b) => a.data().title.localeCompare(b.data().title))) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Open';
+    open.addEventListener('click', () => openEbook(record.id, ebooksStatus));
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Delete';
+    remove.addEventListener('click', async () => {
+      if (!window.confirm('Delete "' + record.data().title + '"? The file is removed for good.')) return;
+      try {
+        await academic.ebookDrop(record.id).catch((error) => { if (error?.code !== 'storage/object-not-found') throw error; });
+        await academic.remove('eBooks', record.id);
+        ebookItems = ebookItems.filter((entry) => entry.id !== record.id);
+        ebooksStatus.textContent = 'E-book deleted.';
+        drawEbooks();
+        if (!document.querySelector('#storage').hidden) lists.storage.render();
+      } catch { ebooksStatus.textContent = 'Could not delete the e-book.'; }
+    });
+    listItem(ebooksList, ebookLine(record.data()), open);
+    ebooksList.lastElementChild.append(' ', remove);
+  }
+}
+async function ebooksLoad() {
+  if (!academic) return;
+  try {
+    ebookItems = (await academic.list('eBooks')).docs;
+    ebooksStatus.textContent = '';
+  } catch { ebooksStatus.textContent = 'Could not load the e-books. Try again.'; }
+  drawEbooks();
+  if (!document.querySelector('#storage').hidden) lists.storage.render();
+}
+ebooksSection.addEventListener('mod-open', ebooksLoad);
+ebooksForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy) return;
+  const fields = new FormData(ebooksForm);
+  const file = ebooksForm.elements.namedItem('file').files[0];
+  if (!file || !/\.pdf$/i.test(file.name)) { ebooksStatus.textContent = 'Choose a PDF file.'; return; }
+  const sizeKb = Math.max(1, Math.ceil(file.size / 1024));
+  if (file.size === 0 || sizeKb > EBOOK_MAX_KB) { ebooksStatus.textContent = 'The file must be between 1 byte and 20 MB.'; return; }
+  if (storagePlanMb && (vaultKb() + lists.storage.items.reduce((sum, record) => sum + record.data().sizeKb, 0) + sizeKb) / 1024 > storagePlanMb) {
+    ebooksStatus.textContent = 'Your plan storage is full (' + storagePlanMb + ' MB). Delete a file or ask for a larger plan.';
+    return;
+  }
+  const id = newId('EB');
+  const data = { title: text(fields, 'title'), fileName: file.name.slice(-120), sizeKb, uploadedOn: localToday(), by: academic.uid, ...optional(fields, 'author'), ...optional(fields, 'subject') };
+  academic.busy = true;
+  ebooksStatus.textContent = 'Uploading.';
+  try {
+    await academic.ebookPut(id, file);
+    try { await academic.save('eBooks', id, data); } catch (error) { await academic.ebookDrop(id).catch(() => {}); throw error; }
+    ebookItems = [...ebookItems, { id, data: () => data }];
+    ebooksForm.reset();
+    ebooksStatus.textContent = 'E-book uploaded.';
+    drawEbooks();
+    if (!document.querySelector('#storage').hidden) lists.storage.render();
+  } catch (error) {
+    ebooksStatus.textContent = error?.code === 'permission-denied' || error?.code === 'storage/unauthorized'
+      ? 'Not allowed. Your plan storage may be full.' : 'Could not upload. Check your connection and try again.';
+  } finally { academic.busy = false; }
+});
+// Families (and teachers) read the e-library from their own screen.
+const portalEbooksSection = document.querySelector('#portal-ebooks');
+const portalEbooksStatus = document.querySelector('#portal-ebooks-status');
+const portalEbooksList = document.querySelector('#portal-ebooks-list');
+const portalEbooksSearch = document.querySelector('#portal-ebooks-search');
+let portalEbookItems = [];
+function drawPortalEbooks() {
+  const needle = portalEbooksSearch.value.trim().toLowerCase();
+  portalEbooksList.replaceChildren();
+  const shown = portalEbookItems.filter((record) => !needle || ebookLine(record.data()).toLowerCase().includes(needle)).sort((a, b) => a.data().title.localeCompare(b.data().title));
+  if (!shown.length) { listItem(portalEbooksList, portalEbookItems.length ? 'No e-books match.' : 'No e-books yet.'); return; }
+  for (const record of shown) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Read';
+    open.addEventListener('click', () => openEbook(record.id, portalEbooksStatus));
+    listItem(portalEbooksList, ebookLine(record.data()), open);
+  }
+}
+portalEbooksSearch.addEventListener('input', drawPortalEbooks);
+async function loadPortalEbooks(tools, request) {
+  portalEbooksSection.hidden = false;
+  portalEbooksStatus.textContent = 'Loading.';
+  try {
+    const found = await tools.getDocsFromServer(tools.collection(tools.schoolRef, 'eBooks'));
+    if (request !== schoolRequest) return;
+    portalEbookItems = found.docs;
+    portalEbooksStatus.textContent = '';
+    drawPortalEbooks();
+  } catch { if (request === schoolRequest) portalEbooksStatus.textContent = 'Could not load the e-library. Try again.'; }
+}
+
 const visitorsSection = document.querySelector('#visitors');
 const visitorsStatus = document.querySelector('#visitors-status');
 const visitorForm = document.querySelector('#visitor-form');
@@ -5277,7 +5649,7 @@ lists.storage = ownerList({
     breakdown.replaceChildren();
     const byKind = new Map();
     for (const record of items) byKind.set(record.data().kind, (byKind.get(record.data().kind) ?? 0) + record.data().sizeKb);
-    if (vaultKb()) byKind.set('Staff documents (vault)', vaultKb());
+    if (vaultKb()) byKind.set('Files (staff vault and e-books)', vaultKb());
     for (const [kind, size] of [...byKind].sort((a, b) => b[1] - a[1])) listItem(breakdown, kind + ': ' + Math.round(size / 1024 * 10) / 10 + ' MB');
     const biggest = [...items].sort((a, b) => b.data().sizeKb - a.data().sizeKb).slice(0, 3);
     if (biggest.length) listItem(breakdown, 'Largest: ' + biggest.map((record) => record.data().name + ' (' + Math.round(record.data().sizeKb / 1024 * 10) / 10 + ' MB)').join(', '));
@@ -5297,7 +5669,8 @@ let vaultLoaded = false;
 const VAULT_KINDS = { 'id-proof': 'ID proof', contract: 'Contract', certificate: 'Certificate', qualification: 'Qualification', police: 'Police verification', medical: 'Medical', other: 'Other' };
 const VAULT_TYPES = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png' };
 const VAULT_MAX_KB = 5120;
-function vaultKb() { return vaultItems.reduce((sum, record) => sum + (record.data().sizeKb ?? 0), 0); }
+// Files kept in Cloud Storage: staff vault documents and e-books.
+function vaultKb() { return [...vaultItems, ...ebookItems].reduce((sum, record) => sum + (record.data().sizeKb ?? 0), 0); }
 const vaultState = (item) => (!item.expiryOn ? 'none' : daysUntil(item.expiryOn) < 0 ? 'expired' : daysUntil(item.expiryOn) <= SOON_DAYS ? 'soon' : 'ok');
 function vaultNotes() {
   const notes = [];
@@ -8721,7 +9094,7 @@ function renderWorkload() {
   workloadStatus.textContent = byTeacher.size ? 'Counted from the timetable.' : 'The timetable is empty, so there is nothing to count yet.';
 }
 
-const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'staffDocuments', 'members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
+const BACKUP_COLLECTIONS = ['studentHistory', 'storageRecords', 'staffDocuments', 'eBooks', 'noticeAcks', 'members', 'students', 'academicYears', 'classes', 'sections', 'subjects', 'classSubjects', 'enrollments',
   'rollKeys', 'exams', 'marks', 'attendance', 'staffAttendance', 'leaveRequests', 'feeStructures', 'payments', 'notices',
   'timetable', 'homework', 'calendar', 'books', 'loans', 'behaviour', 'visitors', 'substitutions', 'routes', 'transportRiders',
   'activities', 'activityMembers', 'inventory', 'alumni', 'expenses', 'certificates', 'tickets', 'staffDirectory', 'vendors', 'minutes', 'lostFound', 'concessions', 'achievements', 'complaints', 'assets', 'sales', 'syllabus', 'trainings', 'diary', 'healthRecords', 'lessonPlans', 'ptmSlots', 'payroll', 'messages',
@@ -8952,7 +9325,7 @@ const resetInsights = () => {
   principalAccess = { ...PRINCIPAL_DEFAULTS };
   for (const section of [checklistSection, defaultersSection, workloadSection, backupSection, principalAccessSection]) section.hidden = true;
   for (const list of [checklistList, defaultersList, workloadList]) list.replaceChildren();
-  vaultItems = []; vaultLoaded = false; vaultSection.hidden = true; vaultList.replaceChildren(); vaultStatus.textContent = ''; vaultAlert.textContent = '';
+  ebookItems = []; vaultItems = []; vaultLoaded = false; vaultSection.hidden = true; ebooksSection.hidden = true; qrcardsSection.hidden = true; vaultList.replaceChildren(); vaultStatus.textContent = ''; vaultAlert.textContent = '';
   for (const status of [checklistStatus, defaultersStatus, workloadStatus, backupStatus]) status.textContent = '';
   defaultersRows = [];
 };
@@ -8966,13 +9339,15 @@ async function loadOwnerLists(request) {
     'diary', 'health', 'lessons', 'ptm', 'eventregs', 'appraisals', 'scholarships', 'scholarshipapps', 'consents',
     'hostelstays', 'canteenmenu', 'canteenplans', 'bookreservations', 'questionbank', 'onlinetests', 'pickuppeople']);
   vaultSection.hidden = false;
+  ebooksSection.hidden = false;
+  qrcardsSection.hidden = false;
   for (const name of names) {
     if (!lazyNames.has(name)) continue;
     lists[name].lazy = true;
     lists[name].loaded = false;
     document.querySelector('#' + lists[name].cfg.id).hidden = false;
   }
-  await Promise.allSettled([...names.filter((name) => !lazyNames.has(name)).map((name) => lists[name].load(request)), loadBackupLog(), vaultLoad()]);
+  await Promise.allSettled([...names.filter((name) => !lazyNames.has(name)).map((name) => lists[name].load(request)), loadBackupLog(), vaultLoad(), ebooksLoad()]);
   if (request === schoolRequest) { refreshAttention(); showReportSections(); }
 }
 const refreshOwnerLists = () => { for (const api of ownerLists) if (!document.querySelector('#' + api.cfg.id).hidden) api.draw(); };
@@ -9879,6 +10254,7 @@ onAuthStateChanged(auth, async (user) => {
   for (const section of [portalProfileSection, portalIdSection, portalMaterialsSection]) section.hidden = true;
   portalProfileList.replaceChildren();
   portalMaterialsList.replaceChildren();
+  portalEbooksSection.hidden = true; portalEbooksList.replaceChildren(); portalEbookItems = [];
   idCard.replaceChildren();
   portalHome = { ...portalHome, att: null, pending: null, avg: null, subjects: null, due: null, today: [], homework: [], upcoming: [] };
   portalStats.replaceChildren();
@@ -10162,14 +10538,14 @@ onAuthStateChanged(auth, async (user) => {
       list: (name) => getDocsFromServer(collection(schoolRef, name)),
       save: async (name, id, data) => {
         await setDoc(doc(schoolRef, name, id), data);
-        if (name === 'students' || name === 'storageRecords' || name === 'staffDocuments') document.dispatchEvent(new Event('usage-changed'));
+        if (name === 'students' || name === 'storageRecords' || name === 'staffDocuments' || name === 'eBooks') document.dispatchEvent(new Event('usage-changed'));
         const voided = name === 'payments' && data.voided === true;
         await log(voided ? 'void' : 'save', name, id, name === 'payments' ? 'Rs ' + data.amount : '');
       },
       marksOfStudent: (studentId) => getDocsFromServer(query(collection(schoolRef, 'marks'), where('studentId', '==', studentId))),
       remove: async (name, id) => {
         await deleteDoc(doc(schoolRef, name, id));
-        if (name === 'staffDocuments') document.dispatchEvent(new Event('usage-changed'));
+        if (name === 'staffDocuments' || name === 'eBooks') document.dispatchEvent(new Event('usage-changed'));
         await log('remove', name, id, '');
       },
       uid: user.uid,
@@ -10180,6 +10556,14 @@ onAuthStateChanged(auth, async (user) => {
       vaultDrop: async (id) => {
         const { getStorage, ref, deleteObject } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js');
         await deleteObject(ref(getStorage(app), 'schools/' + SCHOOL_ID + '/staffDocs/' + id));
+      },
+      ebookPut: async (id, file) => {
+        const { getStorage, ref, uploadBytes } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js');
+        await uploadBytes(ref(getStorage(app), 'schools/' + SCHOOL_ID + '/ebooks/' + id), file, { contentType: 'application/pdf' });
+      },
+      ebookDrop: async (id) => {
+        const { getStorage, ref, deleteObject } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js');
+        await deleteObject(ref(getStorage(app), 'schools/' + SCHOOL_ID + '/ebooks/' + id));
       },
       vaultUrl: async (id) => {
         const { getStorage, ref, getDownloadURL } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js');
@@ -10481,9 +10865,9 @@ const PORTAL_PLAN = {
   student: {
     title: 'Student Dashboard', tagline: 'Learn \u2022 Track \u2022 Achieve \u2022 All in One Place',
     order: ['portal-profile', 'portal-attendance', 'portal-timetable', 'portal-homework', 'portal-submit', 'portal-results', 'portal-assessments',
-      'portal-materials', 'portal-tests', 'portal-notices', 'portal-calendar', 'portal-events', 'portal-leave', 'portal-life', 'portal-idcard'],
+      'portal-materials', 'portal-ebooks', 'portal-tests', 'portal-notices', 'portal-calendar', 'portal-events', 'portal-leave', 'portal-life', 'portal-idcard'],
     names: { 'portal-profile': 'My Profile', 'portal-attendance': 'My Attendance', 'portal-timetable': 'My Timetable', 'portal-homework': 'Homework & Assignments',
-      'portal-submit': 'Submit Homework', 'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-materials': 'Study Materials', 'portal-tests': 'Online Tests',
+      'portal-submit': 'Submit Homework', 'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-materials': 'Study Materials', 'portal-ebooks': 'E-Library', 'portal-tests': 'Online Tests',
       'portal-notices': 'Notices & Notifications', 'portal-calendar': 'School Calendar', 'portal-events': 'School Events', 'portal-leave': 'Apply for Leave',
       'portal-life': 'My Bus & Activities', 'portal-idcard': 'Digital ID Card' },
     quick: [['Homework', 'portal-homework'], ['Exams & Results', 'portal-results'], ['My Timetable', 'portal-timetable'], ['Study Materials', 'portal-materials']],
@@ -10491,9 +10875,9 @@ const PORTAL_PLAN = {
   parent: {
     title: 'Parent Dashboard', tagline: 'Stay Connected \u2022 Monitor Progress \u2022 Support Your Child',
     order: ['portal-profile', 'portal-attendance', 'portal-homework', 'portal-timetable', 'portal-results', 'portal-assessments', 'portal-fees',
-      'portal-materials', 'portal-life', 'portal-leave', 'portal-messages', 'portal-consents', 'portal-reminders', 'portal-push', 'portal-tests', 'portal-pickup', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
+      'portal-materials', 'portal-ebooks', 'portal-life', 'portal-leave', 'portal-messages', 'portal-consents', 'portal-reminders', 'portal-push', 'portal-tests', 'portal-pickup', 'portal-ptm', 'portal-notices', 'portal-calendar', 'portal-events'],
     names: { 'portal-profile': 'My Child', 'portal-attendance': 'Attendance', 'portal-homework': 'Homework & Assignments', 'portal-timetable': 'Timetable',
-      'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-fees': 'Fees & Payments', 'portal-materials': 'Study Materials',
+      'portal-results': 'Exams & Results', 'portal-assessments': 'Class Test Scores', 'portal-fees': 'Fees & Payments', 'portal-materials': 'Study Materials', 'portal-ebooks': 'E-Library',
       'portal-life': 'Bus & Route', 'portal-leave': 'Leave Application', 'portal-messages': 'Messages & Communication', 'portal-consents': 'Consent Forms', 'portal-tests': 'Online Tests', 'portal-pickup': 'Pickup Authorisation', 'portal-reminders': 'Fee Reminders', 'portal-push': 'Phone Notifications', 'portal-ptm': 'Parent-Teacher Meetings',
       'portal-notices': 'Notices', 'portal-calendar': 'School Calendar', 'portal-events': 'School Events' },
     quick: [['Exams & Results', 'portal-results'], ['Fees & Payments', 'portal-fees'], ['Bus & Route', 'portal-life'], ['Apply for Leave', 'portal-leave']],

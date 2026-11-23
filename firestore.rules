@@ -1441,6 +1441,28 @@ service cloud.firestore {
         allow delete: if ownerAuth(schoolId);
       }
 
+      // E-library (feature 136). eBooks/{EB-...}: details of a PDF kept in Cloud Storage at schools/{schoolId}/ebooks/{id}.
+      // The owner adds, edits title, author and subject, and removes. Owner, principal, teachers and families read.
+      match /eBooks/{bookId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isActiveTeacher() || familyActive());
+        allow create: if ownerAuth(schoolId) && bookId.matches('EB-[A-Za-z0-9-]{1,30}')
+          && validEBook(request.resource.data) && withinStorage(schoolId);
+        allow update: if ownerAuth(schoolId) && validEBook(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'author', 'subject']);
+        allow delete: if ownerAuth(schoolId);
+      }
+
+      // Notice acknowledgements (feature 150). noticeAcks/{noticeId}_{studentId}: a family taps "Got it" on a notice, once.
+      match /noticeAcks/{ackId} {
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || (familyActive() && resource.data.by == request.auth.uid));
+        allow create: if request.auth != null && familyActive() && validNoticeAck(request.resource.data)
+          && request.resource.data.by == request.auth.uid
+          && ackId == request.resource.data.noticeId + '_' + request.resource.data.studentId
+          && familyOwns(request.resource.data.studentId)
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/notices/$(request.resource.data.noticeId));
+        allow update, delete: if false;
+      }
+
       // Staff document vault (feature 141). staffDocuments/{SD-...}: details of a file kept in Cloud Storage at
       // schools/{schoolId}/staffDocs/{id}. The owner adds, edits the title, type, expiry and note, and removes; the
       // principal and the platform administrator read the details. New files are refused when the plan's storage is full.
@@ -1953,6 +1975,27 @@ service cloud.firestore {
         && item.by is string && item.at is timestamp
         && intIn(item.index, 0, 59) && intIn(item.remainingSec, 0, 10800) && intIn(item.pauses, 0, 7)
         && item.state in ['paused', 'running'];
+    }
+
+    function validEBook(item) {
+      return item.keys().hasOnly(['title', 'author', 'subject', 'fileName', 'sizeKb', 'uploadedOn', 'by'])
+        && item.keys().hasAll(['title', 'fileName', 'sizeKb', 'uploadedOn', 'by'])
+        && namedText(item.title, 120)
+        && optText(item, 'author', 80)
+        && optText(item, 'subject', 60)
+        && namedText(item.fileName, 120)
+        && intIn(item.sizeKb, 1, 20480)
+        && dateText(item.uploadedOn)
+        && item.by is string;
+    }
+
+    function validNoticeAck(item) {
+      return item.keys().hasOnly(['noticeId', 'studentId', 'studentName', 'by', 'on'])
+        && item.keys().hasAll(['noticeId', 'studentId', 'studentName', 'by', 'on'])
+        && textLen(item.noticeId, 1, 40) && textLen(item.studentId, 1, 40)
+        && namedText(item.studentName, 120)
+        && item.by is string
+        && dateText(item.on);
     }
 
     function validStaffDocument(item) {

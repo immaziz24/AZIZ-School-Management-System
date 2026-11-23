@@ -13,8 +13,8 @@ const iconFor = (text) => (ICONS.find(([re]) => re.test(text.toLowerCase())) ?? 
 // goes to the last group, so a new module is never lost. Keys are section ids, or a lowercase title for loose headings.
 const OWNER_CATS = [
   ['Daily work', ['attention', 'summary', 'checklist', 'attendance-review', 'student-leave', 'notices', 'inbox', 'calendar', 'timetable', 'substitutions', 'visitors', 'pickupgate', 'attendance-report']],
-  ['Students and admissions', ['student-roster', 'roster', 'profile360', 'family-access', 'enquiries', 'bulk-import', 'promotion', 'cards', 'certificates', 'health', 'behaviour', 'achievements', 'alumni', 'hostelrooms', 'hostelstays', 'canteenmenu', 'canteenplans', 'pickuppeople']],
-  ['Classes and exams', ['academic-setup', 'class-teachers', 'exam-setup', 'marks-review', 'report-card', 'grading', 'homework-owner', 'lessons-owner', 'syllabus', 'onlinetests', 'questionbank', 'riskboard', 'library', 'bookreservations', 'diary']],
+  ['Students and admissions', ['qrcards', 'student-roster', 'roster', 'profile360', 'family-access', 'enquiries', 'bulk-import', 'promotion', 'cards', 'certificates', 'health', 'behaviour', 'achievements', 'alumni', 'hostelrooms', 'hostelstays', 'canteenmenu', 'canteenplans', 'pickuppeople']],
+  ['Classes and exams', ['ebooks', 'academic-setup', 'class-teachers', 'exam-setup', 'marks-review', 'report-card', 'grading', 'homework-owner', 'lessons-owner', 'syllabus', 'onlinetests', 'questionbank', 'riskboard', 'library', 'bookreservations', 'diary']],
   ['Fees and accounts', ['fees', 'defaulters', 'feereminders', 'concessions', 'scholarships', 'scholarshipapps', 'expenses', 'ledger', 'finance', 'sales', 'workflowrules', 'reports']],
   ['Staff', ['staffdir', 'staffdocs', 'staff-profiles', 'teacher assignment', 'staff directory', 'staff-attendance', 'checkins', 'qr-screen', 'disputes', 'hours', 'leave-review', 'payroll', 'bulk-cards', 'payslip', 'appraisals', 'trainings', 'workload']],
   ['Transport and campus', ['routes', 'riders', 'vehicles', 'activities', 'members', 'inventory', 'assets', 'tickets', 'vendors', 'lostfound', 'storage']],
@@ -27,7 +27,7 @@ const TEACHER_CATS = [
   ['School', ['teacher-timetable', 'teacher-cover', 'teacher-calendar', 'teacher-notices']],
 ];
 const PORTAL_CATS = [
-  ['Study', ['portal-results', 'portal-attendance', 'portal-homework', 'portal-submit', 'portal-assessments', 'portal-tests', 'portal-materials', 'portal-timetable']],
+  ['Study', ['portal-results', 'portal-attendance', 'portal-homework', 'portal-submit', 'portal-assessments', 'portal-tests', 'portal-materials', 'portal-ebooks', 'portal-timetable']],
   ['Fees and safety', ['portal-fees', 'portal-reminders', 'portal-push', 'portal-pickup', 'portal-idcard', 'portal-life']],
   ['School and messages', ['portal-notices', 'portal-calendar', 'portal-ptm', 'portal-events', 'portal-consents', 'portal-messages', 'portal-leave', 'portal-profile']],
 ];
