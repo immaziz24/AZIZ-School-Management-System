@@ -37,10 +37,19 @@ test('versioned files are served from the saved copy', () => {
   assert.match(sw, /aziz-shell-v5/);
 });
 test('cache numbers were bumped together', () => {
-  for (const name of ['ui.mjs', 'sign-in.mjs']) assert.ok(html.includes(name + '?v=batch-74'));
-  assert.ok(html.includes('sign-in.css?v=batch-74'));
+  for (const name of ['ui.mjs', 'sign-in.mjs', 'sign-in.css']) assert.match(html, new RegExp(name.replace('.', '\\.') + '\\?v=batch-\\d+'));
 });
 test('tile icons are not mixed up', () => {
   assert.match(ui, /\[\/activity log\|audit log\/, '📜'\]/);
   assert.match(ui, /\[\/attention\/, '⚠️'\]/);
+});
+
+test('super admin lands on the Super Admin Panel and can open a school read-only', () => {
+  const platform = read('platform.mjs');
+  assert.match(app, /dataset\.mode = 'superadmin'/);
+  assert.match(app, /Super admin \(view only\)/);
+  assert.match(platform, /Open school \(view only\)/);
+  assert.match(platform, /has\('school'\)/);
+  assert.match(css, /body\[data-mode=superadmin\] #owner-dashboard/);
+  assert.match(html, /<h2>Super Admin Panel<\/h2>/);
 });

@@ -281,3 +281,4 @@ p:has(> #autorem-on) label,p:has(#autorem-on) label{display:flex;align-items:cen
 /* Batch 74: lighter, smoother screens. */
 .tiles{contain:layout style}
 html{scroll-behavior:auto}
+body[data-mode=superadmin] #owner-dashboard,body[data-mode=superadmin] #teacher-dashboard,body[data-mode=superadmin] #portal-dashboard{display:none!important}

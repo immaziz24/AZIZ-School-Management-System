@@ -114,7 +114,8 @@ test('platform administrator sees every school and manages billing only', async 
   await denied(set('padmin', P('billing', 'main'), billing('weird')), 'bad status');
   await denied(set('padmin', P('billing', 'main'), billing('active', { monthlyPrice: -1 })), 'bad price');
   await denied(set('padmin', P('billing', 'main'), { ...billing('active'), extra: 1 }), 'extra field');
-  await denied(get('padmin', P('students', 's1')), 'student data');
+  // Batch 75: the platform administrator may now LOOK at school records (404 = allowed, the record does not exist), but never write them.
+  assert.equal(await get('padmin', P('students', 's1')), 404, 'student data is readable by the super admin');
   await denied(set('padmin', P('inventory', 'IV-1'), item), 'school records');
   await allowed(query('padmin', '', 'schools', []), 'list schools');
 });

@@ -199,7 +199,7 @@ function prepare(dash, label) {
   dash.addEventListener('ui-open', (e) => { const target = dash.querySelector(':scope > #' + e.detail); if (target) open(target); });
 }
 
-const LABELS = new Map([[owner, 'Your school'], [teacher, 'Your classroom'], [portal, 'Your family portal'], [platform, 'Platform']]);
+const LABELS = new Map([[owner, 'Your school'], [teacher, 'Your classroom'], [portal, 'Your family portal'], [platform, 'Super Admin Panel']]);
 for (const dash of dashes) prepare(dash, LABELS.get(dash));
 
 // A shortcut for a platform administrator: the Platform panel sits below the school's own modules.

@@ -51,9 +51,16 @@ service cloud.firestore {
       return isOwnerRole(schoolId) && !schoolSuspended(schoolId);
     }
 
-    function isSchoolViewer(schoolId) {
+    // The people who work in the school's owner and principal screens. Used by the few rules that let them WRITE.
+    function isStaffViewer(schoolId) {
       let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
       return exists(path) && get(path).data.active == true && get(path).data.role in ['owner', 'principal'];
+    }
+
+    // Everyone who may LOOK at the school's records: its owner, its principal and the platform (super) administrator.
+    // The platform administrator can read every school but this helper is never used to let anyone write.
+    function isSchoolViewer(schoolId) {
+      return isStaffViewer(schoolId) || isPlatformAdmin();
     }
 
     // The fee office login. It reads the students, classes, years and fees and records payments; it cannot
@@ -406,7 +413,7 @@ service cloud.firestore {
       // mistake is voided once. Family accounts read only their own student's payments. Teachers
       // read neither.
       match /feeStructures/{feeId} {
-        allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyActive());
+        allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || isPlatformAdmin() || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyActive());
         allow create, update: if ownerAuth(schoolId)
           && validFeeStructure(request.resource.data)
           && feeId == request.resource.data.yearId + '_' + request.resource.data.classId + '_' + request.resource.data.head
@@ -416,7 +423,7 @@ service cloud.firestore {
       }
 
       match /payments/{paymentId} {
-        allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyOwns(resource.data.studentId));
+        allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || isPlatformAdmin() || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && (isSchoolOwner(schoolId) || isFeeStaff(schoolId))
           && validPayment(request.resource.data)
           && !request.resource.data.keys().hasAny(['voided'])
@@ -933,7 +940,7 @@ service cloud.firestore {
       }
       match /pickupLogs/{docId} {
         allow get, list: if viewerAuth(schoolId);
-        allow create: if viewerAuth(schoolId) && validPickupLog(request.resource.data)
+        allow create: if request.auth != null && isStaffViewer(schoolId) && validPickupLog(request.resource.data)
           && docId.matches('[A-Za-z0-9-]{1,30}') && request.resource.data.by == request.auth.uid
           && studentExists(schoolId, request.resource.data.studentId);
         allow update, delete: if false;
@@ -1208,7 +1215,7 @@ service cloud.firestore {
       // Payroll. payroll/{staffUid}_{YYYY-MM}: staffUid, month, basic, allowances, deductions (whole
       // rupees), optional paidOn and note. Salary details are for the owner only: nobody else can read them.
       match /payroll/{payrollId} {
-        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || principalAllows(schoolId, 'payroll', false)
+        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || isPlatformAdmin() || principalAllows(schoolId, 'payroll', false)
           || (isActiveTeacher() && resource.data.staffUid == request.auth.uid));
         allow create, update: if ownerAuth(schoolId)
           && validPayroll(request.resource.data)
@@ -1251,7 +1258,7 @@ service cloud.firestore {
       // status new. Only the owner reads them, moves them through the pipeline (status and note change
       // and nothing else) and removes them.
       match /enquiries/{enquiryId} {
-        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || principalAllows(schoolId, 'admissions', true));
+        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || isPlatformAdmin() || principalAllows(schoolId, 'admissions', true));
         allow create: if enquiryId.matches('EQ-[A-Za-z0-9-]{1,30}') && validEnquiry(request.resource.data)
           && request.resource.data.status == 'new' && !request.resource.data.keys().hasAny(['note']);
         allow update: if ownerAuth(schoolId) && validEnquiry(request.resource.data)
@@ -1428,7 +1435,7 @@ service cloud.firestore {
       // School QR code (features 129, 158). The owner's or principal's screen posts a new code about once a minute and keeps the one before it as prev.
       match /settings/qrCode {
         allow get: if viewerAuth(schoolId);
-        allow create, update: if viewerAuth(schoolId) && !schoolSuspended(schoolId)
+        allow create, update: if request.auth != null && isStaffViewer(schoolId) && !schoolSuspended(schoolId)
           && request.resource.data.keys().hasOnly(['code', 'prev', 'at']) && request.resource.data.keys().hasAll(['code', 'at'])
           && request.resource.data.code is string && request.resource.data.code.matches('^[A-HJ-NP-Z2-9]{8}$')
           && (!request.resource.data.keys().hasAny(['prev'])

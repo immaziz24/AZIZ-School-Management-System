@@ -10473,6 +10473,20 @@ onAuthStateChanged(auth, async (user) => {
   schoolStatus.textContent = '';
   idleWatch(Boolean(user));
   if (!user) { window.__bootDone?.(); return; }
+  // The super administrator (a platformAdmins record) lands on the Super Admin Panel. Opening a school needs ?school=<id> in the address.
+  delete document.body.dataset.mode;
+  if (!new URLSearchParams(location.search).has('school')) {
+    try {
+      const tools = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js');
+      const found = await tools.getDocFromServer(tools.doc(tools.getFirestore(app), 'platformAdmins', user.uid));
+      if (request !== schoolRequest) return;
+      if (found.exists()) {
+        document.body.dataset.mode = 'superadmin';
+        schoolStatus.hidden = true;
+        return;
+      }
+    } catch { /* not a platform administrator */ }
+  }
 
   schoolStatus.textContent = 'Checking school access.';
   try {
@@ -10566,6 +10580,12 @@ onAuthStateChanged(auth, async (user) => {
       await loadPortal({ schoolRef, user, doc, collection, getDocFromServer, getDocsFromServer, query, where }, request);
       return;
     }
+    // A super administrator who is not a member of this school looks at it read-only.
+    let superView = false;
+    if (membership.data()?.active !== true) {
+      try { superView = (await getDocFromServer(doc(getFirestore(app), 'platformAdmins', user.uid))).exists(); } catch { superView = false; }
+      if (request !== schoolRequest) return;
+    }
     const school = await getDocFromServer(schoolRef);
     if (request !== schoolRequest) return;
     if (!school.exists()) {
@@ -10577,11 +10597,17 @@ onAuthStateChanged(auth, async (user) => {
       profileForm.elements.namedItem(field).value = school.data()[field] ?? '';
     }
     schoolUid = user.uid;
-    viewOnly = membership.data()?.role === 'principal';
+    viewOnly = membership.data()?.role === 'principal' || superView;
     const feeOffice = membership.data()?.active === true && membership.data()?.role === 'accountant';
     if (feeOffice) document.body.dataset.role = 'accountant';
     viewOnlyNote.hidden = !viewOnly;
-    ownerRole.textContent = feeOffice ? 'Fee office' : viewOnly ? 'Principal (view, approve leave, post notices)' : 'School Owner';
+    if (superView) {
+      const back = document.createElement('a');
+      back.href = location.pathname; back.textContent = 'Back to the Super Admin Panel';
+      const strong = document.createElement('strong'); strong.textContent = 'Super admin view. ';
+      viewOnlyNote.replaceChildren(strong, 'You can look at everything in this school but cannot change it. ', back);
+    }
+    ownerRole.textContent = feeOffice ? 'Fee office' : superView ? 'Super admin (view only)' : viewOnly ? 'Principal (view, approve leave, post notices)' : 'School Owner';
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);
     saveAssignment = (uid, assignment) => setDoc(doc(schoolRef, 'teacherAssignments', uid), assignment);
     ownerEmail.textContent = user.email;
@@ -10696,7 +10722,7 @@ onAuthStateChanged(auth, async (user) => {
       // Everything below only reads, so it runs side by side instead of one after another.
       const roster = loadStaffAttendance(request);
       startCheckins();
-      startQrScreen();
+      if (!superView) startQrScreen();
       startDisputes();
       startHours();
       await Promise.allSettled([

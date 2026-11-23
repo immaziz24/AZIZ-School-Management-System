@@ -418,7 +418,7 @@ async function loadAdmin() {
       ...[...byMonth.entries()].sort().reverse().slice(0, 12).map(([period, r]) => [period + ': paid ' + rupees(r.paid) + ', unpaid ' + rupees(r.unpaid) + ' ' + bar(r.paid) + (r.unpaid ? ' (' + bar(r.unpaid).replaceAll('#', '.') + ')' : '')]),
     ], 'No billing yet.');
     fillList(admin.schools, allSchools.map((s) => [s.name + ' (' + s.id + ') - ' + (s.billing ? s.billing.plan + ' / ' + s.billing.status : 'no plan')
-      + (s.usage ? ' - ' + s.usage.students + ' students, ' + s.usage.staff + ' staff' : ''), button('Manage', () => openSchool(s.id))]), 'No schools.');
+      + (s.usage ? ' - ' + s.usage.students + ' students, ' + s.usage.staff + ' staff' : ''), button('Manage', () => openSchool(s.id)), button('Open school (view only)', () => window.open(location.pathname + '?school=' + encodeURIComponent(s.id), '_blank', 'noopener'))]), 'No schools.');
     admin.status.textContent = '';
   } catch { admin.status.textContent = 'Could not load schools.'; }
   await Promise.all([loadAdminTickets(), loadFlags(), loadDrills(), loadTemplate(), loadStorageRequests()]);
@@ -706,6 +706,14 @@ onAuthStateChanged(auth, async (user) => {
   myRole = '';
   plan.section.hidden = true; admin.section.hidden = true; accept.section.hidden = true; admin.panel.hidden = true;
   if (!user) return;
+  // The super administrator signing in without ?school= sees only the Super Admin Panel, so no school screens are loaded here.
+  if (!new URLSearchParams(location.search).has('school')) {
+    try {
+      const platform = await getDoc(doc(db, 'platformAdmins', user.uid));
+      if (mine !== seen) return;
+      if (platform.exists()) { await loadAdmin(); return; }
+    } catch { /* not a platform administrator */ }
+  }
   loadMyInvites(user);
   try {
     const member = await getDoc(doc(schoolRef, 'members', user.uid));
@@ -717,10 +725,6 @@ onAuthStateChanged(auth, async (user) => {
       await loadPlan();
     }
   } catch { /* not a member of this school */ }
-  try {
-    const platform = await getDoc(doc(db, 'platformAdmins', user.uid));
-    if (mine === seen && platform.exists()) await loadAdmin();
-  } catch { /* not a platform administrator */ }
 });
 
 
