@@ -2720,6 +2720,50 @@ qrStart.addEventListener('click', () => {
 });
 qrStop.addEventListener('click', () => stopQrScreen('Stopped. Teachers cannot scan until you start it again.'));
 function startQrScreen() { qrSection.hidden = false; }
+
+// Fixed banner while a super administrator is inside a school: who, what, until when, and the way to ask for a short sensitive pass.
+function showSuperBanner(user, schoolId, name, pass) {
+  document.querySelector('#super-banner')?.remove();
+  const bar = document.createElement('div'); bar.id = 'super-banner';
+  const text = document.createElement('span');
+  const until = new Date(pass.expiresAt.toMillis()).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  text.textContent = 'Super admin view of ' + name + '. Read only. Access pass ends at ' + until + '. Everything you open is recorded.';
+  const ask = document.createElement('button'); ask.type = 'button'; ask.textContent = 'Request sensitive access (15 min)';
+  const leave = document.createElement('a'); leave.href = '/admin'; leave.textContent = 'Leave school';
+  ask.addEventListener('click', async () => {
+    const reason = (prompt('Why do you need sensitive records (medical, identity, payroll, private family information)? At least 10 characters. This is kept in the audit log.') || '').trim();
+    if (reason.length < 10) return;
+    ask.disabled = true;
+    try {
+      const fs = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js');
+      const db = fs.getFirestore(app);
+      const auditId = 'A-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+      const batch = fs.writeBatch(db);
+      batch.set(fs.doc(db, 'platformAudit', auditId), { actor: user.uid, actorEmail: user.email || '', action: 'open-school-sensitive', schoolId, reason: reason.slice(0, 300), detail: 'sensitive records, 12 minutes', at: fs.serverTimestamp() });
+      batch.set(fs.doc(db, 'platformGrants', user.uid + '_' + schoolId + '_sensitive'), { schoolId, tier: 'sensitive', reason: reason.slice(0, 300), createdBy: user.uid, createdAt: fs.serverTimestamp(), expiresAt: fs.Timestamp.fromMillis(Date.now() + 12 * 60000), auditId });
+      await batch.commit();
+      alert('Sensitive access granted for 12 minutes. The page will reload.');
+      location.reload();
+    } catch (error) {
+      ask.disabled = false;
+      alert(error && String(error.code).includes('permission') ? 'Sensitive access was refused. If MFA is required, sign in with your second factor first.' : 'Could not create the pass.');
+    }
+  });
+  bar.append(text, ask, leave);
+  document.body.prepend(bar);
+  document.body.classList.add('has-super-banner');
+}
+
+// One sign-in record per browser session, so the super admin can see an owner's last sign-in.
+async function recordLogin(user) {
+  try {
+    if (sessionStorage.getItem('aziz-login-logged') === user.uid) return;
+    const fs = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js');
+    const stamp = String(9999999999999 - Date.now()).padStart(13, '0');
+    await fs.setDoc(fs.doc(fs.getFirestore(app), 'loginHistory', user.uid + '_' + stamp), { uid: user.uid, email: user.email || '', at: fs.serverTimestamp() });
+    sessionStorage.setItem('aziz-login-logged', user.uid);
+  } catch { /* history is best effort */ }
+}
 function resetQrScreen() {
   stopQrScreen('');
   qrSection.hidden = true;
@@ -10473,6 +10517,7 @@ onAuthStateChanged(auth, async (user) => {
   schoolStatus.textContent = '';
   idleWatch(Boolean(user));
   if (!user) { window.__bootDone?.(); return; }
+  recordLogin(user);
   // The super administrator (a platformAdmins record) lands on the Super Admin Panel. Opening a school needs ?school=<id> in the address.
   delete document.body.dataset.mode;
   if (!new URLSearchParams(location.search).has('school')) {
@@ -10481,6 +10526,7 @@ onAuthStateChanged(auth, async (user) => {
       const found = await tools.getDocFromServer(tools.doc(tools.getFirestore(app), 'platformAdmins', user.uid));
       if (request !== schoolRequest) return;
       if (found.exists()) {
+        if (!new URLSearchParams(location.search).has('legacy')) { location.replace('/admin'); return; }
         document.body.dataset.mode = 'superadmin';
         schoolStatus.hidden = true;
         return;
@@ -10586,6 +10632,21 @@ onAuthStateChanged(auth, async (user) => {
       try { superView = (await getDocFromServer(doc(getFirestore(app), 'platformAdmins', user.uid))).exists(); } catch { superView = false; }
       if (request !== schoolRequest) return;
     }
+    // A super administrator needs a live access pass (created on /admin with a reason, and audited) to look inside a school.
+    let superPass = null;
+    if (superView) {
+      try {
+        const pass = await getDocFromServer(doc(getFirestore(app), 'platformGrants', user.uid + '_' + SCHOOL_ID + '_standard'));
+        if (pass.exists() && pass.data().expiresAt.toMillis() > Date.now()) superPass = pass.data();
+      } catch { superPass = null; }
+      if (request !== schoolRequest) return;
+      if (!superPass) {
+        schoolStatus.replaceChildren('You need an access pass to open this school. ');
+        const link = document.createElement('a'); link.href = '/admin#/school/' + encodeURIComponent(SCHOOL_ID); link.textContent = 'Request one on the Super Admin page';
+        schoolStatus.append(link);
+        return;
+      }
+    }
     const school = await getDocFromServer(schoolRef);
     if (request !== schoolRequest) return;
     if (!school.exists()) {
@@ -10606,6 +10667,7 @@ onAuthStateChanged(auth, async (user) => {
       back.href = location.pathname; back.textContent = 'Back to the Super Admin Panel';
       const strong = document.createElement('strong'); strong.textContent = 'Super admin view. ';
       viewOnlyNote.replaceChildren(strong, 'You can look at everything in this school but cannot change it. ', back);
+      showSuperBanner(user, SCHOOL_ID, school.data().name, superPass);
     }
     ownerRole.textContent = feeOffice ? 'Fee office' : superView ? 'Super admin (view only)' : viewOnly ? 'Principal (view, approve leave, post notices)' : 'School Owner';
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);

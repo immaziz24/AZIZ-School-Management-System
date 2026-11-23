@@ -711,7 +711,7 @@ onAuthStateChanged(auth, async (user) => {
     try {
       const platform = await getDoc(doc(db, 'platformAdmins', user.uid));
       if (mine !== seen) return;
-      if (platform.exists()) { await loadAdmin(); return; }
+      if (platform.exists()) { if (new URLSearchParams(location.search).has('legacy')) await loadAdmin(); return; }
     } catch { /* not a platform administrator */ }
   }
   loadMyInvites(user);

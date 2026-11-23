@@ -72,6 +72,8 @@ beforeEach(async () => {
     [`${A}/students/S1`, { name: 'Test Student', admissionNo: 'S1' }],
     [`${A}/billing/main`, { status: 'active', storageMb: 500 }],
     ['platformAdmins/padmin', { active: true }],
+    // Batch 76: ordinary records need a live access pass, so the seed holds one.
+    ['platformGrants/padmin_green-valley_standard', { schoolId: 'green-valley', tier: 'standard', expiresAt: new Date(Date.now() + 3600000) }],
   ];
   for (const [seedPath, data] of seed) assert.equal(await set(ADMIN, seedPath, data), 200, seedPath);
 });

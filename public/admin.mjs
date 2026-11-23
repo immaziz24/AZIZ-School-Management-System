@@ -1,0 +1,655 @@
+// Super Admin page (Batch 76, Mark 1). Platform administrators only: the database rules decide who may read or write, not this file.
+// Every change writes a permanent entry to platformAudit in the same batch.
+import { app } from './firebase-client.mjs';
+import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import {
+  getFirestore, collection, doc, getDoc, getDocs, getDocFromServer, getDocsFromServer, setDoc, updateDoc, deleteDoc, writeBatch,
+  query, where, orderBy, limit, documentId, serverTimestamp, Timestamp,
+} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+
+const auth = getAuth(app);
+const db = getFirestore(app);
+const $ = (id) => document.getElementById(id);
+const S = { user: null, schools: [], plans: [], loaded: false, alerts: [], ownersCache: null };
+
+// ---------- small helpers ----------
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()) if (kid !== undefined && kid !== null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+const money = (n) => '₹' + (Number(n) || 0).toLocaleString('en-IN');
+const num = (n) => (Number(n) || 0).toLocaleString('en-IN');
+const newId = (prefix) => prefix + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+const today = () => new Date().toISOString().slice(0, 10);
+const when = (t) => (t && t.toDate ? t.toDate().toLocaleString('en-IN') : '');
+let toastTimer;
+function toast(text) {
+  const el = $('toast'); el.textContent = text; el.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+function friendly(error) {
+  const code = error && error.code ? String(error.code) : '';
+  if (code.includes('permission-denied')) return 'The database rules did not allow that. If you just opened a school, your access pass may have expired.';
+  if (code.includes('unavailable') || code.includes('network')) return 'The network is down. Check the connection and try again.';
+  return (error && error.message) ? error.message : 'Something went wrong.';
+}
+async function guarded(fn) { try { return await fn(); } catch (error) { toast(friendly(error)); return undefined; } }
+function loading(text) { return h('div', { class: 'empty' }, h('span', { class: 'spin' }), text || 'Loading.'); }
+async function pool(items, size, worker) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (next < items.length) { const index = next++; await worker(items[index], index); }
+  }));
+}
+
+// A small modal form. Resolves with the values, or null when cancelled.
+function formDialog({ title, note, fields, ok = 'Save' }) {
+  return new Promise((resolve) => {
+    const dlg = h('dialog', { class: 'dlg' });
+    const form = h('form');
+    const inputs = {};
+    form.append(h('h3', {}, title));
+    if (note) form.append(h('p', { class: 'muted' }, note));
+    for (const f of fields) {
+      let input;
+      if (f.type === 'textarea') input = h('textarea', { rows: 3 });
+      else if (f.type === 'select') input = h('select', {}, f.options.map(([value, text]) => h('option', { value }, text)));
+      else input = h('input', { type: f.type || 'text' });
+      if (f.value !== undefined) { if (f.type === 'checkbox') input.checked = Boolean(f.value); else input.value = f.value; }
+      if (f.placeholder) input.placeholder = f.placeholder;
+      if (f.readonly) input.readOnly = true;
+      inputs[f.key] = input;
+      form.append(f.type === 'checkbox' ? h('label', {}, input, f.label) : h('label', {}, f.label, input));
+    }
+    const err = h('p', { class: 'err' });
+    const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
+    form.append(err, h('div', { class: 'row end' }, cancel, h('button', { type: 'submit', class: 'btn gold' }, ok)));
+    const close = (value) => { dlg.close(); dlg.remove(); resolve(value); };
+    cancel.addEventListener('click', () => close(null));
+    dlg.addEventListener('cancel', (event) => { event.preventDefault(); close(null); });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const values = {};
+      for (const f of fields) {
+        const el = inputs[f.key];
+        let value = f.type === 'checkbox' ? el.checked : el.value.trim();
+        if (f.type === 'number') value = el.value === '' ? '' : Number(el.value);
+        if (f.required && (value === '' || value === undefined)) { err.textContent = f.label + ' is required.'; return; }
+        if (f.minLen && String(value).length < f.minLen) { err.textContent = f.label + ' needs at least ' + f.minLen + ' characters.'; return; }
+        if (f.pattern && value !== '' && !f.pattern.test(value)) { err.textContent = f.patternText || (f.label + ' is not valid.'); return; }
+        if (f.type === 'number' && value !== '' && (!Number.isInteger(value) || value < 0)) { err.textContent = f.label + ' must be a whole number, zero or more.'; return; }
+        values[f.key] = value;
+      }
+      close(values);
+    });
+    dlg.append(form);
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+const REASON = { key: 'reason', label: 'Reason (kept in the audit log)', type: 'textarea', required: true, minLen: 10, placeholder: 'Why are you doing this? At least 10 characters.' };
+
+// One audit entry, added to a batch. Returns its id.
+function audit(batch, action, schoolId, reason, detail, id = newId('A-')) {
+  batch.set(doc(db, 'platformAudit', id), {
+    actor: S.user.uid, actorEmail: S.user.email || '', action,
+    ...(schoolId ? { schoolId } : {}), ...(reason ? { reason: String(reason).slice(0, 300) } : {}),
+    ...(detail ? { detail: String(detail).slice(0, 1500) } : {}), at: serverTimestamp(),
+  });
+  return id;
+}
+
+// ---------- data ----------
+async function loadSchools(force) {
+  if (S.loaded && !force) return;
+  const snap = await getDocsFromServer(collection(db, 'schools'));
+  const list = snap.docs.map((d) => ({ id: d.id, ...d.data(), billing: null, usage: null, unpaid: [] }));
+  await pool(list, 15, async (school) => {
+    const [billing, usage, invoices] = await Promise.all([
+      getDoc(doc(db, 'schools', school.id, 'billing', 'main')).catch(() => null),
+      getDoc(doc(db, 'schools', school.id, 'usage', 'main')).catch(() => null),
+      getDocs(query(collection(db, 'schools', school.id, 'invoices'), where('status', 'in', ['due', 'overdue']))).catch(() => null),
+    ]);
+    school.billing = billing && billing.exists() ? billing.data() : null;
+    school.usage = usage && usage.exists() ? usage.data() : null;
+    school.unpaid = invoices ? invoices.docs.map((d) => d.data()) : [];
+  });
+  S.schools = list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  S.loaded = true;
+  S.ownersCache = null;
+  buildAlerts();
+  fillSwitcher();
+}
+async function loadPlans() {
+  const snap = await getDocsFromServer(collection(db, 'plans'));
+  S.plans = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => a.monthlyPrice - b.monthlyPrice);
+}
+const statusOf = (s) => (s.archived ? 'archived' : (s.billing && s.billing.status) || 'no plan');
+const pillFor = (status) => h('span', { class: 'pill ' + (status === 'active' ? 'ok' : status === 'trial' ? 'warn' : ['suspended', 'cancelled', 'archived'].includes(status) ? 'bad' : '') }, status);
+
+function buildAlerts() {
+  const alerts = [];
+  const now = Date.now();
+  for (const s of S.schools) {
+    const b = s.billing || {};
+    const overdue = s.unpaid.filter((i) => i.status === 'overdue');
+    if (overdue.length) alerts.push({ level: 'bad', school: s, text: overdue.length + ' overdue invoice(s), ' + money(overdue.reduce((t, i) => t + (Number(i.amount) || 0), 0)) });
+    if (['suspended', 'cancelled'].includes(b.status) && !s.archived) alerts.push({ level: 'bad', school: s, text: 'School is ' + b.status });
+    if (b.status === 'trial' && b.trialEnds && b.trialEnds.toMillis) {
+      const days = Math.ceil((b.trialEnds.toMillis() - now) / 86400000);
+      if (days <= 7) alerts.push({ level: 'warn', school: s, text: days < 0 ? 'Trial ended ' + (-days) + ' day(s) ago' : 'Trial ends in ' + days + ' day(s)' });
+    }
+    if (b.storageMb && s.usage && s.usage.storageMb && s.usage.storageMb / b.storageMb >= 0.9) alerts.push({ level: 'warn', school: s, text: 'Storage is at ' + Math.round(s.usage.storageMb / b.storageMb * 100) + '% of its limit' });
+    if (b.studentLimit && s.usage && s.usage.students && s.usage.students / b.studentLimit >= 0.9) alerts.push({ level: 'warn', school: s, text: 'Students are at ' + Math.round(s.usage.students / b.studentLimit * 100) + '% of the plan limit' });
+  }
+  S.alerts = alerts;
+  const bell = $('bellN'); bell.textContent = alerts.length; bell.hidden = alerts.length === 0;
+}
+function fillSwitcher() {
+  const select = $('switcher');
+  select.replaceChildren(h('option', { value: '' }, 'Switch school'), S.schools.slice(0, 500).map((s) => h('option', { value: s.id }, s.name)));
+}
+
+// ---------- views ----------
+const view = () => $('view');
+function setCrumbs(...parts) {
+  const el = $('crumbs'); el.replaceChildren('Super Admin');
+  parts.forEach((part, index) => { el.append(' / ', index === parts.length - 1 ? h('b', {}, part) : part); });
+}
+function stat(label, value, hint) { return h('div', { class: 'card stat' }, h('b', {}, value), h('span', {}, label), hint ? h('div', { class: 'muted', style: 'font-size:.78rem' }, hint) : null); }
+
+async function viewDashboard() {
+  setCrumbs('Dashboard');
+  view().replaceChildren(loading('Loading schools and billing.'));
+  await loadSchools();
+  const count = (status) => S.schools.filter((s) => !s.archived && statusOf(s) === status).length;
+  const students = S.schools.reduce((t, s) => t + (s.usage ? Number(s.usage.students) || 0 : 0), 0);
+  const staff = S.schools.reduce((t, s) => t + (s.usage ? Number(s.usage.staff) || 0 : 0), 0);
+  const mrr = S.schools.reduce((t, s) => t + (!s.archived && s.billing && s.billing.status === 'active' ? Number(s.billing.monthlyPrice) || 0 : 0), 0);
+  const outstanding = S.schools.reduce((t, s) => t + s.unpaid.reduce((a, i) => a + (Number(i.amount) || 0), 0), 0);
+  const overdueN = S.schools.reduce((t, s) => t + s.unpaid.filter((i) => i.status === 'overdue').length, 0);
+  const suspended = count('suspended') + count('cancelled');
+  view().replaceChildren(
+    h('h2', {}, 'Command dashboard'),
+    h('p', { class: 'muted' }, 'Live numbers from every registered school.'),
+    h('div', { class: 'grid' },
+      stat('Total schools', num(S.schools.length)),
+      stat('Active schools', num(count('active'))),
+      stat('Trial schools', num(count('trial'))),
+      stat('Suspended or cancelled', num(suspended)),
+      stat('Archived', num(S.schools.filter((s) => s.archived).length)),
+      stat('Students', num(students), 'from each school\'s usage record'),
+      stat('Teachers and staff', num(staff), 'staff profiles, teachers included'),
+      stat('Monthly recurring revenue', money(mrr), 'active schools, monthly price'),
+      stat('Outstanding payments', money(outstanding), overdueN + ' overdue invoice(s)'),
+      stat('Alerts', num(S.alerts.length))),
+    h('div', { class: 'card' }, h('h3', {}, 'Alerts'),
+      S.alerts.length ? S.alerts.slice(0, 50).map((a) => h('div', { class: 'alert' }, h('span', { class: 'pill ' + a.level }, a.level === 'bad' ? 'Act' : 'Watch'),
+        h('a', { href: '#/school/' + a.school.id }, a.school.name), h('span', { class: 'muted' }, a.text))) : h('div', { class: 'empty' }, 'No alerts. Every school looks healthy.')));
+}
+
+async function viewSchools() {
+  setCrumbs('All schools');
+  view().replaceChildren(loading('Loading schools.'));
+  await loadSchools();
+  const searchBox = h('input', { type: 'search', placeholder: 'Search by name, school ID or contact email' });
+  const filter = h('select', {}, [['', 'All statuses'], ['active', 'Active'], ['trial', 'Trial'], ['suspended', 'Suspended'], ['cancelled', 'Cancelled'], ['archived', 'Archived']].map(([v, t]) => h('option', { value: v }, t)));
+  const body = h('tbody');
+  const draw = () => {
+    const words = searchBox.value.trim().toLowerCase();
+    const rows = S.schools.filter((s) => (!filter.value || statusOf(s) === filter.value)
+      && (!words || [s.name, s.id, s.contactEmail].some((v) => String(v || '').toLowerCase().includes(words))));
+    body.replaceChildren(...rows.slice(0, 300).map((s) => h('tr', { class: 'click', onclick: () => { location.hash = '#/school/' + s.id; } },
+      h('td', {}, h('b', {}, s.name), h('div', { class: 'muted' }, s.id)),
+      h('td', {}, s.billing ? s.billing.plan : '-'), h('td', {}, pillFor(statusOf(s))),
+      h('td', {}, s.usage ? num(s.usage.students) : '-'), h('td', {}, s.usage ? num(s.usage.staff) : '-'),
+      h('td', {}, s.contactEmail || '-'))));
+    if (!rows.length) body.replaceChildren(h('tr', {}, h('td', { colspan: 6 }, h('div', { class: 'empty' }, S.schools.length ? 'No school matches.' : 'No schools yet. Register the first one.'))));
+  };
+  searchBox.addEventListener('input', draw); filter.addEventListener('change', draw);
+  view().replaceChildren(
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'All schools (' + S.schools.length + ')'), h('button', { class: 'btn gold', onclick: () => guarded(registerSchool) }, 'Register a school')),
+    h('div', { class: 'row' }, searchBox, filter),
+    h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['School', 'Plan', 'Status', 'Students', 'Staff', 'Contact'].map((t) => h('th', {}, t)))), body)),
+    S.schools.length > 300 ? h('p', { class: 'muted' }, 'Showing the first 300 matches. Use the search to narrow it.') : null);
+  draw();
+}
+
+async function registerSchool() {
+  await loadPlans();
+  const planOptions = [['trial', 'Free 30-day trial']].concat(S.plans.filter((p) => p.active).map((p) => [p.id, p.name + ' (' + money(p.monthlyPrice) + '/month)']));
+  const v = await formDialog({
+    title: 'Register a school',
+    note: 'Creates the school and a pending owner invitation. The owner signs in with this email, verifies it and accepts the invitation.',
+    ok: 'Register school',
+    fields: [
+      { key: 'id', label: 'School ID (lowercase letters, numbers, dashes; 3 to 30)', required: true, pattern: /^[a-z][a-z0-9-]{2,29}$/, patternText: 'Use 3 to 30 lowercase letters, numbers or dashes, starting with a letter.' },
+      { key: 'name', label: 'School name', required: true },
+      { key: 'ownerEmail', label: 'Owner email', type: 'email', required: true, pattern: /^[^@\sA-Z]+@[^@\sA-Z]+$/, patternText: 'Use a lowercase email address.' },
+      { key: 'contactEmail', label: 'School contact email (optional)', type: 'email' },
+      { key: 'phone', label: 'Phone (optional)' },
+      { key: 'address', label: 'Address (optional)' },
+      { key: 'plan', label: 'Plan', type: 'select', options: planOptions },
+      REASON,
+    ],
+  });
+  if (!v) return;
+  if (['www', 'admin', 'api', 'app', 'platform', 'school', 'aziz', 'public', 'support', 'demo'].includes(v.id)) { toast('That school ID is reserved.'); return; }
+  const taken = await getDocFromServer(doc(db, 'schools', v.id)).then((d) => d.exists());
+  if (taken) { toast('That school ID is already used.'); return; }
+  const plan = S.plans.find((p) => p.id === v.plan);
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'schools', v.id), { name: v.name, contactEmail: v.contactEmail || '', phone: v.phone || '', address: v.address || '', createdBy: S.user.uid });
+  const billing = plan
+    ? { plan: plan.id, status: 'active', studentLimit: plan.studentLimit, staffLimit: plan.staffLimit, storageMb: plan.storageMb, monthlyPrice: plan.monthlyPrice }
+    : { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + 30 * 86400000), studentLimit: 50, staffLimit: 10 };
+  batch.set(doc(db, 'schools', v.id, 'billing', 'main'), billing);
+  batch.set(doc(db, 'invites', newId('OW-')), { schoolId: v.id, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: S.user.uid });
+  audit(batch, 'register-school', v.id, v.reason, JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: billing.plan }));
+  await batch.commit();
+  toast('School registered. Tell the owner to sign in at /app with ' + v.ownerEmail + ' and accept the invitation.');
+  await loadSchools(true);
+  location.hash = '#/school/' + v.id;
+}
+
+async function viewSchool(id) {
+  view().replaceChildren(loading('Loading school.'));
+  await Promise.all([loadSchools(), loadPlans()]);
+  const school = S.schools.find((s) => s.id === id);
+  if (!school) { setCrumbs('All schools'); view().replaceChildren(h('div', { class: 'empty' }, 'School not found.')); return; }
+  setCrumbs(h('a', { href: '#/schools' }, 'All schools'), school.name);
+  const b = school.billing || {};
+  const owners = await loadOwnersOf(school.id);
+  const refresh = async () => { await loadSchools(true); await viewSchool(id); };
+
+  const profile = h('div', { class: 'card' }, h('h3', {}, 'Profile'),
+    h('p', {}, h('b', {}, school.name), ' ', pillFor(statusOf(school))),
+    h('p', { class: 'muted' }, 'ID: ' + school.id + ' | ' + (school.contactEmail || 'no contact email') + ' | ' + (school.phone || 'no phone')),
+    h('p', { class: 'muted' }, school.address || 'No address'),
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => guarded(async () => { if (await editSchool(school)) await refresh(); }) }, 'Edit profile'),
+      h('button', { class: 'btn gold', onclick: () => guarded(() => openSchoolAccess(school)) }, 'Open school administration')));
+
+  const planCard = h('div', { class: 'card' }, h('h3', {}, 'Subscription and status'),
+    h('p', {}, 'Plan: ', h('b', {}, b.plan || 'none'), ' | ', money(b.monthlyPrice), '/month'),
+    h('p', { class: 'muted' }, 'Limits: ' + num(b.studentLimit) + ' students, ' + num(b.staffLimit) + ' staff, ' + num(b.storageMb) + ' MB storage'),
+    b.trialEnds && b.trialEnds.toDate ? h('p', { class: 'muted' }, 'Trial ends ' + b.trialEnds.toDate().toLocaleDateString('en-IN')) : null,
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => guarded(async () => { if (await applyPlan(school)) await refresh(); }) }, 'Change plan'),
+      statusOf(school) === 'active' ? null : h('button', { class: 'btn', onclick: () => guarded(async () => { if (await setStatus(school, 'active')) await refresh(); }) }, 'Activate'),
+      ['active', 'trial'].includes(statusOf(school)) ? h('button', { class: 'btn red', onclick: () => guarded(async () => { if (await setStatus(school, 'suspended')) await refresh(); }) }, 'Suspend') : null,
+      school.archived ? null : h('button', { class: 'btn red', onclick: () => guarded(async () => { if (await archiveSchool(school)) await refresh(); }) }, 'Archive')));
+
+  const usage = school.usage || {};
+  const usageCard = h('div', { class: 'card' }, h('h3', {}, 'Usage'),
+    h('p', {}, num(usage.students) + ' students | ' + num(usage.staff) + ' staff | ' + num(usage.storageMb) + ' MB stored'),
+    h('p', { class: 'muted' }, school.unpaid.length ? school.unpaid.length + ' unpaid invoice(s), ' + money(school.unpaid.reduce((t, i) => t + (Number(i.amount) || 0), 0)) : 'No unpaid invoices.'));
+
+  const ownerRows = owners.map((o) => h('tr', {},
+    h('td', {}, o.email || h('span', { class: 'muted' }, 'Signed up directly (' + o.uid.slice(0, 8) + '...)')),
+    h('td', {}, o.kind === 'invite' ? h('span', { class: 'pill warn' }, 'Invitation pending') : h('span', { class: 'pill ' + (o.active ? 'ok' : 'bad') }, o.active ? 'Active owner' : 'Deactivated')),
+    h('td', { class: 'muted' }, o.lastLogin ? when(o.lastLogin) : '-'),
+    h('td', {}, h('div', { class: 'row' },
+      o.kind === 'invite' ? h('button', { class: 'btn sm red', onclick: () => guarded(async () => { if (await revokeInvite(school, o)) await refresh(); }) }, 'Revoke') : [
+        h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await toggleOwner(school, o)) await refresh(); }) }, o.active ? 'Deactivate' : 'Activate'),
+        o.email ? h('button', { class: 'btn sm', onclick: () => guarded(() => resetPassword(school, o)) }, 'Send password reset') : null]))));
+  const ownersCard = h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'flex:1' }, 'Owners'),
+    h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await inviteOwner(school, false)) await refresh(); }) }, 'Invite owner'),
+    h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await inviteOwner(school, true)) await refresh(); }) }, 'Transfer ownership')),
+    owners.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Owner', 'Status', 'Last sign-in', ''].map((t) => h('th', {}, t)))), h('tbody', {}, ownerRows)))
+      : h('div', { class: 'empty' }, 'No owner yet. Invite one.'));
+
+  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), ownersCard);
+}
+
+async function lastLogin(uid) {
+  try {
+    const snap = await getDocs(query(collection(db, 'loginHistory'), where(documentId(), '>=', uid + '_'), where(documentId(), '<=', uid + '_~'), limit(1)));
+    const d = snap.docs[0];
+    return d ? { at: d.data().at, email: d.data().email || '' } : null;
+  } catch { return null; }
+}
+async function loadOwnersOf(schoolId) {
+  const [members, invites] = await Promise.all([
+    getDocs(query(collection(db, 'schools', schoolId, 'members'), where('role', '==', 'owner'))).catch(() => null),
+    getDocs(query(collection(db, 'invites'), where('schoolId', '==', schoolId), where('role', '==', 'owner'))).catch(() => null),
+  ]);
+  const inviteList = invites ? invites.docs.map((d) => ({ id: d.id, ...d.data() })) : [];
+  const out = [];
+  for (const m of members ? members.docs : []) {
+    const data = m.data();
+    const invite = data.inviteId ? inviteList.find((i) => i.id === data.inviteId) : null;
+    const login = await lastLogin(m.id);
+    out.push({ kind: 'member', uid: m.id, active: data.active === true, email: (invite && invite.email) || (login && login.email) || '', lastLogin: login ? login.at : null });
+  }
+  for (const i of inviteList) if (i.status === 'pending') out.push({ kind: 'invite', uid: i.id, id: i.id, email: i.email, active: false });
+  return out;
+}
+
+async function editSchool(school) {
+  const v = await formDialog({
+    title: 'Edit school profile', ok: 'Save changes',
+    fields: [
+      { key: 'name', label: 'School name', required: true, value: school.name },
+      { key: 'contactEmail', label: 'Contact email', type: 'email', value: school.contactEmail || '' },
+      { key: 'phone', label: 'Phone', value: school.phone || '' },
+      { key: 'address', label: 'Address', value: school.address || '' }, REASON],
+  });
+  if (!v) return false;
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'schools', school.id), { name: v.name, contactEmail: v.contactEmail, phone: v.phone, address: v.address });
+  audit(batch, 'edit-school', school.id, v.reason, JSON.stringify({ before: { name: school.name, contactEmail: school.contactEmail, phone: school.phone, address: school.address }, after: { name: v.name, contactEmail: v.contactEmail, phone: v.phone, address: v.address } }));
+  await batch.commit();
+  toast('School profile saved.');
+  return true;
+}
+
+async function applyPlan(school) {
+  if (!S.plans.length) { toast('Create a plan first (Plans and pricing).'); return false; }
+  const v = await formDialog({
+    title: 'Change plan for ' + school.name, ok: 'Apply plan',
+    note: 'The school\'s student, staff and storage limits and monthly price are set from the plan.',
+    fields: [{ key: 'plan', label: 'Plan', type: 'select', options: S.plans.filter((p) => p.active).map((p) => [p.id, p.name + ' (' + money(p.monthlyPrice) + '/month)']), value: school.billing ? school.billing.plan : undefined }, REASON],
+  });
+  if (!v) return false;
+  const plan = S.plans.find((p) => p.id === v.plan);
+  const fields = { plan: plan.id, studentLimit: plan.studentLimit, staffLimit: plan.staffLimit, storageMb: plan.storageMb, monthlyPrice: plan.monthlyPrice };
+  const batch = writeBatch(db);
+  const ref = doc(db, 'schools', school.id, 'billing', 'main');
+  if (school.billing) batch.update(ref, fields); else batch.set(ref, { ...fields, status: 'active' });
+  audit(batch, 'change-plan', school.id, v.reason, JSON.stringify({ before: school.billing ? school.billing.plan : null, after: plan.id }));
+  await batch.commit();
+  toast('Plan applied.');
+  return true;
+}
+
+async function setStatus(school, status) {
+  const v = await formDialog({ title: (status === 'active' ? 'Activate ' : 'Suspend ') + school.name, ok: status === 'active' ? 'Activate' : 'Suspend',
+    note: status === 'suspended' ? 'The school becomes read-only for its owner until you activate it again.' : '', fields: [REASON] });
+  if (!v) return false;
+  const batch = writeBatch(db);
+  const ref = doc(db, 'schools', school.id, 'billing', 'main');
+  if (school.billing) batch.update(ref, { status }); else batch.set(ref, { plan: 'trial', status, studentLimit: 50, staffLimit: 10 });
+  if (status === 'active' && school.archived) batch.update(doc(db, 'schools', school.id), { archived: false, archivedOn: '' });
+  audit(batch, status === 'active' ? 'activate-school' : 'suspend-school', school.id, v.reason, JSON.stringify({ before: statusOf(school), after: status }));
+  await batch.commit();
+  toast('School ' + (status === 'active' ? 'activated.' : 'suspended.'));
+  return true;
+}
+
+async function archiveSchool(school) {
+  const v = await formDialog({ title: 'Archive ' + school.name, ok: 'Archive school',
+    note: 'The school is marked archived and becomes read-only. Nothing is deleted, and you can activate it again.', fields: [REASON] });
+  if (!v) return false;
+  if (!confirm('Archive ' + school.name + '? Its owner will no longer be able to change anything.')) return false;
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'schools', school.id), { archived: true, archivedOn: today() });
+  const ref = doc(db, 'schools', school.id, 'billing', 'main');
+  if (school.billing) batch.update(ref, { status: 'cancelled' }); else batch.set(ref, { plan: 'trial', status: 'cancelled' });
+  audit(batch, 'archive-school', school.id, v.reason, JSON.stringify({ before: statusOf(school), after: 'archived' }));
+  await batch.commit();
+  toast('School archived.');
+  return true;
+}
+
+async function inviteOwner(school, transfer) {
+  const v = await formDialog({
+    title: transfer ? 'Transfer ownership of ' + school.name : 'Invite an owner to ' + school.name, ok: 'Send invitation',
+    note: transfer ? 'The new owner signs in, verifies the email and accepts. After that, deactivate the previous owner here.' : 'The person signs in with this email, verifies it and accepts.',
+    fields: [{ key: 'email', label: 'New owner email', type: 'email', required: true, pattern: /^[^@\sA-Z]+@[^@\sA-Z]+$/, patternText: 'Use a lowercase email address.' }, REASON],
+  });
+  if (!v) return false;
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'invites', newId('OW-')), { schoolId: school.id, email: v.email, role: 'owner', status: 'pending', createdBy: S.user.uid });
+  audit(batch, transfer ? 'transfer-ownership-invite' : 'invite-owner', school.id, v.reason, JSON.stringify({ email: v.email }));
+  await batch.commit();
+  toast('Invitation created for ' + v.email + '.');
+  return true;
+}
+
+async function revokeInvite(school, owner) {
+  const v = await formDialog({ title: 'Revoke the invitation for ' + owner.email, ok: 'Revoke', fields: [REASON] });
+  if (!v) return false;
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'invites', owner.id), { status: 'revoked' });
+  audit(batch, 'revoke-owner-invite', school.id, v.reason, JSON.stringify({ email: owner.email }));
+  await batch.commit();
+  toast('Invitation revoked.');
+  return true;
+}
+
+async function toggleOwner(school, owner) {
+  const next = !owner.active;
+  const v = await formDialog({ title: (next ? 'Activate' : 'Deactivate') + ' owner ' + (owner.email || owner.uid.slice(0, 8)), ok: next ? 'Activate' : 'Deactivate',
+    note: next ? '' : 'This owner can no longer use ' + school.name + '. Make sure another active owner exists first.', fields: [REASON] });
+  if (!v) return false;
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'schools', school.id, 'members', owner.uid), { active: next });
+  audit(batch, next ? 'activate-owner' : 'deactivate-owner', school.id, v.reason, JSON.stringify({ owner: owner.uid, email: owner.email }));
+  await batch.commit();
+  toast('Owner ' + (next ? 'activated.' : 'deactivated.'));
+  return true;
+}
+
+async function resetPassword(school, owner) {
+  const v = await formDialog({ title: 'Send a password reset email to ' + owner.email, ok: 'Send email', fields: [REASON] });
+  if (!v) return;
+  await sendPasswordResetEmail(auth, owner.email);
+  const batch = writeBatch(db);
+  audit(batch, 'send-password-reset', school.id, v.reason, JSON.stringify({ email: owner.email }));
+  await batch.commit();
+  toast('Password reset email sent to ' + owner.email + '.');
+}
+
+// Open school administration: the reason and a 50-minute access pass are created together with the audit entry.
+async function openSchoolAccess(school) {
+  const v = await formDialog({
+    title: 'Open school administration: ' + school.name, ok: 'Create access pass',
+    note: 'You get a 50-minute, read-only pass for this school. Sensitive records (medical, identity, selfies, payroll, private family information) need a separate short pass inside the school view.',
+    fields: [REASON],
+  });
+  if (!v) return;
+  const batch = writeBatch(db);
+  const auditId = audit(batch, 'open-school-standard', school.id, v.reason, 'read-only access pass, 50 minutes');
+  batch.set(doc(db, 'platformGrants', S.user.uid + '_' + school.id + '_standard'), {
+    schoolId: school.id, tier: 'standard', reason: v.reason, createdBy: S.user.uid, createdAt: serverTimestamp(),
+    expiresAt: Timestamp.fromMillis(Date.now() + 50 * 60000), auditId,
+  });
+  await batch.commit();
+  const link = h('a', { href: '/app?school=' + encodeURIComponent(school.id), target: '_blank', rel: 'noopener' }, 'Open ' + school.name + ' now');
+  const dlg = h('dialog', { class: 'dlg' }, h('h3', {}, 'Access pass created'), h('p', {}, 'Valid for 50 minutes, read-only, and recorded in the audit log.'), h('p', {}, link),
+    h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: () => { dlg.close(); dlg.remove(); } }, 'Close')));
+  link.addEventListener('click', () => setTimeout(() => { dlg.close(); dlg.remove(); }, 200));
+  document.body.append(dlg); dlg.showModal();
+}
+
+async function viewOwners() {
+  setCrumbs('School owners');
+  view().replaceChildren(loading('Loading every school\'s owners. This can take a moment.'));
+  await loadSchools();
+  if (!S.ownersCache) {
+    const rows = [];
+    await pool(S.schools, 10, async (school) => { for (const o of await loadOwnersOf(school.id)) rows.push({ ...o, school }); });
+    S.ownersCache = rows;
+  }
+  const rows = S.ownersCache;
+  const byUid = new Map();
+  for (const r of rows) if (r.kind === 'member') byUid.set(r.uid, [...(byUid.get(r.uid) || []), r.school]);
+  const searchBox = h('input', { type: 'search', placeholder: 'Search owner email or school' });
+  const body = h('tbody');
+  const draw = () => {
+    const words = searchBox.value.trim().toLowerCase();
+    const list = rows.filter((r) => !words || [r.email, r.school.name, r.school.id].some((v) => String(v || '').toLowerCase().includes(words)));
+    body.replaceChildren(...list.slice(0, 400).map((r) => {
+      const others = r.kind === 'member' ? (byUid.get(r.uid) || []).filter((s) => s.id !== r.school.id) : [];
+      return h('tr', {},
+        h('td', {}, r.email || h('span', { class: 'muted' }, 'Signed up directly (' + String(r.uid).slice(0, 8) + '...)')),
+        h('td', {}, r.kind === 'invite' ? h('span', { class: 'pill warn' }, 'Invitation pending') : h('span', { class: 'pill ' + (r.active ? 'ok' : 'bad') }, r.active ? 'Active' : 'Deactivated')),
+        h('td', {}, h('a', { href: '#/school/' + r.school.id }, r.school.name)),
+        h('td', { class: 'muted' }, others.length ? 'Also owns: ' + others.map((s) => s.name).join(', ') : '-'),
+        h('td', { class: 'muted' }, r.lastLogin ? when(r.lastLogin) : '-'));
+    }));
+    if (!list.length) body.replaceChildren(h('tr', {}, h('td', { colspan: 5 }, h('div', { class: 'empty' }, 'No owners match.'))));
+  };
+  searchBox.addEventListener('input', draw);
+  view().replaceChildren(h('h2', {}, 'School owners (' + rows.length + ')'),
+    h('p', { class: 'muted' }, 'Owners need a verified email to accept an invitation. Open a school to invite, transfer, deactivate or send a password reset.'),
+    searchBox, h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Owner', 'Status', 'School', 'Relationships', 'Last sign-in'].map((t) => h('th', {}, t)))), body)));
+  draw();
+}
+
+async function viewPlans() {
+  setCrumbs('Plans and pricing');
+  view().replaceChildren(loading('Loading plans.'));
+  await loadPlans();
+  const rows = S.plans.map((p) => h('tr', {},
+    h('td', {}, h('b', {}, p.name), h('div', { class: 'muted' }, p.id), p.active ? null : h('span', { class: 'pill bad' }, 'Inactive')),
+    h('td', {}, money(p.monthlyPrice)), h('td', {}, money(p.yearlyPrice)), h('td', {}, money(p.setupFee)),
+    h('td', {}, num(p.studentLimit) + ' students, ' + num(p.staffLimit) + ' staff, ' + num(p.storageMb) + ' MB'),
+    h('td', { class: 'muted' }, (p.features || []).join(', ') || '-'),
+    h('td', {}, h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await editPlan(p)) await viewPlans(); }) }, 'Edit'),
+      h('button', { class: 'btn sm', onclick: () => guarded(() => showHistory(p)) }, 'Price history')))));
+  view().replaceChildren(
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Plans and pricing'), h('button', { class: 'btn gold', onclick: () => guarded(async () => { if (await editPlan(null)) await viewPlans(); }) }, 'Create a plan')),
+    h('p', { class: 'muted' }, 'Prices are in rupees. Every price change is kept in the price history. Features are stored with the plan; switching features on and off per plan comes in a later batch.'),
+    rows.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Plan', 'Monthly', 'Yearly', 'Setup fee', 'Limits', 'Features', ''].map((t) => h('th', {}, t)))), h('tbody', {}, rows)))
+      : h('div', { class: 'empty' }, 'No plans yet. Create your first plan.'));
+}
+
+async function editPlan(plan) {
+  const v = await formDialog({
+    title: plan ? 'Edit plan ' + plan.name : 'Create a plan', ok: 'Save plan',
+    fields: [
+      { key: 'id', label: 'Plan ID (lowercase, fixed once created)', required: true, value: plan ? plan.id : '', readonly: Boolean(plan), pattern: /^[a-z][a-z0-9-]{1,29}$/, patternText: 'Use 2 to 30 lowercase letters, numbers or dashes.' },
+      { key: 'name', label: 'Plan name', required: true, value: plan ? plan.name : '' },
+      { key: 'monthlyPrice', label: 'Monthly price (Rs)', type: 'number', required: true, value: plan ? plan.monthlyPrice : 0 },
+      { key: 'yearlyPrice', label: 'Yearly price (Rs)', type: 'number', required: true, value: plan ? plan.yearlyPrice : 0 },
+      { key: 'setupFee', label: 'Setup fee (Rs)', type: 'number', required: true, value: plan ? plan.setupFee : 0 },
+      { key: 'studentLimit', label: 'Student limit', type: 'number', required: true, value: plan ? plan.studentLimit : 100 },
+      { key: 'staffLimit', label: 'Staff limit', type: 'number', required: true, value: plan ? plan.staffLimit : 20 },
+      { key: 'storageMb', label: 'Storage limit (MB)', type: 'number', required: true, value: plan ? plan.storageMb : 1024 },
+      { key: 'features', label: 'Features (comma separated)', value: plan ? (plan.features || []).join(', ') : '' },
+      { key: 'active', label: 'Plan is available to schools', type: 'checkbox', value: plan ? plan.active : true },
+      { key: 'note', label: 'Note for the price history (optional)' },
+    ],
+  });
+  if (!v) return false;
+  const features = v.features ? v.features.split(',').map((t) => t.trim()).filter(Boolean).slice(0, 40) : [];
+  const historyId = newId('H-');
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'planHistory', historyId), { planId: v.id, by: S.user.uid, at: serverTimestamp(), monthlyPrice: v.monthlyPrice, yearlyPrice: v.yearlyPrice, setupFee: v.setupFee, ...(v.note ? { note: v.note.slice(0, 200) } : {}) });
+  batch.set(doc(db, 'plans', v.id), { name: v.name, monthlyPrice: v.monthlyPrice, yearlyPrice: v.yearlyPrice, setupFee: v.setupFee, studentLimit: v.studentLimit, staffLimit: v.staffLimit, storageMb: v.storageMb, features, active: v.active, historyId });
+  audit(batch, plan ? 'edit-plan' : 'create-plan', '', v.note || '', JSON.stringify({ plan: v.id, monthly: v.monthlyPrice, yearly: v.yearlyPrice, setup: v.setupFee, before: plan ? { monthly: plan.monthlyPrice, yearly: plan.yearlyPrice, setup: plan.setupFee } : null }));
+  await batch.commit();
+  toast('Plan saved.');
+  return true;
+}
+
+async function showHistory(plan) {
+  const snap = await getDocs(query(collection(db, 'planHistory'), where('planId', '==', plan.id)));
+  const rows = snap.docs.map((d) => d.data()).sort((a, b) => (b.at && a.at ? b.at.toMillis() - a.at.toMillis() : 0));
+  const dlg = h('dialog', { class: 'dlg' }, h('h3', {}, 'Price history: ' + plan.name),
+    rows.length ? h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Monthly', 'Yearly', 'Setup', 'Note'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, when(r.at)), h('td', {}, money(r.monthlyPrice)), h('td', {}, money(r.yearlyPrice)), h('td', {}, money(r.setupFee)), h('td', { class: 'muted' }, r.note || ''))))) : h('div', { class: 'empty' }, 'No history yet.'),
+    h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: () => { dlg.close(); dlg.remove(); } }, 'Close')));
+  document.body.append(dlg); dlg.showModal();
+}
+
+async function viewAudit() {
+  setCrumbs('Audit log');
+  view().replaceChildren(loading('Loading the audit log.'));
+  const snap = await getDocs(query(collection(db, 'platformAudit'), orderBy('at', 'desc'), limit(200)));
+  const rows = snap.docs.map((d) => d.data());
+  view().replaceChildren(h('h2', {}, 'Audit log'),
+    h('p', { class: 'muted' }, 'The newest 200 entries. Entries can be added but never edited or deleted.'),
+    rows.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Who', 'Action', 'School', 'Reason', 'Detail'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, when(r.at)), h('td', {}, r.actorEmail || String(r.actor).slice(0, 8)), h('td', {}, h('b', {}, r.action)),
+        h('td', {}, r.schoolId ? h('a', { href: '#/school/' + r.schoolId }, r.schoolId) : '-'), h('td', {}, r.reason || '-'), h('td', { class: 'muted', style: 'max-width:340px;word-break:break-word' }, r.detail || '-'))))))
+      : h('div', { class: 'empty' }, 'Nothing recorded yet.'));
+}
+
+async function viewSecurity() {
+  setCrumbs('Security and access');
+  view().replaceChildren(loading('Loading.'));
+  const [grants, cfg] = await Promise.all([getDocs(collection(db, 'platformGrants')), getDoc(doc(db, 'platformConfig', 'security')).catch(() => null)]);
+  const now = Date.now();
+  const live = grants.docs.map((d) => ({ id: d.id, ...d.data() })).filter((g) => g.expiresAt && g.expiresAt.toMillis() > now);
+  const mfaOn = cfg && cfg.exists() && cfg.data().requireMfa === true;
+  const mfaBox = h('input', { type: 'checkbox' }); mfaBox.checked = mfaOn;
+  mfaBox.addEventListener('change', () => guarded(async () => {
+    const next = mfaBox.checked;
+    if (next && !confirm('Turn on the MFA requirement? Sensitive access passes will fail until your account has a second factor enrolled in Firebase.')) { mfaBox.checked = false; return; }
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'platformConfig', 'security'), { requireMfa: next });
+    audit(batch, next ? 'require-mfa-on' : 'require-mfa-off', '', '', '');
+    await batch.commit();
+    toast('Saved.');
+  }));
+  view().replaceChildren(h('h2', {}, 'Security and access'),
+    h('div', { class: 'two' },
+      h('div', { class: 'card' }, h('h3', {}, 'Active access passes'),
+        live.length ? h('table', {}, h('tbody', {}, live.map((g) => h('tr', {}, h('td', {}, h('a', { href: '#/school/' + g.schoolId }, g.schoolId), h('div', { class: 'muted' }, g.tier + ' until ' + when(g.expiresAt))),
+          h('td', {}, g.createdBy === S.user.uid ? h('button', { class: 'btn sm red', onclick: () => guarded(async () => {
+            const batch = writeBatch(db);
+            batch.delete(doc(db, 'platformGrants', g.id));
+            audit(batch, 'revoke-access-pass', g.schoolId, '', g.tier);
+            await batch.commit(); toast('Access pass revoked.'); await viewSecurity();
+          }) }, 'Revoke') : null))))) : h('div', { class: 'empty' }, 'No active passes.')),
+      h('div', { class: 'card' }, h('h3', {}, 'Multi-factor sign-in (MFA)'),
+        h('p', { class: 'muted' }, 'When this is on, sensitive access passes need a second-factor sign-in from the last hour. Before you turn it on: in the Firebase console open Authentication, upgrade to Identity Platform, and enroll a second factor for your account. Enrollment on this page comes in a later batch.'),
+        h('label', {}, mfaBox, 'Require MFA for sensitive access passes'))));
+}
+
+// ---------- routing ----------
+async function route() {
+  const parts = (location.hash || '#/dashboard').replace(/^#\/?/, '').split('/');
+  const name = parts[0] || 'dashboard';
+  for (const a of document.querySelectorAll('nav.side a.item[data-r]')) a.classList.toggle('on', a.dataset.r === (name === 'school' ? 'schools' : name));
+  await guarded(async () => {
+    if (name === 'schools') await viewSchools();
+    else if (name === 'school') await viewSchool(decodeURIComponent(parts[1] || ''));
+    else if (name === 'owners') await viewOwners();
+    else if (name === 'plans') await viewPlans();
+    else if (name === 'audit') await viewAudit();
+    else if (name === 'security') await viewSecurity();
+    else await viewDashboard();
+  }).then(() => {});
+}
+
+function wireTop() {
+  const box = $('gsearch'); const hits = $('hits');
+  box.addEventListener('input', async () => {
+    const words = box.value.trim().toLowerCase();
+    if (words.length < 2) { hits.hidden = true; return; }
+    await guarded(loadSchools);
+    const found = S.schools.filter((s) => [s.name, s.id, s.contactEmail].some((v) => String(v || '').toLowerCase().includes(words))).slice(0, 8);
+    hits.replaceChildren(...(found.length ? found.map((s) => h('a', { href: '#/school/' + s.id, onclick: () => { hits.hidden = true; box.value = ''; } }, s.name + ' (' + s.id + ')')) : [h('a', { href: '#/schools' }, 'No school found')]));
+    hits.hidden = false;
+  });
+  document.addEventListener('click', (event) => { if (!event.target.closest('.search')) hits.hidden = true; if (!event.target.closest('#menu')) $('menu').classList.remove('open'); });
+  $('switcher').addEventListener('change', (event) => { if (event.target.value) location.hash = '#/school/' + event.target.value; event.target.value = ''; });
+  $('bell').addEventListener('click', () => { location.hash = '#/dashboard'; });
+  $('menuBtn').addEventListener('click', () => $('menu').classList.toggle('open'));
+  $('out').addEventListener('click', async () => { await signOut(auth); location.href = '/app'; });
+  addEventListener('hashchange', route);
+}
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { location.replace('/app'); return; }
+  let isAdmin = false;
+  try { isAdmin = (await getDocFromServer(doc(db, 'platformAdmins', user.uid))).exists(); } catch { isAdmin = false; }
+  if (!isAdmin) {
+    $('gate').replaceChildren(h('div', { style: 'text-align:center' }, h('h2', {}, 'Super admin only'), h('p', { class: 'muted' }, 'This account is not a platform administrator.'), h('a', { href: '/app' }, 'Go to the school app')));
+    return;
+  }
+  S.user = user;
+  $('who').textContent = user.email || user.uid;
+  $('gate').hidden = true; $('shell').hidden = false;
+  wireTop();
+  route();
+});

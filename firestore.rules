@@ -57,10 +57,32 @@ service cloud.firestore {
       return exists(path) && get(path).data.active == true && get(path).data.role in ['owner', 'principal'];
     }
 
-    // Everyone who may LOOK at the school's records: its owner, its principal and the platform (super) administrator.
-    // The platform administrator can read every school but this helper is never used to let anyone write.
+    // Super administrator access (Batch 76). The platform administrator reads a school's records only while an unexpired access grant
+    // exists: platformGrants/{uid}_{schoolId}_{tier}. 'standard' lasts up to 60 minutes. 'sensitive' (medical, identity, selfies, payroll,
+    // private family records) lasts up to 15 minutes and needs recent MFA once the platform switch requireMfa is on. Every grant is created
+    // together with an audit entry in platformAudit, and the rules refuse a grant without one.
+    function hasGrant(schoolId, tier) {
+      let grant = /databases/$(database)/documents/platformGrants/$(request.auth.uid + '_' + schoolId + '_' + tier);
+      return isPlatformAdmin() && exists(grant) && get(grant).data.expiresAt > request.time;
+    }
+    function hasAccess(schoolId) { return hasGrant(schoolId, 'standard') || hasGrant(schoolId, 'sensitive'); }
+
+    // Everyone who may LOOK at the school's ordinary records: its owner, its principal and a super administrator holding a grant.
     function isSchoolViewer(schoolId) {
-      return isStaffViewer(schoolId) || isPlatformAdmin();
+      return isStaffViewer(schoolId) || hasAccess(schoolId);
+    }
+
+    // Sensitive records: owner, principal, or a super administrator with a short sensitive grant.
+    function isSensitiveViewer(schoolId) {
+      return isStaffViewer(schoolId) || hasGrant(schoolId, 'sensitive');
+    }
+
+    // When the platform switch requireMfa is on, sensitive grants need a second-factor sign-in no older than one hour.
+    function mfaOk() {
+      let cfg = /databases/$(database)/documents/platformConfig/security;
+      return !(exists(cfg) && get(cfg).data.get('requireMfa', false) == true)
+        || (request.auth.token.firebase.get('sign_in_second_factor', '') != ''
+          && request.auth.token.auth_time * 1000 > request.time.toMillis() - 3600000);
     }
 
     // The fee office login. It reads the students, classes, years and fees and records payments; it cannot
@@ -123,6 +145,62 @@ service cloud.firestore {
       allow create, update: if isPlatformAdmin() && docId == 'templates' && validTemplateConfig(request.resource.data);
     }
 
+    // platformConfig/security: the platform switch requireMfa (true or false). Turn it on only after Authentication is upgraded to Identity Platform
+    // and the administrator has enrolled a second factor.
+    match /platformConfig/{docId} {
+      allow get: if isPlatformAdmin() && docId == 'security';
+      allow create, update: if isPlatformAdmin() && docId == 'security' && request.resource.data.keys().hasOnly(['requireMfa'])
+        && request.resource.data.requireMfa is bool;
+    }
+
+    // platformAudit/{id}: the permanent record of what the platform administrator did. Written once, never changed or deleted by anyone.
+    // Fields: actor (uid), actorEmail, action, schoolId, reason, detail (before and after, text), at (server time).
+    match /platformAudit/{auditId} {
+      allow get, list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && auditId.matches('A-[A-Za-z0-9-]{4,40}') && validAudit(request.resource.data)
+        && request.resource.data.actor == request.auth.uid && request.resource.data.at == request.time;
+      allow update, delete: if false;
+    }
+
+    // platformGrants/{uid}_{schoolId}_{tier}: a short, school-scoped access pass. See hasGrant. Created with its audit entry (auditId) in one batch.
+    match /platformGrants/{grantId} {
+      allow get, list: if isPlatformAdmin();
+      allow create, update: if isPlatformAdmin() && validGrant(request.resource.data)
+        && grantId == request.auth.uid + '_' + request.resource.data.schoolId + '_' + request.resource.data.tier
+        && request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt <= request.time + duration.value(request.resource.data.tier == 'sensitive' ? 15 : 60, 'm')
+        && (request.resource.data.tier == 'standard' || mfaOk())
+        && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
+      allow delete: if isPlatformAdmin() && grantId.matches(request.auth.uid + '_.*');
+    }
+
+    // plans/{planId}: the plan catalogue. Signed-in users read it; only the platform administrator writes it, and every change comes with a
+    // planHistory entry (historyId) in the same batch.
+    match /plans/{planId} {
+      allow get, list: if request.auth != null;
+      allow create, update: if isPlatformAdmin() && planId.matches('[a-z][a-z0-9-]{1,29}') && validPlan(request.resource.data)
+        && existsAfter(/databases/$(database)/documents/planHistory/$(request.resource.data.historyId));
+      allow delete: if false;
+    }
+    match /planHistory/{historyId} {
+      allow get, list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && historyId.matches('H-[A-Za-z0-9-]{4,40}') && validPlanHistory(request.resource.data)
+        && request.resource.data.by == request.auth.uid && request.resource.data.at == request.time;
+      allow update, delete: if false;
+    }
+
+    // loginHistory/{uid}_{13 digits}: one entry per sign-in session, written by the user. Only the platform administrator reads them.
+    match /loginHistory/{loginId} {
+      allow get, list: if isPlatformAdmin();
+      allow create: if request.auth != null && loginId.matches(request.auth.uid + '_[0-9]{13}')
+        && request.resource.data.keys().hasOnly(['uid', 'email', 'at', 'agent'])
+        && request.resource.data.keys().hasAll(['uid', 'at'])
+        && request.resource.data.uid == request.auth.uid && request.resource.data.at == request.time
+        && optText(request.resource.data, 'email', 120) && optText(request.resource.data, 'agent', 160);
+      allow update, delete: if false;
+    }
+
     // platformDrills/{id}: disaster-recovery drill log. Platform administrators only.
     match /platformDrills/{drillId} {
       allow get, list: if isPlatformAdmin();
@@ -160,16 +238,23 @@ service cloud.firestore {
     // person by email; that person, signed in with a verified address, accepts it and becomes a member.
     match /invites/{inviteId} {
       allow get, list: if request.auth != null && isSchoolViewer(resource.data.schoolId);
+      allow get, list: if isPlatformAdmin() && resource.data.role == 'owner';
+      allow create: if isPlatformAdmin() && inviteId.matches('OW-[A-Za-z0-9-]{1,27}') && validInvite(request.resource.data)
+        && request.resource.data.role == 'owner' && request.resource.data.status == 'pending'
+        && request.resource.data.createdBy == request.auth.uid
+        && existsAfter(/databases/$(database)/documents/schools/$(request.resource.data.schoolId));
       allow get, list: if request.auth != null && request.auth.token.email_verified == true
         && resource.data.email == request.auth.token.email.lower();
       allow create: if request.auth != null && isSchoolOwner(request.resource.data.schoolId)
         && withinLimit(request.resource.data.schoolId, 'staff', 'staffLimit')
         && inviteId.matches('[A-Za-z0-9-]{1,30}') && validInvite(request.resource.data)
+        && request.resource.data.role != 'owner'
         && request.resource.data.status == 'pending' && request.resource.data.createdBy == request.auth.uid;
       allow update: if request.auth != null && validInvite(request.resource.data)
         && request.resource.data.schoolId == resource.data.schoolId && request.resource.data.email == resource.data.email
         && request.resource.data.role == resource.data.role && request.resource.data.createdBy == resource.data.createdBy
         && ((isSchoolOwner(resource.data.schoolId) && resource.data.status == 'pending' && request.resource.data.status == 'revoked')
+          || (isPlatformAdmin() && resource.data.role == 'owner' && resource.data.status == 'pending' && request.resource.data.status == 'revoked')
           || (request.auth.token.email_verified == true && resource.data.email == request.auth.token.email.lower()
             && resource.data.status == 'pending' && request.resource.data.status == 'accepted'));
     }
@@ -186,11 +271,26 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['name', 'contactEmail', 'phone', 'address'])
         && validProfile(request.resource.data);
+      // Super administrator: registers a school, edits its profile and archives it (archived true plus billing cancelled).
+      allow create: if isPlatformAdmin() && validNewSchool(request.resource.data)
+        && schoolId.matches('[a-z][a-z0-9-]{2,29}') && !(schoolId in ['www', 'admin', 'api', 'app', 'platform', 'school', 'aziz', 'public', 'support', 'demo'])
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isPlatformAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'contactEmail', 'phone', 'address', 'archived', 'archivedOn'])
+        && validProfile(request.resource.data)
+        && (!request.resource.data.keys().hasAny(['archived']) || request.resource.data.archived is bool)
+        && optText(request.resource.data, 'archivedOn', 10);
 
       // Staff profiles contain contact and job details only.
       match /members/{uid} {
         allow get: if request.auth != null && (request.auth.uid == uid || isSchoolViewer(schoolId));
         allow list: if viewerAuth(schoolId);
+        // The platform administrator reads and switches the owner records of every school without a grant (they hold no private data).
+        allow get, list: if isPlatformAdmin() && resource.data.role == 'owner';
+        allow update: if isPlatformAdmin() && resource.data.role == 'owner'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
+          && request.resource.data.active is bool;
         // The signup user becomes the owner of the school created in the same batch.
         allow create: if request.auth != null && request.auth.uid == uid
           && request.resource.data.keys().hasOnly(['role', 'active'])
@@ -361,7 +461,7 @@ service cloud.firestore {
       // active teacher creates their own pending request. Only the owner decides one, and only
       // once. A teacher reads only their own requests (query by staffUid). Never deleted.
       match /leaveRequests/{requestId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
+        allow get, list: if request.auth != null && (isSensitiveViewer(schoolId)
           || (resource.data.staffUid == request.auth.uid && isActiveTeacher()));
         allow create: if request.auth != null && isActiveTeacher()
           && validLeaveRequest(request.resource.data)
@@ -385,7 +485,7 @@ service cloud.firestore {
       // or an active principal can also read and decide. Family accounts read only their own student's
       // requests (query by studentId). Never deleted.
       match /studentLeaves/{leaveId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
+        allow get, list: if request.auth != null && (isSensitiveViewer(schoolId)
           || classTeacherOf(resource.data.classId)
           || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && familyOwns(request.resource.data.studentId)
@@ -413,7 +513,7 @@ service cloud.firestore {
       // mistake is voided once. Family accounts read only their own student's payments. Teachers
       // read neither.
       match /feeStructures/{feeId} {
-        allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || isPlatformAdmin() || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyActive());
+        allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || hasAccess(schoolId) || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyActive());
         allow create, update: if ownerAuth(schoolId)
           && validFeeStructure(request.resource.data)
           && feeId == request.resource.data.yearId + '_' + request.resource.data.classId + '_' + request.resource.data.head
@@ -423,7 +523,7 @@ service cloud.firestore {
       }
 
       match /payments/{paymentId} {
-        allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || isPlatformAdmin() || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyOwns(resource.data.studentId));
+        allow get, list: if request.auth != null && ((isOwnerRole(schoolId) || hasAccess(schoolId) || principalAllows(schoolId, 'fees', true) || isFeeStaff(schoolId)) || familyOwns(resource.data.studentId));
         allow create: if request.auth != null && (isSchoolOwner(schoolId) || isFeeStaff(schoolId))
           && validPayment(request.resource.data)
           && !request.resource.data.keys().hasAny(['voided'])
@@ -621,7 +721,7 @@ service cloud.firestore {
       // Behaviour notes. behaviour/{noteId}: studentId, date, kind (positive or concern), note,
       // recordedBy. Owner only; written once and removed by the owner.
       match /behaviour/{noteId} {
-        allow get, list: if viewerAuth(schoolId);
+        allow get, list: if sensitiveAuth(schoolId);
         allow create: if ownerAuth(schoolId)
           && noteId.matches('[A-Za-z0-9-]{1,30}') && validBehaviour(request.resource.data)
           && request.resource.data.recordedBy == request.auth.uid
@@ -633,7 +733,7 @@ service cloud.firestore {
       // Visitor log. visitors/{visitId}: name, purpose, whom, phone, date, timeIn, recordedBy, and
       // timeOut once they leave. Owner only; never deleted.
       match /visitors/{visitId} {
-        allow get, list: if viewerAuth(schoolId);
+        allow get, list: if sensitiveAuth(schoolId);
         allow create: if ownerAuth(schoolId)
           && visitId.matches('[A-Za-z0-9-]{1,30}') && validVisitor(request.resource.data)
           && !request.resource.data.keys().hasAny(['timeOut'])
@@ -753,7 +853,7 @@ service cloud.firestore {
         allow delete: if ownerAuth(schoolId);
       }
       match /appraisals/{docId} {
-        allow get, list: if viewerAuth(schoolId);
+        allow get, list: if sensitiveAuth(schoolId);
         allow create, update: if ownerAuth(schoolId)
           && docId.matches('AP-[A-Za-z0-9-]{1,30}') && validAppraisal(request.resource.data);
         allow delete: if ownerAuth(schoolId);
@@ -803,7 +903,7 @@ service cloud.firestore {
 
       // Complaints. complaints/{id}: title, raisedBy, date, status open/resolved, optional note. Owner only.
       match /complaints/{docId} {
-        allow get, list: if viewerAuth(schoolId);
+        allow get, list: if sensitiveAuth(schoolId);
         allow create, update: if ownerAuth(schoolId)
           && docId.matches('[A-Za-z0-9-]{1,30}') && validComplaint(request.resource.data);
         allow delete: if ownerAuth(schoolId);
@@ -819,7 +919,7 @@ service cloud.firestore {
       }
 
       match /scholarshipApps/{docId} {
-        allow get, list: if viewerAuth(schoolId);
+        allow get, list: if sensitiveAuth(schoolId);
         allow create, update: if ownerAuth(schoolId)
           && docId.matches('SA-[A-Za-z0-9-]{1,30}') && validScholarshipApp(request.resource.data)
           && studentExists(schoolId, request.resource.data.studentId)
@@ -838,7 +938,7 @@ service cloud.firestore {
       }
 
       match /consentResponses/{docId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
+        allow get, list: if request.auth != null && (isSensitiveViewer(schoolId)
           || (resource.data.by == request.auth.uid && familyActive()));
         allow create: if request.auth != null && validConsentResponse(request.resource.data)
           && request.resource.data.by == request.auth.uid
@@ -856,8 +956,8 @@ service cloud.firestore {
 
       // Staff self-service (feature 143). staffProfiles/{teacherUid}: a teacher's own phone, address and emergency contact.
       match /staffProfiles/{uid} {
-        allow get: if request.auth != null && (isSchoolViewer(schoolId) || (isActiveTeacher() && request.auth.uid == uid));
-        allow list: if viewerAuth(schoolId);
+        allow get: if request.auth != null && (isSensitiveViewer(schoolId) || (isActiveTeacher() && request.auth.uid == uid));
+        allow list: if sensitiveAuth(schoolId);
         allow create, update: if request.auth != null && isActiveTeacher() && request.auth.uid == uid
           && validStaffProfile(request.resource.data);
         allow delete: if false;
@@ -924,8 +1024,8 @@ service cloud.firestore {
       // person shows at the gate. A family adds and changes its own student's people; the school sees them all.
       // pickupLogs/{id}: one record each time a child is handed over (owner or principal), written once with the server time.
       match /pickupPeople/{docId} {
-        allow get: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.createdBy == request.auth.uid && familyActive()));
-        allow list: if request.auth != null && (isSchoolViewer(schoolId) || (resource.data.createdBy == request.auth.uid && familyActive()));
+        allow get: if request.auth != null && (isSensitiveViewer(schoolId) || (resource.data.createdBy == request.auth.uid && familyActive()));
+        allow list: if request.auth != null && (isSensitiveViewer(schoolId) || (resource.data.createdBy == request.auth.uid && familyActive()));
         allow create: if request.auth != null && validPickupPerson(request.resource.data)
           && docId.matches('[A-Za-z0-9-]{1,30}')
           && request.resource.data.createdBy == request.auth.uid
@@ -939,7 +1039,7 @@ service cloud.firestore {
           || (resource.data.createdBy == request.auth.uid && familyActive()));
       }
       match /pickupLogs/{docId} {
-        allow get, list: if viewerAuth(schoolId);
+        allow get, list: if sensitiveAuth(schoolId);
         allow create: if request.auth != null && isStaffViewer(schoolId) && validPickupLog(request.resource.data)
           && docId.matches('[A-Za-z0-9-]{1,30}') && request.resource.data.by == request.auth.uid
           && studentExists(schoolId, request.resource.data.studentId);
@@ -1177,7 +1277,7 @@ service cloud.firestore {
       // Health records. healthRecords/{studentId}: studentId, bloodGroup, allergies, conditions,
       // emergencyContact, notes. The owner writes them; the owner and the linked family read them.
       match /healthRecords/{recordId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(resource.data.studentId));
+        allow get, list: if request.auth != null && (isSensitiveViewer(schoolId) || familyOwns(resource.data.studentId));
         allow create, update: if ownerAuth(schoolId)
           && validHealthRecord(request.resource.data) && recordId == request.resource.data.studentId
           && studentExists(schoolId, request.resource.data.studentId);
@@ -1215,7 +1315,7 @@ service cloud.firestore {
       // Payroll. payroll/{staffUid}_{YYYY-MM}: staffUid, month, basic, allowances, deductions (whole
       // rupees), optional paidOn and note. Salary details are for the owner only: nobody else can read them.
       match /payroll/{payrollId} {
-        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || isPlatformAdmin() || principalAllows(schoolId, 'payroll', false)
+        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || hasGrant(schoolId, 'sensitive') || principalAllows(schoolId, 'payroll', false)
           || (isActiveTeacher() && resource.data.staffUid == request.auth.uid));
         allow create, update: if ownerAuth(schoolId)
           && validPayroll(request.resource.data)
@@ -1228,7 +1328,7 @@ service cloud.firestore {
       // owner's reply and repliedAt. A linked family sends one for its own student and reads only its own
       // messages (query createdBy == uid). The owner reads all, adds a reply (nothing else changes) and removes.
       match /messages/{messageId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId)
+        allow get, list: if request.auth != null && (isSensitiveViewer(schoolId)
           || (resource.data.createdBy == request.auth.uid && familyActive()));
         allow create: if request.auth != null && messageId.matches('[A-Za-z0-9-]{1,30}')
           && validMessage(request.resource.data)
@@ -1258,7 +1358,7 @@ service cloud.firestore {
       // status new. Only the owner reads them, moves them through the pipeline (status and note change
       // and nothing else) and removes them.
       match /enquiries/{enquiryId} {
-        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || isPlatformAdmin() || principalAllows(schoolId, 'admissions', true));
+        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || hasAccess(schoolId) || principalAllows(schoolId, 'admissions', true));
         allow create: if enquiryId.matches('EQ-[A-Za-z0-9-]{1,30}') && validEnquiry(request.resource.data)
           && request.resource.data.status == 'new' && !request.resource.data.keys().hasAny(['note']);
         allow update: if ownerAuth(schoolId) && validEnquiry(request.resource.data)
@@ -1332,8 +1432,8 @@ service cloud.firestore {
           let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(uid);
           return exists(path) && get(path).data.active == true && get(path).data.role in ['student', 'parent'];
         }
-        allow get: if request.auth != null && (isSchoolViewer(schoolId) || (request.auth.uid == uid && familyMember()));
-        allow list: if viewerAuth(schoolId);
+        allow get: if request.auth != null && (isSensitiveViewer(schoolId) || (request.auth.uid == uid && familyMember()));
+        allow list: if sensitiveAuth(schoolId);
         allow create, update: if ownerAuth(schoolId) && familyMember()
           && validFamilyAccess(request.resource.data)
           && studentExists(schoolId, request.resource.data.studentId);
@@ -1415,9 +1515,9 @@ service cloud.firestore {
       // verified record is accepted only when the reported position is inside the school's distance and the GPS accuracy is
       // good enough. A teacher whose GPS fails sends a record with status review; the owner approves or rejects it.
       match /staffCheckins/{docId} {
-        allow get: if request.auth != null && (isSchoolViewer(schoolId)
+        allow get: if request.auth != null && (isSensitiveViewer(schoolId)
           || (isActiveTeacher() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}_' + request.auth.uid + '_(in|out)')));
-        allow list: if viewerAuth(schoolId);
+        allow list: if sensitiveAuth(schoolId);
         allow create: if request.auth != null && isActiveTeacher()
           && request.resource.data.staffUid == request.auth.uid
           && (validVerifiedCheckin(schoolId, request.resource.data, docId)
@@ -1454,7 +1554,7 @@ service cloud.firestore {
       // Selfie (feature 128). staffSelfies/{date}_{teacherUid}_{in|out}: a small compressed photo taken live at check-in.
       // The teacher saves it before the check-in and may replace it until the check-in exists. The school's owner and principal read it.
       match /staffSelfies/{docId} {
-        allow get: if viewerAuth(schoolId);
+        allow get: if sensitiveAuth(schoolId);
         allow create, update: if request.auth != null && isActiveTeacher()
           && request.resource.data.keys().hasOnly(['staffUid', 'date', 'kind', 'photo', 'at'])
           && request.resource.data.keys().hasAll(['staffUid', 'date', 'kind', 'photo', 'at'])
@@ -1472,9 +1572,9 @@ service cloud.firestore {
       // Attendance disputes and missed punches (feature 133). attendanceDisputes/{date}_{teacherUid}: a teacher says what time
       // they came or left on a day the check-in did not work. The owner approves or rejects it once.
       match /attendanceDisputes/{docId} {
-        allow get: if request.auth != null && (isSchoolViewer(schoolId)
+        allow get: if request.auth != null && (isSensitiveViewer(schoolId)
           || (isActiveTeacher() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}_' + request.auth.uid)));
-        allow list: if request.auth != null && (isSchoolViewer(schoolId)
+        allow list: if request.auth != null && (isSensitiveViewer(schoolId)
           || (isActiveTeacher() && resource.data.staffUid == request.auth.uid));
         allow create: if request.auth != null && isActiveTeacher()
           && request.resource.data.staffUid == request.auth.uid
@@ -1548,7 +1648,7 @@ service cloud.firestore {
       // schools/{schoolId}/staffDocs/{id}. The owner adds, edits the title, type, expiry and note, and removes; the
       // principal and the platform administrator read the details. New files are refused when the plan's storage is full.
       match /staffDocuments/{docId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
+        allow get, list: if request.auth != null && (isSensitiveViewer(schoolId) || isPlatformAdmin());
         allow create: if ownerAuth(schoolId) && docId.matches('SD-[A-Za-z0-9-]{1,30}')
           && validStaffDocument(request.resource.data) && withinStorage(schoolId);
         allow update: if ownerAuth(schoolId) && validStaffDocument(request.resource.data)
@@ -1559,8 +1659,8 @@ service cloud.firestore {
       // Student photos. studentPhotos/{studentId}: one small JPEG (data URL, shrunk in the browser). The owner
       // keeps it; the owner, principal and the student's own linked family read it.
       match /studentPhotos/{studentId} {
-        allow get: if request.auth != null && (isSchoolViewer(schoolId) || familyOwns(studentId));
-        allow list: if viewerAuth(schoolId);
+        allow get: if request.auth != null && (isSensitiveViewer(schoolId) || familyOwns(studentId));
+        allow list: if sensitiveAuth(schoolId);
         allow create, update: if ownerAuth(schoolId)
           && studentId.matches('[a-z0-9-]{1,20}') && validImage(request.resource.data, 'photo')
           && exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(studentId));
@@ -2707,6 +2807,7 @@ service cloud.firestore {
     function intMin(v, a) { return v is int && v >= a; }
     function ownerAuth(schoolId) { return request.auth != null && isSchoolOwner(schoolId); }
     function viewerAuth(schoolId) { return request.auth != null && isSchoolViewer(schoolId); }
+    function sensitiveAuth(schoolId) { return request.auth != null && isSensitiveViewer(schoolId); }
     function studentExists(schoolId, id) { return exists(/databases/$(database)/documents/schools/$(schoolId)/students/$(id)); }
     function classExists(schoolId, id) { return exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(id)); }
 
@@ -2721,7 +2822,7 @@ service cloud.firestore {
       return item.keys().hasOnly(['plan', 'status', 'trialEnds', 'graceDays', 'studentLimit', 'staffLimit', 'storageMb',
           'monthlyPrice', 'renewsOn', 'legalHold', 'autoBilling', 'note'])
         && item.keys().hasAll(['plan', 'status'])
-        && item.plan in ['trial', 'basic', 'standard', 'premium']
+        && item.plan is string && item.plan.matches('[a-z][a-z0-9-]{1,29}')
         && item.status in ['trial', 'active', 'suspended', 'cancelled', 'pending']
         && (!item.keys().hasAny(['trialEnds']) || item.trialEnds is timestamp)
         && (!item.keys().hasAny(['graceDays']) || (intIn(item.graceDays, 0, 90)))
@@ -2815,6 +2916,42 @@ service cloud.firestore {
         && item.status in ['open', 'answered', 'closed']
         && item.createdBy is string && dateText(item.createdOn)
         && optText(item, 'reply', 2000);
+    }
+
+    function validAudit(a) {
+      return a.keys().hasOnly(['actor', 'actorEmail', 'action', 'schoolId', 'reason', 'detail', 'at'])
+        && a.keys().hasAll(['actor', 'action', 'at'])
+        && textLen(a.action, 2, 60) && optText(a, 'actorEmail', 120) && optText(a, 'schoolId', 40)
+        && optText(a, 'reason', 300) && optText(a, 'detail', 1500);
+    }
+
+    function validGrant(g) {
+      return g.keys().hasOnly(['schoolId', 'tier', 'reason', 'createdBy', 'createdAt', 'expiresAt', 'auditId'])
+        && g.keys().hasAll(['schoolId', 'tier', 'reason', 'createdBy', 'createdAt', 'expiresAt', 'auditId'])
+        && g.schoolId is string && g.schoolId.matches('[a-z0-9-]{1,40}')
+        && g.tier in ['standard', 'sensitive']
+        && textLen(g.reason, 10, 300)
+        && g.auditId is string && g.auditId.matches('A-[A-Za-z0-9-]{4,40}')
+        && g.expiresAt is timestamp;
+    }
+
+    function validPlan(p) {
+      return p.keys().hasOnly(['name', 'monthlyPrice', 'yearlyPrice', 'setupFee', 'studentLimit', 'staffLimit', 'storageMb', 'features', 'active', 'historyId'])
+        && p.keys().hasAll(['name', 'monthlyPrice', 'yearlyPrice', 'setupFee', 'studentLimit', 'staffLimit', 'storageMb', 'active', 'historyId'])
+        && namedText(p.name, 60)
+        && intIn(p.monthlyPrice, 0, 10000000) && intIn(p.yearlyPrice, 0, 100000000) && intIn(p.setupFee, 0, 10000000)
+        && intIn(p.studentLimit, 0, 1000000) && intIn(p.staffLimit, 0, 1000000) && intIn(p.storageMb, 0, 10000000)
+        && (!p.keys().hasAny(['features']) || (p.features is list && p.features.size() <= 40))
+        && p.active is bool
+        && p.historyId is string && p.historyId.matches('H-[A-Za-z0-9-]{4,40}');
+    }
+
+    function validPlanHistory(h) {
+      return h.keys().hasOnly(['planId', 'by', 'at', 'monthlyPrice', 'yearlyPrice', 'setupFee', 'note'])
+        && h.keys().hasAll(['planId', 'by', 'at', 'monthlyPrice', 'yearlyPrice', 'setupFee'])
+        && h.planId is string && h.planId.matches('[a-z][a-z0-9-]{1,29}')
+        && intIn(h.monthlyPrice, 0, 10000000) && intIn(h.yearlyPrice, 0, 100000000) && intIn(h.setupFee, 0, 10000000)
+        && optText(h, 'note', 200);
     }
 
     function validInvite(item) {

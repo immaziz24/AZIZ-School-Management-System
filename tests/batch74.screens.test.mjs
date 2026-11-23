@@ -34,7 +34,7 @@ test('rebuild skips unchanged tiles and search is delayed', () => {
 });
 test('versioned files are served from the saved copy', () => {
   assert.match(sw, /searchParams\.has\('v'\)/);
-  assert.match(sw, /aziz-shell-v5/);
+  assert.match(sw, /aziz-shell-v6/);
 });
 test('cache numbers were bumped together', () => {
   for (const name of ['ui.mjs', 'sign-in.mjs', 'sign-in.css']) assert.match(html, new RegExp(name.replace('.', '\\.') + '\\?v=batch-\\d+'));
