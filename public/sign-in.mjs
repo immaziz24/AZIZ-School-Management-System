@@ -8788,7 +8788,16 @@ const restoreListEl = document.querySelector('#restore-list');
 const RESTORE_NAMES = { students: 'Students', payments: 'Fee payments', feeStructures: 'Fee structures', attendance: 'Student attendance', marks: 'Marks', exams: 'Exams',
   classes: 'Classes', sections: 'Sections', subjects: 'Subjects', enrollments: 'Class placements', staffProfiles: 'Staff profiles', staffDirectory: 'Staff contact directory',
   staffDocuments: 'Staff vault records', books: 'Library books', loans: 'Library loans', notices: 'Notices', homework: 'Homework', timetable: 'Timetable', payroll: 'Payroll',
-  expenses: 'Expenses', onlineTests: 'Online tests', questionBank: 'Question bank', storageRecords: 'Storage records', inventory: 'Inventory', routes: 'Routes' };
+  expenses: 'Expenses', onlineTests: 'Online tests', questionBank: 'Question bank', storageRecords: 'Storage records', inventory: 'Inventory', routes: 'Routes',
+  hostelRooms: 'Hostel rooms', hostelStays: 'Hostel stays', canteenMenu: 'Canteen menu', canteenPlans: 'Canteen plans', bookReservations: 'Book reservations',
+  workflowRules: 'Approval rules', onlineTestKeys: 'Online test answer keys', onlineAttempts: 'Online test attempts', pickupPeople: 'Pickup people', pickupLogs: 'Pickup log',
+  studentHistory: 'Student history', rollKeys: 'Roll numbers', staffAttendance: 'Staff attendance', leaveRequests: 'Leave requests', calendar: 'School calendar',
+  behaviour: 'Behaviour notes', visitors: 'Visitors', substitutions: 'Substitutions', transportRiders: 'Transport riders', activities: 'Activities', activityMembers: 'Activity members',
+  alumni: 'Alumni', certificates: 'Certificates', tickets: 'Maintenance tickets', vendors: 'Vendors', minutes: 'Meeting minutes', lostFound: 'Lost and found',
+  concessions: 'Fee concessions', achievements: 'Achievements', complaints: 'Complaints', assets: 'Assets', sales: 'Sales', syllabus: 'Syllabus', trainings: 'Staff training',
+  diary: 'Diary', healthRecords: 'Health records', lessonPlans: 'Lesson plans', ptmSlots: 'PTM slots', messages: 'Messages', enquiries: 'Admission enquiries',
+  eventRegistrations: 'Event registrations', classTeachers: 'Class teachers', scholarships: 'Scholarships', scholarshipApps: 'Scholarship applications',
+  consentForms: 'Consent forms', consentResponses: 'Consent responses', classSubjects: 'Class subjects', academicYears: 'Academic years' };
 async function restoreCall(name, data) {
   const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
   const result = await httpsCallable(getFunctions(app, 'asia-south1'), name)({ schoolId: SCHOOL_ID, ...data });
