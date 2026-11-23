@@ -2197,6 +2197,43 @@ const currentPosition = () => new Promise((resolve, reject) => {
   navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
 });
 
+// Camera QR reading (Batch 73). Chrome on Android reads QR codes itself (BarcodeDetector). Everywhere else (iPhone, Windows and Mac computers) a small
+// open-source reader (jsQR, a pinned version) is loaded once from a public file host the first time the camera is used.
+let jsQrLoading = null;
+function loadJsQr() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  jsQrLoading ??= new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+    script.onload = () => resolve(window.jsQR);
+    script.onerror = () => { jsQrLoading = null; script.remove(); reject(new Error('QR reader not loaded')); };
+    document.head.append(script);
+  });
+  return jsQrLoading;
+}
+async function makeQrDetector() {
+  if ('BarcodeDetector' in window) {
+    const native = new BarcodeDetector({ formats: ['qr_code'] });
+    return { detect: (video) => native.detect(video) };
+  }
+  const jsQR = await loadJsQr();
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  return {
+    detect: async (video) => {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      if (!width || !height) return [];
+      const scale = Math.min(1, 640 / width);
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const image = context.getImageData(0, 0, canvas.width, canvas.height);
+      const found = jsQR(image.data, image.width, image.height, { inversionAttempts: 'dontInvert' });
+      return found ? [{ rawValue: found.data }] : [];
+    },
+  };
+}
 const QR_CODE_TEXT = /^[A-HJ-NP-Z2-9]{8}$/;
 let qrScanStop = null;
 function stopQrScan() {
@@ -2205,13 +2242,14 @@ function stopQrScan() {
 // Reads the school's QR code with the phone camera where the browser can (BarcodeDetector). Otherwise the teacher types the code.
 async function scanSchoolQr() {
   if (qrScanStop) { stopQrScan(); return; }
-  if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) {
+  if (!navigator.mediaDevices?.getUserMedia) {
     checkinStatus.textContent = 'This browser cannot scan QR codes. Type the 8 letters shown under the code on the school screen.';
     return;
   }
   let stream;
   try {
-    const detector = new BarcodeDetector({ formats: ['qr_code'] });
+    checkinStatus.textContent = 'Starting the camera.';
+    const detector = await makeQrDetector();
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
     let live = true;
     qrScanStop = () => {
@@ -4711,9 +4749,9 @@ function qrScanner(video, onCode, onState) {
   };
   const start = async () => {
     if (live) { stop(); return ''; }
-    if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) return 'This browser cannot scan with the camera. Use a USB scanner or type the code.';
+    if (!navigator.mediaDevices?.getUserMedia) return 'This browser cannot scan with the camera. Use a USB scanner or type the code.';
     try {
-      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      const detector = await makeQrDetector();
       stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
       live = true;
       video.srcObject = stream;
