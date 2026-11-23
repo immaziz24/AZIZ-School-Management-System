@@ -11383,3 +11383,24 @@ teacherRequestsForm.addEventListener('submit', async (event) => {
     teacherRequestsStatus.textContent = 'Request sent to the owner.';
   } catch (error) { teacherRequestsStatus.textContent = 'Could not send the request (' + (error?.code ?? 'error') + ').'; }
 });
+
+// ---------- Batch 70 ----------
+// Biggest files (features 127, 157): the files using the most storage, so the owner knows what to delete.
+const biggestList = document.querySelector('#storage-biggest');
+async function drawBiggest() {
+  if (!academic) return;
+  const request = schoolRequest;
+  try {
+    const [docs, books] = await Promise.all([academic.list('staffDocuments'), academic.list('eBooks')]);
+    if (request !== schoolRequest) return;
+    const rows = [
+      ...docs.docs.map((record) => ({ kb: record.data().sizeKb ?? 0, text: 'Staff document: ' + record.data().staffName + ' - ' + record.data().title })),
+      ...books.docs.map((record) => ({ kb: record.data().sizeKb ?? 0, text: 'E-book: ' + record.data().title })),
+      ...(lists.storage?.items ?? []).map((record) => ({ kb: record.data().sizeKb ?? 0, text: 'Record: ' + record.data().name })),
+    ].filter((row) => row.kb > 0).sort((a, b) => b.kb - a.kb).slice(0, 8);
+    biggestList.replaceChildren();
+    for (const row of rows) listItem(biggestList, row.text + ' - ' + (row.kb >= 1024 ? (row.kb / 1024).toFixed(1) + ' MB' : row.kb + ' KB'));
+    if (!rows.length) listItem(biggestList, 'No files yet.');
+  } catch { if (request === schoolRequest) { biggestList.replaceChildren(); listItem(biggestList, 'Could not load the file list.'); } }
+}
+document.querySelector('#storage').addEventListener('mod-open', drawBiggest);

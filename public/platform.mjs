@@ -223,6 +223,7 @@ async function showUsage() {
 async function loadPlan() {
   plan.status.textContent = '';
   try { const b = await getDoc(doc(schoolRef, 'billing', 'main')); billing = b.exists() ? b.data() : null; } catch { billing = null; }
+  document.dispatchEvent(new Event('plan-loaded'));
   showBanner(); showPlan(); await showUsage();
   try {
     const inv = await getDocs(collection(schoolRef, 'invoices'));
@@ -420,7 +421,7 @@ async function loadAdmin() {
       + (s.usage ? ' - ' + s.usage.students + ' students, ' + s.usage.staff + ' staff' : ''), button('Manage', () => openSchool(s.id))]), 'No schools.');
     admin.status.textContent = '';
   } catch { admin.status.textContent = 'Could not load schools.'; }
-  await Promise.all([loadAdminTickets(), loadFlags(), loadDrills(), loadTemplate()]);
+  await Promise.all([loadAdminTickets(), loadFlags(), loadDrills(), loadTemplate(), loadStorageRequests()]);
 }
 // Revenue chart: one stacked bar per month (collected in navy, unpaid in gold) drawn as SVG, with a status line under it.
 // The text list below the chart carries the same numbers for screen readers.
@@ -767,3 +768,52 @@ document.querySelector('#health-run').addEventListener('click', async () => {
   try { showHealth(await callHealth('runHealthNow')); } catch { status.textContent = 'Could not run the check. Check the functions are deployed.'; }
 });
 document.addEventListener('platform-admin-open', loadHealth);
+
+
+// ---------- Batch 70: extra storage requests (features 127, 157) ----------
+const askStatus = document.querySelector('#storage-ask-status');
+const askList = document.querySelector('#storage-ask-list');
+const askMb = (mb) => (mb >= 1000 ? mb / 1000 + ' GB' : mb + ' MB');
+async function loadMyStorageRequests() {
+  try {
+    const found = await getDocs(query(collection(db, 'storageRequests'), where('schoolId', '==', SCHOOL_ID)));
+    const rows = found.docs.map((d) => d.data()).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
+    fillList(askList, rows.map((r) => [r.createdOn + ' - ' + askMb(r.mb) + ' - ' + r.status.toUpperCase() + (r.reply ? ' - ' + r.reply : '')]), 'No storage requests yet.');
+  } catch { fillList(askList, [], 'Storage requests could not be loaded.'); }
+}
+document.querySelector('#storage-ask-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const note = String(new FormData(form).get('note') ?? '').trim().slice(0, 300);
+  try {
+    await setDoc(doc(db, 'storageRequests', newId('SR')), { schoolId: SCHOOL_ID, mb: Number(new FormData(form).get('mb')), ...(note ? { note } : {}),
+      status: 'pending', createdBy: auth.currentUser.uid, createdOn: today() });
+    form.reset();
+    askStatus.textContent = 'Request sent. AZIZ support will answer it here.';
+    await loadMyStorageRequests();
+  } catch { askStatus.textContent = 'Could not send the request. Try again.'; }
+});
+document.addEventListener('plan-loaded', loadMyStorageRequests);
+
+async function loadStorageRequests() {
+  const list = document.querySelector('#storagereq-list');
+  try {
+    const found = await getDocs(query(collection(db, 'storageRequests'), where('status', '==', 'pending')));
+    fillList(list, found.docs.map((d) => {
+      const r = d.data();
+      const decide = (status) => run(admin.status, async () => {
+        const reply = status === 'rejected' ? (prompt('Reason (optional):') ?? '') : '';
+        const batch = writeBatch(db);
+        batch.update(d.ref, { status, decidedOn: today(), ...(reply.trim() ? { reply: reply.trim().slice(0, 300) } : {}) });
+        if (status === 'approved') {
+          const billing = await getDoc(doc(db, 'schools', r.schoolId, 'billing', 'main'));
+          if (!billing.exists()) throw new Error('This school has no plan record yet.');
+          batch.update(billing.ref, { storageMb: (billing.data().storageMb ?? 0) + r.mb });
+        }
+        await batch.commit();
+        await loadStorageRequests();
+      }, status === 'approved' ? 'Approved. The storage limit was raised.' : 'Rejected.');
+      return [r.schoolId + ' - ' + r.createdOn + ' - ' + askMb(r.mb) + (r.note ? ' - ' + r.note : ''), button('Approve', () => decide('approved')), button('Reject', () => decide('rejected'))];
+    }), 'No storage requests waiting.');
+  } catch { fillList(list, [], 'Storage requests could not be loaded.'); }
+}

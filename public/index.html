@@ -911,6 +911,10 @@
         <p id="storage-total" role="status"></p>
         <p><progress id="storage-meter" max="100" value="0" aria-label="Storage used" hidden></progress></p>
         <ul id="storage-breakdown"></ul>
+        <h4>Biggest files</h4>
+        <p>The files using the most space. Delete the ones you no longer need in their own module (Staff Document Vault, E-Library) or here in the records list below. Nightly backups do not count toward your space.</p>
+        <ul id="storage-biggest"></ul>
+
         <form id="storage-form">
           <p><label>File name <input name="name" type="text" maxlength="100" required></label></p>
           <p><label>Kind <select name="kind"><option value="document">Document</option><option value="photo">Photo</option><option value="report">Report</option><option value="backup">Backup</option><option value="other">Other</option></select></label></p>
@@ -2011,6 +2015,15 @@
         <button type="submit">Request domain</button>
       </form>
       <ul id="domain-list"></ul>
+      <h3>Ask for more storage</h3>
+      <p>Running out of space? Ask for extra storage. AZIZ support approves the request and raises your limit.</p>
+      <p id="storage-ask-status" role="status"></p>
+      <form id="storage-ask-form" class="owner-only">
+        <p><label>Extra space <select name="mb"><option value="500">500 MB</option><option value="1000">1 GB</option><option value="5000">5 GB</option><option value="10000">10 GB</option><option value="50000">50 GB</option></select></label></p>
+        <p><label>Why you need it (optional) <input name="note" type="text" maxlength="300"></label></p>
+        <button type="submit">Send storage request</button>
+      </form>
+      <ul id="storage-ask-list"></ul>
       <h3>Data export or deletion</h3>
       <form id="data-form" class="owner-only">
         <p><label>Request <select name="kind"><option value="export">Export all school data</option><option value="deletion">Delete all school data</option></select></label></p>
@@ -2026,6 +2039,8 @@
       <p id="health-status" role="status"></p>
       <p><button id="health-run" type="button">Check now</button></p>
       <ul id="health-list"></ul>
+      <h4>Storage requests from schools</h4>
+      <ul id="storagereq-list"></ul>
       <h4>Recent server jobs</h4>
       <ul id="health-jobs"></ul>
       <h3>Revenue</h3>
@@ -2129,8 +2144,8 @@
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-69');
-      await import('./platform.mjs?v=batch-69');
+      await import('./sign-in.mjs?v=batch-70');
+      await import('./platform.mjs?v=batch-70');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);
