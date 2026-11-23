@@ -128,7 +128,8 @@ function prepare(dash, label) {
       tile.addEventListener('click', () => open(section));
       return tile;
     };
-    const shown = modules.filter((section) => !words || titleOf(section).toLowerCase().includes(words));
+    const az = (a, b) => titleOf(a).localeCompare(titleOf(b), undefined, { sensitivity: 'base' });
+    const shown = modules.filter((section) => !words || titleOf(section).toLowerCase().includes(words)).sort(az);
     if (!catList || modules.length <= 8) {
       const grid = document.createElement('div'); grid.className = 'tiles';
       for (const section of shown) grid.append(makeTile(section));
@@ -141,7 +142,7 @@ function prepare(dash, label) {
         if (!made.has(name)) made.set(name, []);
         made.get(name).push(section);
       }
-      for (const list of made.values()) list.sort((a, b) => orderIn(a) - orderIn(b));
+      for (const list of made.values()) list.sort(az);
       const tabNames = names.filter((name) => made.get(name)?.length);
       // The first tab is All. While searching, All is used so every match is visible.
       const wanted = words ? 'All' : (saved[dash.id] || 'All');
@@ -158,7 +159,7 @@ function prepare(dash, label) {
       }
       tiles.append(strip);
       const grid = document.createElement('div'); grid.className = 'tiles';
-      const list = active === 'All' ? tabNames.flatMap((name) => made.get(name)) : made.get(active);
+      const list = active === 'All' ? shown : made.get(active);
       for (const section of list) grid.append(makeTile(section));
       if (grid.children.length) tiles.append(grid);
     }
