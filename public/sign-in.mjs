@@ -10472,7 +10472,7 @@ onAuthStateChanged(auth, async (user) => {
   schoolStatus.hidden = !user;
   schoolStatus.textContent = '';
   idleWatch(Boolean(user));
-  if (!user) return;
+  if (!user) { window.__bootDone?.(); return; }
 
   schoolStatus.textContent = 'Checking school access.';
   try {

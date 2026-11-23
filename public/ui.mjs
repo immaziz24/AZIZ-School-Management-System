@@ -1,7 +1,7 @@
 // App shell: turns each dashboard into a launcher of module tiles. Only the chosen module is shown, so
 // every role gets a clean home screen instead of one very long page. The modules keep working as before.
 const $ = (s, r = document) => r.querySelector(s);
-const ICONS = [[/hostel/, '🛏️'], [/canteen|meal/, '🍽️'], [/pickup/, '🚸'], [/reminder|notification/, '🔔'], [/question|online test/, '🧠'], [/risk|benchmark/, '📊'], [/reservation/, '📚'], [/approval rule/, '⚙️'], [/qr/, '🔳'], [/shift|hours/, '⏰'], [/check-in|check in/, '📍'], [/fee|payment|defaulter|concession|sales|scholarship|ledger/, '💳'], [/attend/, '🗓️'], [/exam|mark|assess|result/, '📝'], [/report|card|certificate/, '📄'],
+const ICONS = [[/activity log|audit log/, '📜'], [/member/, '👥'], [/attention/, '⚠️'], [/activit|club/, '🎭'], [/hostel/, '🛏️'], [/canteen|meal/, '🍽️'], [/pickup/, '🚸'], [/reminder|notification/, '🔔'], [/question|online test/, '🧠'], [/risk|benchmark/, '📊'], [/reservation/, '📚'], [/approval rule/, '⚙️'], [/qr/, '🔳'], [/shift|hours/, '⏰'], [/check-in|check in/, '📍'], [/fee|payment|defaulter|concession|sales|scholarship|ledger/, '💳'], [/attend/, '🗓️'], [/exam|mark|assess|result/, '📝'], [/report|card|certificate/, '📄'],
   [/student|roster|profile|alumni|family/, '🎓'], [/library|book/, '📚'], [/timetable|cover|workload/, '⏱️'], [/homework|lesson|syllabus|diary|submit/, '📒'],
   [/calendar|event|ptm|meeting/, '📅'], [/notice|inbox|message|enquir|complaint|consent/, '📣'], [/payroll|expense|finance|vendor/, '💰'], [/website|public/, '🌐'],
   [/staff|teacher|training|leave|class|assign|appraisal|my pay/, '🧑‍🏫'], [/route|rider|transport|activit/, '🚌'], [/health|behaviour|visitor|lost|achieve/, '🛡️'],
@@ -50,6 +50,12 @@ if (platformSection) {
 }
 const dashes = [owner, teacher, portal, platform].filter(Boolean);
 
+// The open module is kept in the web address (#m=<id>), so a refresh or the Back button returns to the same screen.
+const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const keyOf = (section) => section.id || 'h-' + slug((section.querySelector('h1,h2,h3')?.textContent ?? '').trim());
+const hashKey = () => { const m = /(?:^|[#&])m=([^&]+)/.exec(location.hash); return m ? decodeURIComponent(m[1]) : ''; };
+let wanted = hashKey();
+
 function prepare(dash, label) {
   dash.classList.add('dash');
   // Loose headings with their forms become modules of their own.
@@ -97,10 +103,18 @@ function prepare(dash, label) {
     return 999;
   };
   const titleOf = (section) => (section.querySelector('h1,h2,h3')?.textContent ?? '').trim();
-  const close = () => { dash.removeAttribute('data-open'); for (const m of dash.querySelectorAll(':scope > .mod-open')) m.classList.remove('mod-open'); scrollTo({ top: 0 }); };
-  bar.querySelector('button').addEventListener('click', close);
+  const close = (fromHash) => { if (!fromHash && hashKey()) history.pushState(null, '', location.pathname + location.search); dash.removeAttribute('data-open'); for (const m of dash.querySelectorAll(':scope > .mod-open')) m.classList.remove('mod-open'); scrollTo({ top: 0 }); };
+  bar.querySelector('button').addEventListener('click', () => close());
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && dash.dataset.open && !dash.hidden && !e.target.closest('input,select,textarea')) close(); });
-  const open = (section) => {
+  addEventListener('popstate', () => {
+    const key = hashKey();
+    if (!key) { if (dash.dataset.open) close(true); return; }
+    const target = [...dash.querySelectorAll(':scope > .mod')].find((m) => !m.hidden && keyOf(m) === key);
+    if (target) open(target, true);
+  });
+  const open = (section, fromHash) => {
+    wanted = '';
+    if (!fromHash && hashKey() !== keyOf(section)) history.pushState(null, '', '#m=' + encodeURIComponent(keyOf(section)));
     for (const m of dash.querySelectorAll(':scope > .mod-open')) m.classList.remove('mod-open');
     section.classList.add('mod-open');
     dash.dataset.open = '1';
@@ -109,12 +123,21 @@ function prepare(dash, label) {
     scrollTo({ top: 0 });
   };
   let queued = false;
+  let lastSig = '';
   const rebuild = () => {
     queued = false;
     const modules = [...dash.querySelectorAll(':scope > .mod')].filter((m) => !m.hidden && !m.hasAttribute('data-off') && titleOf(m));
     const openNow = dash.querySelector(':scope > .mod-open');
     if (openNow && openNow.hidden) close();
     const words = search.value.trim().toLowerCase();
+    if (wanted && !dash.dataset.open) {
+      const target = modules.find((m) => keyOf(m) === wanted);
+      if (target) { wanted = ''; open(target, true); return; }
+    }
+    const savedTab = readCollapsed()[dash.id] || 'All';
+    const sig = modules.map((m) => keyOf(m) + titleOf(m)).join('|') + '#' + words + '#' + savedTab + '#' + (tiles.children.length ? 1 : 0);
+    if (sig === lastSig) { refreshShell(); return; }
+    lastSig = sig;
     tiles.replaceChildren();
     const made = new Map();
     const makeTile = (section) => {
@@ -166,8 +189,11 @@ function prepare(dash, label) {
     if (!tiles.children.length) { const none = document.createElement('p'); none.textContent = words ? 'No module matches.' : 'Loading your modules.'; none.style.color = 'var(--mut)'; tiles.append(none); }
     refreshShell();
   };
-  const schedule = () => { if (!queued) { queued = true; requestAnimationFrame(rebuild); } };
-  search.addEventListener('input', rebuild);
+  const schedule = () => { if (!queued) { queued = true; setTimeout(rebuild, 60); } };
+  let typing;
+  const SEARCH_KEY = 'aziz-search-' + dash.id;
+  try { search.value = sessionStorage.getItem(SEARCH_KEY) || ''; } catch { /* storage may be blocked */ }
+  search.addEventListener('input', () => { clearTimeout(typing); typing = setTimeout(() => { try { sessionStorage.setItem(SEARCH_KEY, search.value); } catch { /* ignore */ } rebuild(); }, 120); });
   new MutationObserver(schedule).observe(dash, { attributes: true, attributeFilter: ['hidden', 'data-off'], subtree: true });
   schedule();
   dash.addEventListener('ui-open', (e) => { const target = dash.querySelector(':scope > #' + e.detail); if (target) open(target); });
@@ -192,6 +218,7 @@ if (platform && owner) {
 function refreshShell() {
   const active = dashes.some((d) => !d.hidden);
   document.body.classList.toggle('signed-in', active || !$('#sign-out').hidden);
+  if (active) window.__bootDone?.();
 }
 const shell = new MutationObserver(refreshShell);
 for (const el of [...dashes, $('#sign-out'), platformSection].filter(Boolean)) shell.observe(el, { attributes: true, attributeFilter: ['hidden'] });

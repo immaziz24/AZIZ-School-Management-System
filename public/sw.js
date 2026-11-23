@@ -1,6 +1,6 @@
 // Service worker: keeps the page shell so the app opens without a connection.
 // School data always comes live from Firebase; nothing private is stored here.
-const CACHE = 'aziz-shell-v4';
+const CACHE = 'aziz-shell-v5';
 const SHELL = ['./', './index.html', './sign-in.css', './sign-in.mjs', './platform.mjs', './ui.mjs', './i18n.mjs', './firebase-client.mjs',
   './school.html', './school.mjs', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
@@ -20,6 +20,14 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
+  // Files with a version number in the address (?v=batch-NN) never change, so the saved copy is used at once. This makes a refresh fast.
+  if (new URL(request.url).searchParams.has('v')) {
+    event.respondWith(caches.match(request).then((hit) => hit || fetch(request).then((response) => {
+      if (response.ok) { const copy = response.clone(); caches.open(CACHE).then((cache) => cache.put(request, copy)); }
+      return response;
+    })));
+    return;
+  }
   event.respondWith(fetch(request).then((response) => {
     if (response.ok) {
       const copy = response.clone();
