@@ -2041,6 +2041,9 @@
       <ul id="health-list"></ul>
       <h4>Storage requests from schools</h4>
       <ul id="storagereq-list"></ul>
+      <h4>Automatic billing</h4>
+      <p>Every night AZIZ looks after schools that have "Automatic billing" ticked in their plan. It makes the next invoice 7 days before renewal, marks unpaid invoices overdue, moves the renewal date forward once an invoice is paid, and makes a school read-only after its grace days. It never charges anyone.</p>
+      <p><button id="billing-run" type="button">Run billing check now</button></p>
       <h4>Recent server jobs</h4>
       <ul id="health-jobs"></ul>
       <h3>Revenue</h3>
@@ -2062,6 +2065,7 @@
             <label>Staff limit <input name="staffLimit" type="number" min="0"></label>
             <label>Storage MB <input name="storageMb" type="number" min="0"></label>
             <label>Monthly price (Rs) <input name="monthlyPrice" type="number" min="0"></label></p>
+          <p><label><input name="autoBilling" type="checkbox"> Automatic billing (invoice before renewal, mark overdue, advance renewal when paid, suspend after the grace days)</label></p>
           <p><label><input name="legalHold" type="checkbox"> Legal hold (no deletion)</label>
             <label>Note <input name="note" maxlength="200"></label></p>
           <button type="submit">Save plan</button>
@@ -2145,7 +2149,7 @@
     }
     try {
       await import('./sign-in.mjs?v=batch-70');
-      await import('./platform.mjs?v=batch-70');
+      await import('./platform.mjs?v=batch-71');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.';
       console.error(error);

@@ -477,7 +477,7 @@ async function openSchool(id) {
   const b = s.billing ?? { plan: 'trial', status: 'trial' };
   f.plan.value = b.plan; f.status.value = b.status; f.trialEnds.value = dayText(b.trialEnds); f.renewsOn.value = b.renewsOn ?? '';
   for (const k of ['graceDays', 'studentLimit', 'staffLimit', 'storageMb', 'monthlyPrice']) f[k].value = b[k] ?? '';
-  f.legalHold.checked = b.legalHold === true; f.note.value = b.note ?? '';
+  f.legalHold.checked = b.legalHold === true; f.autoBilling.checked = b.autoBilling === true; f.note.value = b.note ?? '';
   await loadLocation(ref);
   try {
     const inv = await getDocs(collection(ref, 'invoices'));
@@ -532,6 +532,7 @@ admin.billing.addEventListener('submit', (event) => {
   if (f.trialEnds.value) data.trialEnds = Timestamp.fromDate(new Date(f.trialEnds.value + 'T23:59:59'));
   if (f.renewsOn.value) data.renewsOn = f.renewsOn.value;
   if (f.legalHold.checked) data.legalHold = true;
+  if (f.autoBilling.checked) data.autoBilling = true;
   if (f.note.value.trim()) data.note = f.note.value.trim();
   if (['suspended', 'cancelled'].includes(data.status) && !confirm('Make this school read-only for its owner?')) return;
   run(admin.status, async () => { await setDoc(doc(db, 'schools', chosenSchool, 'billing', 'main'), data); await loadAdmin(); await openSchool(chosenSchool); }, 'Plan saved.');
@@ -752,10 +753,11 @@ async function loadHealth() {
     if (found.exists()) showHealth(found.data());
     else status.textContent = 'No health check has run yet. Press Check now.';
     const jobs = await getDocs(collection(db, 'platformJobs'));
-    const rows = jobs.docs.filter((item) => /^(backup|reminders)-/.test(item.id)).sort((a, b) => b.id.localeCompare(a.id)).slice(0, 10).map((item) => {
+    const rows = jobs.docs.filter((item) => /^(backup|reminders|billing)-/.test(item.id)).sort((a, b) => b.id.localeCompare(a.id)).slice(0, 10).map((item) => {
       const d = item.data();
-      const label = item.id.startsWith('backup') ? 'Backup ' + item.id.slice(7) : 'Fee reminders ' + item.id.slice(10);
-      return label + ': ' + (item.id.startsWith('backup') ? d.done + ' of ' + d.schools + ' schools saved' : d.sent + ' reminders sent') + (d.failed?.length ? ', ' + d.failed.length + ' failed' : '');
+      const kind = item.id.split('-')[0];
+      const label = kind === 'backup' ? 'Backup ' + item.id.slice(7) : kind === 'billing' ? 'Billing ' + item.id.slice(8) : 'Fee reminders ' + item.id.slice(10);
+      return label + ': ' + (kind === 'backup' ? d.done + ' of ' + d.schools + ' schools saved' : kind === 'billing' ? d.invoices + ' invoices, ' + d.overdue + ' overdue, ' + d.renewed + ' renewed, ' + d.suspended + ' suspended' : d.sent + ' reminders sent') + (d.failed?.length ? ', ' + d.failed.length + ' failed' : '');
     });
     fillList(document.querySelector('#health-jobs'), rows.map((text) => [text]), 'No server jobs have reported yet.');
   } catch {
@@ -817,3 +819,15 @@ async function loadStorageRequests() {
     }), 'No storage requests waiting.');
   } catch { fillList(list, [], 'Storage requests could not be loaded.'); }
 }
+
+
+// ---------- Batch 71: automatic billing (feature 071) ----------
+document.querySelector('#billing-run')?.addEventListener('click', async () => {
+  admin.status.textContent = 'Running the billing check.';
+  try {
+    const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
+    const r = (await httpsCallable(getFunctions(app, 'asia-south1'), 'runBillingNow')()).data;
+    admin.status.textContent = 'Billing check done: ' + r.invoices + ' invoice(s) created, ' + r.overdue + ' marked overdue, ' + r.renewed + ' renewed, ' + r.suspended + ' suspended.';
+    if (chosenSchool) await openSchool(chosenSchool);
+  } catch { admin.status.textContent = 'Could not run the billing check. Check the functions are deployed.'; }
+});

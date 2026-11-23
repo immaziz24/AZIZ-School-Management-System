@@ -2708,7 +2708,7 @@ service cloud.firestore {
 
     function validBilling(item) {
       return item.keys().hasOnly(['plan', 'status', 'trialEnds', 'graceDays', 'studentLimit', 'staffLimit', 'storageMb',
-          'monthlyPrice', 'renewsOn', 'legalHold', 'note'])
+          'monthlyPrice', 'renewsOn', 'legalHold', 'autoBilling', 'note'])
         && item.keys().hasAll(['plan', 'status'])
         && item.plan in ['trial', 'basic', 'standard', 'premium']
         && item.status in ['trial', 'active', 'suspended', 'cancelled', 'pending']
@@ -2720,6 +2720,7 @@ service cloud.firestore {
         && (!item.keys().hasAny(['monthlyPrice']) || (intIn(item.monthlyPrice, 0, 10000000)))
         && (!item.keys().hasAny(['renewsOn']) || dateText(item.renewsOn))
         && (!item.keys().hasAny(['legalHold']) || item.legalHold is bool)
+        && (!item.keys().hasAny(['autoBilling']) || item.autoBilling is bool)
         && optText(item, 'note', 200);
     }
 

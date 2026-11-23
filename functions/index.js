@@ -427,3 +427,89 @@ exports.runHealthNow = onCall({ memory: '512MiB', timeoutSeconds: 240 }, async (
   if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
   return runHealth();
 });
+
+// ---- Batch 71: automatic billing (feature 071) ----
+// For schools whose plan has autoBilling switched on by the platform administrator:
+// 1. makes the invoice for the next renewal 7 days ahead (INV-AUTO-<period>, never twice),
+// 2. marks unpaid invoices overdue once their due date has passed,
+// 3. moves the renewal date one month forward once that renewal's invoice is paid,
+// 4. makes the school read-only (status suspended) when an invoice is overdue by more than its grace days.
+// It never takes a payment. The result goes to platformJobs/billing-<date>.
+const addMonth = (text) => {
+  const [year, month, day] = text.split('-').map(Number);
+  const target = new Date(Date.UTC(year, month, 1));
+  const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(day, last));
+  return target.toISOString().slice(0, 10);
+};
+const addDaysText = (text, days) => new Date(Date.parse(text) + days * 86400000).toISOString().slice(0, 10);
+
+async function billSchool(schoolId, day) {
+  const out = { invoices: 0, overdue: 0, renewed: 0, suspended: 0 };
+  const billingRef = db.doc('schools/' + schoolId + '/billing/main');
+  const billing = await billingRef.get();
+  if (!billing.exists) return out;
+  const plan = billing.data();
+  if (plan.autoBilling !== true || plan.status !== 'active' || !plan.renewsOn) return out;
+  const invoices = db.collection('schools/' + schoolId + '/invoices');
+  let renewsOn = plan.renewsOn;
+  const period = renewsOn.slice(0, 7);
+  const id = 'INV-AUTO-' + period;
+  // 3. Renewal paid: move the date on (one month per night at most).
+  const current = await invoices.doc(id).get();
+  if (current.exists && current.data().status === 'paid' && renewsOn <= day) {
+    renewsOn = addMonth(renewsOn);
+    await billingRef.update({ renewsOn });
+    out.renewed += 1;
+  }
+  // 1. Invoice 7 days ahead for the (possibly new) renewal.
+  const nextPeriod = renewsOn.slice(0, 7);
+  const nextId = 'INV-AUTO-' + nextPeriod;
+  if (renewsOn <= addDaysText(day, 7) && Number(plan.monthlyPrice) > 0) {
+    await invoices.doc(nextId).create({ period: nextPeriod, amount: Math.round(Number(plan.monthlyPrice)), dueOn: renewsOn, status: 'due', note: 'Made automatically' })
+      .then(() => { out.invoices += 1; }).catch(() => {});
+  }
+  // 2 and 4. Overdue invoices, and suspension after the grace days.
+  const unpaid = await invoices.where('status', 'in', ['due', 'overdue']).get();
+  let worst = null;
+  for (const record of unpaid.docs) {
+    const item = record.data();
+    if (item.dueOn < day) {
+      if (item.status === 'due') { await record.ref.update({ status: 'overdue' }); out.overdue += 1; }
+      if (!worst || item.dueOn < worst) worst = item.dueOn;
+    }
+  }
+  const grace = Math.max(0, Math.round(Number(plan.graceDays) || 0));
+  if (worst && day > addDaysText(worst, grace)) {
+    await billingRef.update({ status: 'suspended', note: ('Suspended automatically: invoice unpaid since ' + worst).slice(0, 200) });
+    out.suspended += 1;
+  }
+  return out;
+}
+
+async function billingRun() {
+  const day = today();
+  const schools = await db.collection('schools').select().get();
+  const total = { invoices: 0, overdue: 0, renewed: 0, suspended: 0 };
+  const failed = [];
+  for (const school of schools.docs) {
+    try {
+      const result = await billSchool(school.id, day);
+      for (const key of Object.keys(total)) total[key] += result[key];
+    } catch (error) {
+      failed.push(school.id);
+      logger.error('Billing failed for ' + school.id, error);
+    }
+  }
+  await db.doc('platformJobs/billing-' + day).set({ at: Timestamp.now(), schools: schools.size, ...total, failed });
+  return total;
+}
+
+exports.nightlyBilling = onSchedule({ schedule: '30 3 * * *', timeZone: 'Asia/Kolkata', memory: '512MiB', timeoutSeconds: 300 }, async () => { await billingRun(); });
+
+exports.runBillingNow = onCall({ memory: '512MiB', timeoutSeconds: 300 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const admin = await db.doc('platformAdmins/' + request.auth.uid).get();
+  if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
+  return billingRun();
+});
