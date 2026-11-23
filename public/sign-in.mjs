@@ -4741,38 +4741,42 @@ function qrScanner(video, onCode, onState) {
   };
   return { start, stop };
 }
-// Opens a clean page of QR labels and starts printing. Text is placed with textContent only.
+// Prints a sheet of QR labels from this same page (no pop-up window): the sheet is added to the page, only it is shown while printing,
+// and it is removed afterwards. Text is placed with textContent only.
 async function printQrSheet(title, items, statusEl) {
-  const win = window.open('', '_blank');
-  if (!win) { statusEl.textContent = 'Your browser blocked the print window. Allow pop-ups for this site and try again.'; return; }
-  const { drawQr } = await import('./qr.mjs?v=batch-64');
-  const sheet = win.document;
-  sheet.title = title;
-  const style = sheet.createElement('style');
-  style.textContent = 'body{font-family:Arial,sans-serif;margin:12px}h1{font-size:16px}.grid{display:flex;flex-wrap:wrap;gap:8px}'
-    + '.tag{width:190px;border:1px dashed #666;padding:8px;text-align:center;break-inside:avoid}.tag img{width:150px;height:150px}.tag b{display:block;font-size:13px}.tag span{font-size:11px;color:#333}';
-  sheet.head.append(style);
-  const heading = sheet.createElement('h1');
+  let drawQr;
+  try { ({ drawQr } = await import('./qr.mjs?v=batch-64')); } catch { statusEl.textContent = 'Could not load the QR maker. Check your connection and try again.'; return; }
+  document.querySelector('#qr-print-area')?.remove();
+  const area = document.createElement('div');
+  area.id = 'qr-print-area';
+  const heading = document.createElement('h1');
   heading.textContent = title;
-  const grid = sheet.createElement('div');
-  grid.className = 'grid';
-  for (const item of items) {
-    const canvas = document.createElement('canvas');
-    drawQr(canvas, item.code, 150);
-    const tag = sheet.createElement('div');
-    tag.className = 'tag';
-    const image = sheet.createElement('img');
-    image.src = canvas.toDataURL('image/png');
-    image.alt = 'QR code';
-    const first = sheet.createElement('b');
-    first.textContent = item.first;
-    const second = sheet.createElement('span');
-    second.textContent = item.second ?? '';
-    tag.append(image, first, second);
-    grid.append(tag);
-  }
-  sheet.body.append(heading, grid);
-  setTimeout(() => win.print(), 500);
+  const grid = document.createElement('div');
+  grid.className = 'qr-grid';
+  try {
+    for (const item of items) {
+      const canvas = document.createElement('canvas');
+      drawQr(canvas, item.code, 150);
+      const tag = document.createElement('div');
+      tag.className = 'qr-tag';
+      const image = document.createElement('img');
+      image.src = canvas.toDataURL('image/png');
+      image.alt = 'QR code';
+      const first = document.createElement('b');
+      first.textContent = item.first;
+      const second = document.createElement('span');
+      second.textContent = item.second ?? '';
+      tag.append(image, first, second);
+      grid.append(tag);
+    }
+  } catch { statusEl.textContent = 'Could not make the QR codes.'; return; }
+  area.append(heading, grid);
+  document.body.append(area);
+  document.body.classList.add('qr-printing');
+  const done = () => { document.body.classList.remove('qr-printing'); area.remove(); window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  statusEl.textContent = items.length + ' QR code(s) ready. In the print window, choose your printer or "Save as PDF".';
+  setTimeout(() => window.print(), 300);
 }
 const parseScan = (raw, prefix) => { const value = String(raw ?? '').trim(); const match = new RegExp('^AZ' + prefix + ':(.+)$').exec(value); return match ? match[1] : value; };
 
