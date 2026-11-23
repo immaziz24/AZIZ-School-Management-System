@@ -123,6 +123,7 @@ async function loadSchools(force) {
   });
   S.schools = list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
   S.loaded = true;
+  S.invLoaded = false;
   S.ownersCache = null;
   buildAlerts();
   fillSwitcher();
@@ -248,7 +249,7 @@ async function registerSchool() {
   const batch = writeBatch(db);
   batch.set(doc(db, 'schools', v.id), { name: v.name, contactEmail: v.contactEmail || '', phone: v.phone || '', address: v.address || '', createdBy: S.user.uid });
   const billing = plan
-    ? { plan: plan.id, status: 'active', studentLimit: plan.studentLimit, staffLimit: plan.staffLimit, storageMb: plan.storageMb, monthlyPrice: plan.monthlyPrice }
+    ? { plan: plan.id, status: 'active', startedOn: today(), studentLimit: plan.studentLimit, staffLimit: plan.staffLimit, storageMb: plan.storageMb, monthlyPrice: plan.monthlyPrice }
     : { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + 30 * 86400000), studentLimit: 50, staffLimit: 10 };
   batch.set(doc(db, 'schools', v.id, 'billing', 'main'), billing);
   batch.set(doc(db, 'invites', newId('OW-')), { schoolId: v.id, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: S.user.uid });
@@ -304,7 +305,12 @@ async function viewSchool(id) {
     owners.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Owner', 'Status', 'Last sign-in', ''].map((t) => h('th', {}, t)))), h('tbody', {}, ownerRows)))
       : h('div', { class: 'empty' }, 'No owner yet. Invite one.'));
 
-  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), ownersCard);
+  await loadInvoices();
+  const mine = (S.schools.find((x) => x.id === id).invoices || []).sort((a, c) => String(c.dueOn).localeCompare(String(a.dueOn))).map((inv) => ({ school, inv }));
+  const invoicesCard = h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'flex:1' }, 'Invoices'),
+    h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await createInvoice(school)) await refresh(); }) }, 'Create invoice')),
+    invoiceTable(mine, false, refresh));
+  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), ownersCard, h('div', { style: 'height:14px' }), invoicesCard);
 }
 
 async function lastLogin(uid) {
@@ -359,6 +365,8 @@ async function applyPlan(school) {
   if (!v) return false;
   const plan = S.plans.find((p) => p.id === v.plan);
   const fields = { plan: plan.id, studentLimit: plan.studentLimit, staffLimit: plan.staffLimit, storageMb: plan.storageMb, monthlyPrice: plan.monthlyPrice };
+  if (!school.billing || school.billing.plan === 'trial' || !school.billing.startedOn) fields.startedOn = today();
+  if (school.billing && school.billing.status === 'trial') fields.status = 'active';
   const batch = writeBatch(db);
   const ref = doc(db, 'schools', school.id, 'billing', 'main');
   if (school.billing) batch.update(ref, fields); else batch.set(ref, { ...fields, status: 'active' });
@@ -605,6 +613,318 @@ async function viewSecurity() {
         h('label', {}, mfaBox, 'Require MFA for sensitive access passes'))));
 }
 
+// ---------- Mark 2: billing, analytics, notifications, trials (Batch 77) ----------
+const owing = (i) => (i.status === 'paid' ? 0 : Math.max(0, (Number(i.amount) || 0) - (Number(i.amountPaid) || 0)));
+async function loadInvoices(force) {
+  await loadSchools(force);
+  if (S.invLoaded && !force) return;
+  await pool(S.schools, 12, async (school) => {
+    const snap = await getDocs(collection(db, 'schools', school.id, 'invoices')).catch(() => null);
+    school.invoices = snap ? snap.docs.map((d) => ({ id: d.id, ...d.data() })) : [];
+  });
+  S.invLoaded = true;
+}
+const invPill = (i) => h('span', { class: 'pill ' + (i.status === 'paid' ? 'ok' : i.status === 'overdue' ? 'bad' : (i.amountPaid ? 'warn' : '')) }, i.status === 'due' && i.amountPaid ? 'part paid' : i.status);
+
+async function createInvoice(school) {
+  await loadSchools();
+  const fields = [];
+  if (!school) fields.push({ key: 'school', label: 'School', type: 'select', options: S.schools.filter((s) => !s.archived).map((s) => [s.id, s.name + ' (' + s.id + ')']) });
+  fields.push(
+    { key: 'kind', label: 'Invoice type', type: 'select', options: [['setup', 'Setup fee'], ['subscription', 'Subscription']] },
+    { key: 'period', label: 'Period (YYYY-MM)', required: true, value: today().slice(0, 7), pattern: /^[0-9]{4}-[0-9]{2}$/, patternText: 'Use the form 2026-12.' },
+    { key: 'amount', label: 'Amount (Rs)', type: 'number', required: true },
+    { key: 'dueOn', label: 'Due date', type: 'date', required: true, value: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10) },
+    { key: 'note', label: 'Note on the invoice (optional)' });
+  const v = await formDialog({ title: 'Create an invoice' + (school ? ' for ' + school.name : ''), ok: 'Create invoice', fields });
+  if (!v) return false;
+  if (!(v.amount > 0)) { toast('The amount must be more than zero.'); return false; }
+  const target = school || S.schools.find((s) => s.id === v.school);
+  const id = newId('INV-');
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'schools', target.id, 'invoices', id), { period: v.period, amount: v.amount, dueOn: v.dueOn, status: 'due', kind: v.kind, ...(v.note ? { note: v.note.slice(0, 200) } : {}) });
+  audit(batch, 'create-invoice', target.id, v.note || '', JSON.stringify({ invoice: id, kind: v.kind, amount: v.amount, period: v.period }));
+  await batch.commit();
+  toast('Invoice ' + id + ' created.');
+  return true;
+}
+
+// kind: 'payment' (verified offline or gateway payment), 'failed' (a payment that did not go through), 'refund'.
+async function moneyEntry(school, inv, kind) {
+  const balance = owing(inv);
+  const refundable = Math.max(0, (Number(inv.amountPaid) || 0) - (Number(inv.refunded) || 0));
+  const v = await formDialog({
+    title: (kind === 'refund' ? 'Refund on ' : kind === 'failed' ? 'Record a failed payment on ' : 'Record a payment on ') + inv.id, ok: 'Save',
+    note: kind === 'refund' ? 'Refundable so far: ' + money(refundable) + '. The refund is recorded here; send the money back yourself, then record it.'
+      : kind === 'failed' ? 'A failed attempt does not change the balance. It is kept in the invoice history.'
+      : 'Balance due: ' + money(balance) + '. Enter what you verified you received. A smaller amount is a part payment.',
+    fields: [
+      { key: 'amount', label: 'Amount (Rs)', type: 'number', required: true, value: kind === 'refund' ? refundable : balance },
+      { key: 'method', label: 'How it was paid', type: 'select', options: [['upi', 'UPI'], ['bank', 'Bank transfer'], ['cash', 'Cash'], ['cheque', 'Cheque'], ['gateway', 'Payment gateway (recorded by hand)']] },
+      { key: 'reference', label: 'Reference (UTR, cheque number, receipt)', placeholder: kind === 'failed' ? 'Gateway or bank message' : 'Needed so someone else can verify it' },
+      kind === 'refund' ? REASON : { key: 'note', label: 'Note (optional)' }],
+  });
+  if (!v) return false;
+  if (!(v.amount > 0)) { toast('The amount must be more than zero.'); return false; }
+  if (kind === 'payment' && v.amount > balance) { toast('That is more than the balance due (' + money(balance) + ').'); return false; }
+  if (kind === 'refund' && v.amount > refundable) { toast('That is more than was paid (' + money(refundable) + ').'); return false; }
+  if (kind !== 'failed' && v.method !== 'cash' && !v.reference) { toast('Add the reference so the payment can be verified later.'); return false; }
+  const batch = writeBatch(db);
+  const auditId = audit(batch, kind === 'refund' ? 'refund-invoice' : kind === 'failed' ? 'failed-payment' : 'record-payment', school.id, kind === 'refund' ? v.reason : (v.note || ''),
+    JSON.stringify({ invoice: inv.id, amount: v.amount, method: v.method, reference: v.reference || '' }));
+  batch.set(doc(db, 'schools', school.id, 'invoices', inv.id, 'payments', newId('PAY-')), {
+    kind: kind === 'refund' ? 'refund' : 'payment', amount: v.amount, method: v.method, status: kind === 'failed' ? 'failed' : 'verified',
+    ...(v.reference ? { reference: v.reference.slice(0, 80) } : {}), ...((kind === 'refund' ? v.reason : v.note) ? { note: (kind === 'refund' ? v.reason : v.note).slice(0, 200) } : {}),
+    by: S.user.uid, at: serverTimestamp(), auditId });
+  const ref = doc(db, 'schools', school.id, 'invoices', inv.id);
+  if (kind === 'payment') {
+    const paid = (Number(inv.amountPaid) || 0) + v.amount;
+    batch.update(ref, paid >= inv.amount ? { amountPaid: paid, status: 'paid', paidOn: today() } : { amountPaid: paid });
+  } else if (kind === 'refund') batch.update(ref, { refunded: (Number(inv.refunded) || 0) + v.amount });
+  await batch.commit();
+  toast(kind === 'refund' ? 'Refund recorded.' : kind === 'failed' ? 'Failed payment recorded.' : 'Payment recorded.');
+  return true;
+}
+
+async function paymentHistory(school, inv) {
+  const snap = await getDocs(collection(db, 'schools', school.id, 'invoices', inv.id, 'payments'));
+  const rows = snap.docs.map((d) => d.data()).sort((a, b) => (b.at && a.at ? b.at.toMillis() - a.at.toMillis() : 0));
+  const dlg = h('dialog', { class: 'dlg' }, h('h3', {}, 'Payments on ' + inv.id),
+    rows.length ? h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Type', 'Amount', 'Method', 'Reference', 'Result'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, when(r.at)), h('td', {}, r.kind), h('td', {}, money(r.amount)), h('td', {}, r.method), h('td', { class: 'muted' }, r.reference || '-'),
+        h('td', {}, h('span', { class: 'pill ' + (r.status === 'verified' ? 'ok' : 'bad') }, r.status)))))) : h('div', { class: 'empty' }, 'No payments recorded yet.'),
+    h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: () => { dlg.close(); dlg.remove(); } }, 'Close')));
+  document.body.append(dlg); dlg.showModal();
+}
+
+// A printable invoice: opens a clean page and the browser's print box, where "Save as PDF" makes the PDF.
+function printInvoice(school, inv) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups for this page, then try again.'); return; }
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Invoice</title><style>body{font:15px/1.5 Georgia,serif;color:#111;margin:40px auto;max-width:720px}h1{color:#0b1f3a;margin:0}table{width:100%;border-collapse:collapse;margin:22px 0}td,th{padding:8px;border-bottom:1px solid #ccc;text-align:left}.r{text-align:right}.tot td{font-weight:bold;border-top:2px solid #0b1f3a}.mut{color:#555}@media print{button{display:none}}</style></head><body></body></html>');
+  w.document.title = 'Invoice ' + inv.id;
+  const line = (label, value, cls) => h('tr', { class: cls || '' }, h('td', {}, label), h('td', { class: 'r' }, value));
+  const body = h('div', {}, h('h1', {}, 'AZIZ School Management System'), h('p', { class: 'mut' }, 'Tax invoice'),
+    h('p', {}, h('b', {}, 'Invoice: '), inv.id, h('br'), h('b', {}, 'Period: '), inv.period, h('br'), h('b', {}, 'Due: '), inv.dueOn, h('br'), h('b', {}, 'Status: '), inv.status),
+    h('p', {}, h('b', {}, 'Billed to: '), school.name, h('br'), school.address || '', school.address ? h('br') : null, school.contactEmail || ''),
+    h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Description'), h('th', { class: 'r' }, 'Amount'))),
+      h('tbody', {}, line((inv.kind === 'setup' ? 'Setup fee' : 'Subscription') + ' ' + inv.period + (inv.note ? ' (' + inv.note + ')' : ''), money(inv.amount)),
+        line('Received', money(inv.amountPaid || 0)), (inv.refunded ? line('Refunded', money(inv.refunded)) : null), line('Balance due', money(owing(inv)), 'tot'))),
+    h('p', { class: 'mut' }, 'Generated ' + new Date().toLocaleString('en-IN') + '.'),
+    h('button', { onclick: () => w.print() }, 'Print or save as PDF'));
+  w.document.body.append(w.document.adoptNode(body));
+  setTimeout(() => { try { w.focus(); w.print(); } catch { /* the button is still there */ } }, 400);
+}
+
+function invoiceTable(rows, withSchool, after) {
+  const body = h('tbody');
+  for (const { school, inv } of rows.slice(0, 300)) {
+    const left = owing(inv);
+    body.append(h('tr', {},
+      h('td', {}, h('b', {}, inv.id), h('div', { class: 'muted' }, (inv.kind === 'setup' ? 'Setup fee ' : 'Subscription ') + inv.period)),
+      withSchool ? h('td', {}, h('a', { href: '#/school/' + school.id }, school.name)) : null,
+      h('td', {}, money(inv.amount)), h('td', {}, money(inv.amountPaid || 0) + (inv.refunded ? ' (refunded ' + money(inv.refunded) + ')' : '')), h('td', {}, money(left)),
+      h('td', {}, inv.dueOn), h('td', {}, invPill(inv)),
+      h('td', {}, h('div', { class: 'row' },
+        left > 0 ? h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await moneyEntry(school, inv, 'payment')) await after(); }) }, 'Record payment') : null,
+        left > 0 ? h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await moneyEntry(school, inv, 'failed')) await after(); }) }, 'Failed attempt') : null,
+        (inv.amountPaid || 0) - (inv.refunded || 0) > 0 ? h('button', { class: 'btn sm red', onclick: () => guarded(async () => { if (await moneyEntry(school, inv, 'refund')) await after(); }) }, 'Refund') : null,
+        h('button', { class: 'btn sm', onclick: () => guarded(() => paymentHistory(school, inv)) }, 'History'),
+        h('button', { class: 'btn sm', onclick: () => printInvoice(school, inv) }, 'PDF')))));
+  }
+  if (!rows.length) body.append(h('tr', {}, h('td', { colspan: 8 }, h('div', { class: 'empty' }, 'No invoices.'))));
+  return h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Invoice', withSchool ? 'School' : null, 'Amount', 'Received', 'Balance', 'Due', 'Status', ''].filter((t) => t !== null).map((t) => h('th', {}, t)))), body));
+}
+
+async function viewBilling() {
+  setCrumbs('Billing and invoices');
+  view().replaceChildren(loading('Loading every school\'s invoices.'));
+  await loadInvoices();
+  const all = S.schools.flatMap((school) => (school.invoices || []).map((inv) => ({ school, inv })));
+  const filter = h('select', {}, [['unpaid', 'Unpaid'], ['overdue', 'Overdue'], ['all', 'All invoices']].map(([v, t]) => h('option', { value: v }, t)));
+  const searchBox = h('input', { type: 'search', placeholder: 'Search by school or invoice number' });
+  const holder = h('div');
+  const refresh = async () => { await loadInvoices(true); await viewBilling(); };
+  const draw = () => {
+    const words = searchBox.value.trim().toLowerCase();
+    const rows = all.filter(({ school, inv }) => (filter.value === 'all' || (filter.value === 'overdue' ? inv.status === 'overdue' : owing(inv) > 0))
+      && (!words || school.name.toLowerCase().includes(words) || inv.id.toLowerCase().includes(words)))
+      .sort((a, b) => String(a.inv.dueOn).localeCompare(String(b.inv.dueOn)));
+    holder.replaceChildren(invoiceTable(rows, true, refresh));
+  };
+  searchBox.addEventListener('input', draw); filter.addEventListener('change', draw);
+  const outstanding = all.reduce((t, { inv }) => t + owing(inv), 0);
+  const collected = all.reduce((t, { inv }) => t + (Number(inv.amountPaid) || 0), 0);
+  const refunded = all.reduce((t, { inv }) => t + (Number(inv.refunded) || 0), 0);
+  view().replaceChildren(
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Billing and invoices'), h('button', { class: 'btn gold', onclick: () => guarded(async () => { if (await createInvoice(null)) await refresh(); }) }, 'Create invoice')),
+    h('p', { class: 'muted' }, 'Payments are recorded by hand after you verify them (bank statement, UPI, cash, cheque). Every entry is kept in the invoice history and the audit log. Online payment through a gateway is not connected yet.'),
+    h('div', { class: 'grid' }, stat('Outstanding', money(outstanding)), stat('Collected', money(collected)), stat('Refunded', money(refunded)), stat('Overdue invoices', num(all.filter(({ inv }) => inv.status === 'overdue').length))),
+    h('div', { class: 'row' }, searchBox, filter), holder);
+  draw();
+}
+
+// ---------- analytics ----------
+function barRow(label, value, max, text) {
+  return h('div', { class: 'barrow' }, h('span', {}, label), h('div', {}, h('div', { class: 'bar', style: 'width:' + Math.round((max ? value / max : 0) * 100) + '%' })), h('span', { class: 'muted' }, text));
+}
+async function viewAnalytics() {
+  setCrumbs('Revenue analytics');
+  view().replaceChildren(loading('Working out the numbers.'));
+  await Promise.all([loadInvoices(), loadPlans()]);
+  const live = S.schools.filter((s) => !s.archived);
+  const paying = live.filter((s) => s.billing && s.billing.status === 'active' && s.billing.plan !== 'trial');
+  const mrr = paying.reduce((t, s) => t + (Number(s.billing.monthlyPrice) || 0), 0);
+  const arps = paying.length ? Math.round(mrr / paying.length) : 0;
+  // New subscriptions: schools whose paid plan started in each of the last six months.
+  const months = Array.from({ length: 6 }, (_, k) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - k)); return d.toISOString().slice(0, 7); });
+  const started = months.map((m) => live.filter((s) => s.billing && s.billing.startedOn && s.billing.startedOn.slice(0, 7) === m).length);
+  const converted = live.filter((s) => s.billing && s.billing.plan !== 'trial' && ['active', 'suspended'].includes(s.billing.status)).length;
+  const inTrial = live.filter((s) => s.billing && s.billing.status === 'trial').length;
+  const lost = S.schools.filter((s) => s.billing && s.billing.plan === 'trial' && s.billing.status === 'cancelled').length;
+  const rate = converted + inTrial + lost ? Math.round(converted / (converted + inTrial + lost) * 100) : 0;
+  const byPlan = new Map();
+  for (const s of live) {
+    const planId = s.billing ? s.billing.plan : 'none';
+    const row = byPlan.get(planId) || { schools: 0, mrr: 0, collected: 0 };
+    row.schools += 1;
+    if (s.billing && s.billing.status === 'active') row.mrr += Number(s.billing.monthlyPrice) || 0;
+    row.collected += (s.invoices || []).reduce((t, i) => t + (Number(i.amountPaid) || 0) - (Number(i.refunded) || 0), 0);
+    byPlan.set(planId, row);
+  }
+  const planRows = [...byPlan.entries()].sort((a, b) => b[1].mrr - a[1].mrr);
+  const maxMrr = Math.max(1, ...planRows.map(([, r]) => r.mrr));
+  const maxNew = Math.max(1, ...started);
+  view().replaceChildren(h('h2', {}, 'Revenue analytics'),
+    h('p', { class: 'muted' }, 'Worked out live from each school\'s plan and invoices. Only active, paying schools count toward revenue.'),
+    h('div', { class: 'grid' }, stat('MRR (monthly recurring revenue)', money(mrr)), stat('ARR (annual run rate)', money(mrr * 12), 'MRR times 12'), stat('Paying schools', num(paying.length)),
+      stat('Average revenue per school', money(arps), 'MRR divided by paying schools'), stat('Trial conversion', rate + '%', converted + ' paid, ' + inTrial + ' in trial, ' + lost + ' lost')),
+    h('div', { class: 'two' },
+      h('div', { class: 'card' }, h('h3', {}, 'New subscriptions, last 6 months'), ...months.map((m, k) => barRow(m, started[k], maxNew, String(started[k]))),
+        h('p', { class: 'muted' }, 'Counted from the start date saved when a school moves onto a paid plan. Schools that paid before this batch have no start date and do not appear here.')),
+      h('div', { class: 'card' }, h('h3', {}, 'Revenue by plan'), planRows.length ? planRows.map(([planId, r]) => barRow(planId + ' (' + r.schools + ')', r.mrr, maxMrr, money(r.mrr) + '/mo')) : h('div', { class: 'empty' }, 'No schools yet.'),
+        planRows.length ? h('table', {}, h('thead', {}, h('tr', {}, ['Plan', 'Schools', 'MRR', 'Collected to date'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, planRows.map(([planId, r]) => h('tr', {}, h('td', {}, planId), h('td', {}, num(r.schools)), h('td', {}, money(r.mrr)), h('td', {}, money(r.collected)))))) : null)));
+}
+
+// ---------- notifications ----------
+const KINDS = [['announcement', 'Announcement'], ['renewal', 'Renewal reminder'], ['payment', 'Payment alert'], ['maintenance', 'Maintenance notice'], ['targeted', 'Targeted message']];
+async function sendMessage({ kind, title, body, audience, recipients }) {
+  if (!recipients.length) { toast('No school matches that audience.'); return false; }
+  if (recipients.length > 450) { toast('That is ' + recipients.length + ' schools. Send to at most 450 at a time.'); return false; }
+  if (!confirm('Send "' + title + '" to ' + recipients.length + ' school(s)?')) return false;
+  const id = newId('M-');
+  const batch = writeBatch(db);
+  const auditId = audit(batch, 'send-message', '', '', JSON.stringify({ message: id, kind, audience, schools: recipients.length }));
+  batch.set(doc(db, 'platformMessages', id), { kind, title, body, audience, recipients, by: S.user.uid, at: serverTimestamp(), auditId });
+  for (const schoolId of recipients) batch.set(doc(db, 'schools', schoolId, 'platformInbox', id), { kind, title, body, at: serverTimestamp() });
+  await batch.commit();
+  toast('Sent to ' + recipients.length + ' school(s).');
+  return true;
+}
+async function composeMessage(preset = {}) {
+  await Promise.all([loadSchools(), loadPlans()]);
+  const live = S.schools.filter((s) => !s.archived);
+  const audiences = [['all', 'All schools (not archived)'], ['status:trial', 'Schools on trial'], ['status:active', 'Active schools'], ['status:suspended', 'Suspended schools']]
+    .concat(S.plans.map((p) => ['plan:' + p.id, 'Schools on the ' + p.name + ' plan'])).concat([['ids', 'Chosen schools (type their IDs)']]);
+  const v = await formDialog({
+    title: preset.title ? 'Send: ' + preset.title : 'New message to schools', ok: 'Review and send',
+    note: 'Owners see this at the top of their dashboard.',
+    fields: [
+      { key: 'kind', label: 'Type', type: 'select', options: KINDS, value: preset.kind },
+      { key: 'title', label: 'Title', required: true, minLen: 3, value: preset.title || '' },
+      { key: 'body', label: 'Message', type: 'textarea', required: true, value: preset.body || '' },
+      { key: 'audience', label: 'Send to', type: 'select', options: audiences, value: preset.ids ? 'ids' : preset.audience },
+      { key: 'ids', label: 'School IDs (only for "Chosen schools"), separated by commas', value: preset.ids ? preset.ids.join(', ') : '' },
+    ],
+  });
+  if (!v) return false;
+  let recipients;
+  if (v.audience === 'ids') recipients = v.ids.split(/[\s,]+/).filter(Boolean).filter((id) => live.some((s) => s.id === id));
+  else if (v.audience === 'all') recipients = live.map((s) => s.id);
+  else if (v.audience.startsWith('status:')) recipients = live.filter((s) => statusOf(s) === v.audience.slice(7)).map((s) => s.id);
+  else recipients = live.filter((s) => s.billing && s.billing.plan === v.audience.slice(5)).map((s) => s.id);
+  const label = v.audience === 'ids' ? 'Chosen schools' : audiences.find(([k]) => k === v.audience)[1];
+  return sendMessage({ kind: v.kind, title: v.title.slice(0, 100), body: v.body.slice(0, 1000), audience: label, recipients });
+}
+async function deliveryReport(message) {
+  const rows = [];
+  await pool(message.recipients, 10, async (schoolId) => {
+    const snap = await getDoc(doc(db, 'schools', schoolId, 'platformInbox', message.id)).catch(() => null);
+    rows.push({ schoolId, delivered: Boolean(snap && snap.exists()), readAt: snap && snap.exists() ? snap.data().readAt : null });
+  });
+  const read = rows.filter((r) => r.readAt).length;
+  const dlg = h('dialog', { class: 'dlg' }, h('h3', {}, 'Delivery: ' + message.title),
+    h('p', { class: 'muted' }, rows.filter((r) => r.delivered).length + ' delivered, ' + read + ' read, ' + (rows.length - read) + ' not read yet. Delivery is inside the app only.'),
+    h('table', {}, h('thead', {}, h('tr', {}, ['School', 'Delivered', 'Read'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, rows.sort((a, b) => Number(Boolean(a.readAt)) - Number(Boolean(b.readAt))).map((r) => h('tr', {}, h('td', {}, S.schools.find((s) => s.id === r.schoolId)?.name || r.schoolId),
+        h('td', {}, r.delivered ? 'Yes' : 'No'), h('td', {}, r.readAt ? when(r.readAt) : 'Not yet'))))),
+    h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: () => { dlg.close(); dlg.remove(); } }, 'Close')));
+  document.body.append(dlg); dlg.showModal();
+}
+async function viewNotifications() {
+  setCrumbs('Notifications');
+  view().replaceChildren(loading('Loading messages.'));
+  await loadInvoices();
+  const snap = await getDocs(query(collection(db, 'platformMessages'), orderBy('at', 'desc'), limit(40)));
+  const sent = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const live = S.schools.filter((s) => !s.archived);
+  const overdue = live.filter((s) => (s.invoices || []).some((i) => i.status === 'overdue'));
+  const soon = live.filter((s) => {
+    const b = s.billing || {}; const now = Date.now();
+    const trial = b.status === 'trial' && b.trialEnds && b.trialEnds.toMillis && b.trialEnds.toMillis() - now < 7 * 86400000;
+    const renew = b.status === 'active' && b.renewsOn && new Date(b.renewsOn).getTime() - now < 7 * 86400000;
+    return trial || renew;
+  });
+  const refresh = () => viewNotifications();
+  view().replaceChildren(
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Notifications'), h('button', { class: 'btn gold', onclick: () => guarded(async () => { if (await composeMessage()) await refresh(); }) }, 'New message')),
+    h('p', { class: 'muted' }, 'Messages appear at the top of each school owner\'s dashboard. Email and phone alerts are not connected yet.'),
+    h('div', { class: 'grid' },
+      h('div', { class: 'card' }, h('h3', {}, 'Payment alerts'), h('p', { class: 'muted' }, overdue.length + ' school(s) have an overdue invoice.'),
+        h('button', { class: 'btn', disabled: !overdue.length, onclick: () => guarded(async () => { if (await composeMessage({ kind: 'payment', title: 'Payment overdue', body: 'You have an overdue AZIZ invoice. Please pay it to keep your school running without interruption.', ids: overdue.map((s) => s.id) })) await refresh(); }) }, 'Remind them')),
+      h('div', { class: 'card' }, h('h3', {}, 'Renewal reminders'), h('p', { class: 'muted' }, soon.length + ' school(s) have a trial or renewal ending within 7 days.'),
+        h('button', { class: 'btn', disabled: !soon.length, onclick: () => guarded(async () => { if (await composeMessage({ kind: 'renewal', title: 'Your plan is due for renewal soon', body: 'Your trial or plan ends within a week. Contact AZIZ to continue without a break.', ids: soon.map((s) => s.id) })) await refresh(); }) }, 'Send reminder')),
+      h('div', { class: 'card' }, h('h3', {}, 'Maintenance notice'), h('p', { class: 'muted' }, 'Warn every school before planned downtime.'),
+        h('button', { class: 'btn', onclick: () => guarded(async () => { if (await composeMessage({ kind: 'maintenance', title: 'Planned maintenance', body: 'AZIZ will be briefly unavailable on DATE between TIME and TIME. Please save your work before then.', audience: 'all' })) await refresh(); }) }, 'Write notice'))),
+    h('div', { style: 'height:14px' }),
+    h('div', { class: 'card' }, h('h3', {}, 'Sent messages'),
+      sent.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Type', 'Title', 'Sent to', ''].map((t) => h('th', {}, t)))),
+        h('tbody', {}, sent.map((m) => h('tr', {}, h('td', {}, when(m.at)), h('td', {}, m.kind), h('td', {}, h('b', {}, m.title)), h('td', {}, m.audience + ' (' + m.recipients.length + ')'),
+          h('td', {}, h('button', { class: 'btn sm', onclick: () => guarded(() => deliveryReport(m)) }, 'Delivery'))))))) : h('div', { class: 'empty' }, 'Nothing sent yet.')));
+}
+
+// ---------- trials and onboarding ----------
+async function viewTrials() {
+  setCrumbs('Trials and onboarding');
+  view().replaceChildren(loading('Checking how each trial school is getting on.'));
+  await loadSchools();
+  const trials = S.schools.filter((s) => !s.archived && s.billing && s.billing.status === 'trial');
+  const owners = new Map();
+  await pool(trials, 8, async (s) => { owners.set(s.id, (await loadOwnersOf(s.id)).some((o) => o.kind === 'member' && o.active)); });
+  const converted = S.schools.filter((s) => !s.archived && s.billing && s.billing.plan !== 'trial' && ['active', 'suspended'].includes(s.billing.status)).length;
+  const lost = S.schools.filter((s) => s.billing && s.billing.plan === 'trial' && s.billing.status === 'cancelled').length;
+  const rate = converted + trials.length + lost ? Math.round(converted / (converted + trials.length + lost) * 100) : 0;
+  const refresh = async () => { await loadSchools(true); await viewTrials(); };
+  const cards = trials.map((s) => {
+    const u = s.usage || {};
+    const steps = [['Owner joined', owners.get(s.id)], ['Profile filled in', Boolean(s.contactEmail && s.phone && s.address)], ['Classes set up', (u.classes || 0) > 0],
+      ['Staff added', (u.staff || 0) > 0], ['Students added', (u.students || 0) > 0], ['First payment recorded', (u.payments || 0) > 0]];
+    const done = steps.filter(([, ok]) => ok).length;
+    const b = s.billing;
+    const days = b.trialEnds && b.trialEnds.toMillis ? Math.ceil((b.trialEnds.toMillis() - Date.now()) / 86400000) : null;
+    return h('div', { class: 'card' },
+      h('div', { class: 'row' }, h('h3', { style: 'flex:1' }, h('a', { href: '#/school/' + s.id }, s.name)), h('span', { class: 'pill ' + (days !== null && days <= 7 ? 'warn' : '') }, days === null ? 'no end date' : days < 0 ? 'ended ' + (-days) + ' days ago' : days + ' days left')),
+      barRow('Onboarding', done, steps.length, done + ' of ' + steps.length),
+      h('div', { class: 'steps' }, steps.map(([label, ok]) => h('span', { class: 'pill ' + (ok ? 'ok' : '') }, (ok ? 'Done: ' : 'To do: ') + label))),
+      h('div', { class: 'row' }, h('button', { class: 'btn sm gold', onclick: () => guarded(async () => { if (await applyPlan(s)) await refresh(); }) }, 'Convert to a paid plan'),
+        h('button', { class: 'btn sm', onclick: () => guarded(() => composeMessage({ kind: 'targeted', title: 'Need help getting started?', body: 'We noticed your setup is not finished. Reply to us and we will help you finish it.', ids: [s.id] })) }, 'Send a nudge')));
+  });
+  view().replaceChildren(h('h2', {}, 'Trials and onboarding'),
+    h('div', { class: 'grid' }, stat('Schools on trial', num(trials.length)), stat('Converted to paid', num(converted)), stat('Lost trials', num(lost)), stat('Trial conversion', rate + '%', 'paid, divided by paid plus trial plus lost')),
+    h('div', { style: 'height:14px' }), cards.length ? h('div', { class: 'two' }, cards) : h('div', { class: 'empty' }, 'No school is on trial right now.'));
+}
+
 // ---------- routing ----------
 async function route() {
   const parts = (location.hash || '#/dashboard').replace(/^#\/?/, '').split('/');
@@ -615,6 +935,10 @@ async function route() {
     else if (name === 'school') await viewSchool(decodeURIComponent(parts[1] || ''));
     else if (name === 'owners') await viewOwners();
     else if (name === 'plans') await viewPlans();
+    else if (name === 'billing') await viewBilling();
+    else if (name === 'analytics') await viewAnalytics();
+    else if (name === 'notifications') await viewNotifications();
+    else if (name === 'trials') await viewTrials();
     else if (name === 'audit') await viewAudit();
     else if (name === 'security') await viewSecurity();
     else await viewDashboard();

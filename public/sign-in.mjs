@@ -2754,6 +2754,33 @@ function showSuperBanner(user, schoolId, name, pass) {
   document.body.classList.add('has-super-banner');
 }
 
+// Messages from the platform (announcements, payment and renewal notices, maintenance) at the top of the owner's dashboard.
+async function showPlatformInbox(schoolRef) {
+  try {
+    document.querySelector('#platform-inbox')?.remove();
+    const fs = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js');
+    const snap = await fs.getDocs(fs.query(fs.collection(schoolRef, 'platformInbox'), fs.orderBy('at', 'desc'), fs.limit(10)));
+    const items = snap.docs.filter((d) => !d.data().readAt);
+    if (!items.length) return;
+    const box = document.createElement('section'); box.id = 'platform-inbox';
+    const head = document.createElement('h3'); head.textContent = 'Messages from AZIZ (' + items.length + ' new)';
+    box.append(head);
+    for (const d of items) {
+      const data = d.data();
+      const row = document.createElement('div'); row.className = 'inbox-row';
+      const title = document.createElement('strong'); title.textContent = data.title;
+      const text = document.createElement('p'); text.textContent = data.body;
+      const done = document.createElement('button'); done.type = 'button'; done.textContent = 'Mark as read';
+      done.addEventListener('click', async () => {
+        done.disabled = true;
+        try { await fs.updateDoc(d.ref, { readAt: fs.serverTimestamp() }); row.remove(); if (!box.querySelector('.inbox-row')) box.remove(); } catch { done.disabled = false; }
+      });
+      row.append(title, text, done); box.append(row);
+    }
+    dashboard.prepend(box);
+  } catch { /* the inbox is a convenience; the dashboard works without it */ }
+}
+
 // One sign-in record per browser session, so the super admin can see an owner's last sign-in.
 async function recordLogin(user) {
   try {
@@ -10676,6 +10703,7 @@ onAuthStateChanged(auth, async (user) => {
     dashboard.hidden = false;
     status.hidden = true;
     schoolStatus.hidden = true;
+    if (!superView && membership.data()?.active === true && membership.data()?.role === 'owner') showPlatformInbox(schoolRef);
     const staff = collection(schoolRef, 'staff');
     staffDirectory = {
       list: () => getDocsFromServer(staff),

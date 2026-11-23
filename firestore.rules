@@ -201,6 +201,16 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // platformMessages/{id}: the master record of each announcement or notice that was sent, and to which schools. Platform administrator only,
+    // written once, with its audit entry in the same batch.
+    match /platformMessages/{messageId} {
+      allow get, list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && messageId.matches('M-[A-Za-z0-9-]{4,40}') && validMessageLog(request.resource.data)
+        && request.resource.data.by == request.auth.uid && request.resource.data.at == request.time
+        && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
+      allow update, delete: if false;
+    }
+
     // platformDrills/{id}: disaster-recovery drill log. Platform administrators only.
     match /platformDrills/{drillId} {
       allow get, list: if isPlatformAdmin();
@@ -1211,6 +1221,16 @@ service cloud.firestore {
 
       // Billing and plan (features 064, 070, 072, 089, 101, 103). billing/main is written by the platform
       // administrator; the signup batch may create the first trial record. School owners and principals read it.
+      // Messages from the platform (Batch 77): one copy per school, so delivery and reading can be tracked. The owner may only mark one read.
+      match /platformInbox/{messageId} {
+        allow get, list: if request.auth != null && (isOwnerRole(schoolId) || isPlatformAdmin());
+        allow create: if isPlatformAdmin() && messageId.matches('M-[A-Za-z0-9-]{4,40}') && validInboxMessage(request.resource.data)
+          && request.resource.data.at == request.time;
+        allow update: if request.auth != null && isOwnerRole(schoolId) && !('readAt' in resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']) && request.resource.data.readAt == request.time;
+        allow delete: if isPlatformAdmin();
+      }
+
       match /billing/{docId} {
         allow get: if request.auth != null && docId == 'main' && (isSchoolViewer(schoolId) || isPlatformAdmin());
         allow create, update: if isPlatformAdmin() && docId == 'main' && validBilling(request.resource.data);
@@ -1228,6 +1248,16 @@ service cloud.firestore {
         allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
         allow create, update: if isPlatformAdmin() && invoiceId.matches('[A-Za-z0-9-]{1,30}') && validInvoice(request.resource.data);
         allow delete: if isPlatformAdmin();
+
+        // Payments, failed attempts and refunds against an invoice (Batch 77). Written once, never changed. Every entry carries the id of its
+        // audit entry, which must be created in the same batch.
+        match /payments/{paymentId} {
+          allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
+          allow create: if isPlatformAdmin() && paymentId.matches('PAY-[A-Za-z0-9-]{4,40}') && validInvoicePayment(request.resource.data)
+            && request.resource.data.by == request.auth.uid && request.resource.data.at == request.time
+            && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
+          allow update, delete: if false;
+        }
       }
 
       // Custom domain requests (067). domainRequests/{id}: domain, status, optional note, createdOn.
@@ -2820,7 +2850,7 @@ service cloud.firestore {
 
     function validBilling(item) {
       return item.keys().hasOnly(['plan', 'status', 'trialEnds', 'graceDays', 'studentLimit', 'staffLimit', 'storageMb',
-          'monthlyPrice', 'renewsOn', 'legalHold', 'autoBilling', 'note'])
+          'monthlyPrice', 'renewsOn', 'legalHold', 'autoBilling', 'note', 'startedOn'])
         && item.keys().hasAll(['plan', 'status'])
         && item.plan is string && item.plan.matches('[a-z][a-z0-9-]{1,29}')
         && item.status in ['trial', 'active', 'suspended', 'cancelled', 'pending']
@@ -2833,12 +2863,16 @@ service cloud.firestore {
         && (!item.keys().hasAny(['renewsOn']) || dateText(item.renewsOn))
         && (!item.keys().hasAny(['legalHold']) || item.legalHold is bool)
         && (!item.keys().hasAny(['autoBilling']) || item.autoBilling is bool)
+        && (!item.keys().hasAny(['startedOn']) || dateText(item.startedOn))
         && optText(item, 'note', 200);
     }
 
     function validInvoice(item) {
-      return item.keys().hasOnly(['period', 'amount', 'dueOn', 'status', 'paidOn', 'note'])
+      return item.keys().hasOnly(['period', 'amount', 'dueOn', 'status', 'paidOn', 'note', 'kind', 'amountPaid', 'refunded'])
         && item.keys().hasAll(['period', 'amount', 'dueOn', 'status'])
+        && (!item.keys().hasAny(['kind']) || item.kind in ['subscription', 'setup'])
+        && (!item.keys().hasAny(['amountPaid']) || (intIn(item.amountPaid, 0, 100000000) && item.amountPaid <= item.amount))
+        && (!item.keys().hasAny(['refunded']) || (intIn(item.refunded, 0, 100000000) && item.refunded <= item.get('amountPaid', 0)))
         && item.period is string && item.period.matches('[0-9]{4}-[0-9]{2}')
         && intIn(item.amount, 0, 100000000)
         && dateText(item.dueOn)
@@ -2933,6 +2967,34 @@ service cloud.firestore {
         && textLen(g.reason, 10, 300)
         && g.auditId is string && g.auditId.matches('A-[A-Za-z0-9-]{4,40}')
         && g.expiresAt is timestamp;
+    }
+
+    function validInvoicePayment(p) {
+      return p.keys().hasOnly(['kind', 'amount', 'method', 'status', 'reference', 'note', 'by', 'at', 'auditId'])
+        && p.keys().hasAll(['kind', 'amount', 'method', 'status', 'by', 'at', 'auditId'])
+        && p.kind in ['payment', 'refund']
+        && intIn(p.amount, 1, 100000000)
+        && p.method in ['cash', 'bank', 'upi', 'cheque', 'gateway']
+        && p.status in ['verified', 'failed']
+        && (p.status == 'verified' || p.kind == 'payment')
+        && optText(p, 'reference', 80) && optText(p, 'note', 200)
+        && p.auditId is string && p.auditId.matches('A-[A-Za-z0-9-]{4,40}');
+    }
+
+    function validInboxMessage(m) {
+      return m.keys().hasOnly(['kind', 'title', 'body', 'at'])
+        && m.keys().hasAll(['kind', 'title', 'body', 'at'])
+        && m.kind in ['announcement', 'renewal', 'payment', 'maintenance', 'targeted']
+        && textLen(m.title, 3, 100) && textLen(m.body, 1, 1000);
+    }
+
+    function validMessageLog(m) {
+      return m.keys().hasOnly(['kind', 'title', 'body', 'audience', 'recipients', 'by', 'at', 'auditId'])
+        && m.keys().hasAll(['kind', 'title', 'body', 'audience', 'recipients', 'by', 'at', 'auditId'])
+        && m.kind in ['announcement', 'renewal', 'payment', 'maintenance', 'targeted']
+        && textLen(m.title, 3, 100) && textLen(m.body, 1, 1000) && textLen(m.audience, 1, 200)
+        && m.recipients is list && m.recipients.size() <= 450
+        && m.auditId is string && m.auditId.matches('A-[A-Za-z0-9-]{4,40}');
     }
 
     function validPlan(p) {
