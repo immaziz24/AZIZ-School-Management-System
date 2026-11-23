@@ -17,7 +17,7 @@ export const app = initializeApp(firebaseConfig);
 // site. Turn on enforcement in the console only after the console shows the traffic as verified.
 const APP_CHECK_SITE_KEY = '';
 // Phone notifications (feature 150). Paste the Web Push key pair from Firebase console > Project settings > Cloud Messaging.
-export const PUSH_VAPID_KEY = '';
+export const PUSH_VAPID_KEY = 'BMpWDbb8bA5SkhBT12t71gkjzLgAcRZHAy3qkN6cCPFCbCSphDNQYw7ergI6-glsIpHKqMyKWB4ICjaKzcH8xWk';
 if (APP_CHECK_SITE_KEY) {
   try {
     const { initializeAppCheck, ReCaptchaV3Provider } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-app-check.js');
