@@ -2907,6 +2907,11 @@ async function requireOwnerMfa(user) {
     out.textContent = 'Sign out';
     out.style.marginLeft = '8px';
     out.addEventListener('click', () => { gate.remove(); signOut(auth); });
+    const later = document.createElement('button');
+    later.type = 'button';
+    later.textContent = 'Not now';
+    later.style.marginLeft = '8px';
+    later.addEventListener('click', () => gate.remove());
     start.addEventListener('click', async () => {
       start.disabled = true;
       message.textContent = 'Preparing.';
@@ -2954,10 +2959,26 @@ async function requireOwnerMfa(user) {
       });
       holder.replaceChildren(how, drawn ? canvas : document.createTextNode(''), key, code, document.createTextNode(' '), confirmButton);
     });
-    box.append(title, intro, note, message, holder, start, out);
+    box.append(title, intro, note, message, holder, start, later, out);
     gate.append(box);
     document.body.append(gate);
   } catch { /* if the sign-in library cannot load, the dashboard stays usable */ }
+}
+
+// 2-step sign-in is offered in the School Profile settings (not forced at sign-in).
+async function showMfaRow(user) {
+  const row = document.querySelector('#owner-mfa-row');
+  if (!row) return;
+  try {
+    const au = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js');
+    ownerMfaOn = au.multiFactor(user).enrolledFactors.length > 0;
+  } catch { return; }
+  row.hidden = false;
+  const state = row.querySelector('#owner-mfa-state');
+  const button = row.querySelector('#owner-mfa-button');
+  const paint = () => { state.textContent = ownerMfaOn ? 'On. Your account asks for a 6-digit authenticator code at sign-in.' : 'Off. Anyone with your password can sign in. Turn it on to add a 6-digit code from an authenticator app.'; button.hidden = ownerMfaOn; };
+  paint();
+  button.onclick = async () => { await requireOwnerMfa(user); const watch = setInterval(() => { if (!document.querySelector('#owner-mfa-gate')) { clearInterval(watch); paint(); } }, 500); };
 }
 
 // One sign-in record per browser session, so the super admin can see an owner's last sign-in.
@@ -11010,7 +11031,7 @@ onAuthStateChanged(auth, async (user) => {
     schoolStatus.hidden = true;
     if (!superView && membership.data()?.active === true && membership.data()?.role === 'owner') {
       showPlatformInbox(schoolRef);
-      requireOwnerMfa(user);
+      showMfaRow(user);
     }
     if (!superView && !feeOffice && ['owner', 'principal'].includes(membership.data()?.role)) {
       import('./admission-desk.mjs?v=batch-91').then((m) => m.mountAdmissionDesk({ app, schoolId: SCHOOL_ID, role: membership.data().role, schoolName: school.data().name, root: document.querySelector('#admission-desk') })).catch(() => {});

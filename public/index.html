@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="./sign-in.css?v=batch-87">
   <style>html.booting body>main{display:none}#boot{display:none}html.booting #boot{display:grid;place-items:center;min-height:100vh;gap:14px;align-content:center;color:#9ca7c0;font:500 1rem Inter,system-ui,sans-serif}#boot i{width:34px;height:34px;border-radius:50%;border:3px solid #c9a24a44;border-top-color:#c9a24a;animation:bootspin .8s linear infinite}@keyframes bootspin{to{transform:rotate(360deg)}}html{background:#060b17}</style>
   <script>(function(){var h=document.documentElement;window.__bootDone=function(){h.classList.remove('booting')};setTimeout(window.__bootDone,6000)})();</script>
-  <link rel="modulepreload" href="./ui.mjs?v=batch-87"><link rel="modulepreload" href="./i18n.mjs?v=batch-64"><link rel="modulepreload" href="./sign-in.mjs?v=batch-91"><link rel="modulepreload" href="./platform.mjs?v=batch-90"><link rel="modulepreload" href="./firebase-client.mjs">
+  <link rel="modulepreload" href="./ui.mjs?v=batch-87"><link rel="modulepreload" href="./i18n.mjs?v=batch-64"><link rel="modulepreload" href="./sign-in.mjs?v=batch-92"><link rel="modulepreload" href="./platform.mjs?v=batch-90"><link rel="modulepreload" href="./firebase-client.mjs">
 </head>
 <body>
   <div id="boot" role="status" aria-live="polite"><i></i><span>Loading your school.</span></div>
@@ -41,6 +41,7 @@
       <p><label>Find a screen <input id="jump-search" type="search" maxlength="40" placeholder="e.g. fees, exams, expenses" autocomplete="off"></label>
         <label>Go to <select id="jump"><option value="">Choose a screen</option></select></label></p>
       <h3>School Profile</h3>
+      <p id="owner-mfa-row" hidden><strong>2-step sign-in:</strong> <span id="owner-mfa-state"></span> <button type="button" id="owner-mfa-button">Set up 2-step sign-in</button></p>
       <form id="school-profile">
         <p><label>School name <input name="name" required maxlength="120"></label></p>
         <p><label>Contact email <input name="contactEmail" type="email" maxlength="254"></label></p>
@@ -2177,7 +2178,7 @@
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-91');
+      await import('./sign-in.mjs?v=batch-92');
       await import('./platform.mjs?v=batch-90');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.'; window.__bootDone?.();
