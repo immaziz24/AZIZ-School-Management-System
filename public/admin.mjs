@@ -1448,6 +1448,7 @@ async function viewInfra() {
   ]);
   if (isAdmin()) await loadSchools().catch(() => {});
   const measured = await getDoc(doc(db, 'platformJobs', 'usage')).then((d) => (d.exists() ? d.data() : null)).catch(() => null);
+  const mcost = await getDoc(doc(db, 'platformJobs', 'cost')).then((d) => (d.exists() ? d.data() : null)).catch(() => null);
   const months = monthsSnap ? monthsSnap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id)) : [];
   const cur = months.find((m) => m.id === month) || null;
   const dayOfMonth = Math.max(1, new Date().getDate());
@@ -1455,7 +1456,10 @@ async function viewInfra() {
   const topStorage = [...S.schools].map((s) => ({ s, mb: Number(s.billing && s.billing.storageCheckedMb) || Number(s.usage && s.usage.storageMb) || 0 })).sort((a, b) => b.mb - a.mb).slice(0, 5);
   const students = S.schools.reduce((t, s) => t + (Number(s.usage && s.usage.students) || 0), 0);
   const activeUsers = logins ? new Set(logins.docs.filter((d) => msOf(d.data()) > Date.now() - 30 * 86400000).map((d) => d.data().uid)).size : null;
-  const cost = cur ? cur.costInr : 0;
+  // Measured cost (Batch 85) wins over the typed-in figure when Google's billing export is on, has this month, and is in rupees.
+  const mcur = mcost && mcost.ok && Array.isArray(mcost.months) ? mcost.months.find((m) => m.month === month) : null;
+  const useMeasured = Boolean(mcur && mcur.currency === 'INR');
+  const cost = useMeasured ? Math.round(mcur.cost) : (cur ? cur.costInr : 0);
   const costPct = limits.budgetInr > 0 ? Math.round(cost / limits.budgetInr * 100) : 0;
   const errRows = errs ? errs.docs.map((d) => ({ id: d.id, ...d.data() })) : [];
   const groups = new Map();
@@ -1503,7 +1507,8 @@ async function viewInfra() {
     const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
     let r;
     try { r = (await httpsCallable(getFunctions(app, 'asia-south1'), 'runUsageNow')()).data; } catch { toast('Could not run it. Check that the server functions are deployed.'); return; }
-    toast(r.ok ? 'Usage numbers refreshed.' : (r.hint || r.error || 'Google did not return the numbers.'));
+    const c = r.cost || {};
+    toast((r.ok ? 'Usage refreshed.' : (r.hint || r.error || 'Usage not available.')) + ' ' + (c.ok ? (c.note || 'Costs refreshed.') : 'Costs: ' + (c.hint || c.error || 'not available.')));
     await viewInfra();
   });
   const mdays = measured && Array.isArray(measured.days) ? measured.days : [];
@@ -1547,6 +1552,13 @@ async function viewInfra() {
       h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', {}, month + ': ' + money(cost) + ' of a ' + money(limits.budgetInr) + ' budget'),
         h('span', { class: 'pill ' + (costPct >= 100 ? 'bad' : costPct >= limits.alertPct ? 'warn' : 'ok') }, costPct >= 100 ? 'Over budget' : costPct >= limits.alertPct ? 'Close to budget' : 'Within budget')),
       h('div', { class: 'meter ' + (costPct >= 100 ? 'bad' : costPct >= limits.alertPct ? 'warn' : '') }, h('i', { style: 'width:' + Math.min(100, costPct) + '%' })),
+      h('p', { class: 'muted' }, useMeasured ? 'This month\'s figure is measured from Google\'s billing export' + (mcost.at ? ' ' + ago(msOf(mcost)) : '') + '.'
+        : mcost && !mcost.ok ? 'Cost is typed in. Billing export: ' + (mcost.hint || mcost.error || 'not available yet.')
+          : mcost && mcost.ok && mcur ? 'The billing export is in ' + mcur.currency + ', not rupees, so the typed-in figure is used.'
+            : mcost && mcost.ok ? (mcost.note || 'The billing export has no figure for this month yet; the typed-in figure is used.') : 'Cost is typed in. Press Refresh now above to check the billing export.'),
+      mcost && mcost.ok && Array.isArray(mcost.services) && mcost.services.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['This month by service', 'Cost'].map((t) => h('th', {}, t)))),
+        h('tbody', {}, mcost.services.map((x) => h('tr', {}, h('td', {}, x.name), h('td', {}, num(x.cost)))))))
+        : null,
       months.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Month', 'Cost', 'Reads', 'Writes', 'Storage', 'Bandwidth', 'Active users'].map((t) => h('th', {}, t)))),
         h('tbody', {}, months.slice(0, 6).map((m) => h('tr', {}, h('td', {}, m.id), h('td', {}, money(m.costInr)), h('td', {}, num(m.reads)), h('td', {}, num(m.writes)), h('td', {}, num(m.storageMb) + ' MB'), h('td', {}, num(m.bandwidthMb) + ' MB'), h('td', {}, num(m.authActive))))))) : null),
     h('div', { class: 'card' }, h('h3', {}, 'Error alerts'),

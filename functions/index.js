@@ -588,5 +588,47 @@ exports.runUsageNow = onCall({ memory: '256MiB', timeoutSeconds: 120 }, async (r
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
   const admin = await db.doc('platformAdmins/' + request.auth.uid).get();
   if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
-  return takeUsage();
+  const usage = await takeUsage();
+  usage.cost = await takeCost();
+  return usage;
 });
+
+// ---- Batch 85: measured cost (feature 093) ----
+// Reads the Cloud Billing export that the platform owner switches on in the Google Cloud console (Billing > Billing export > BigQuery export,
+// dataset "billing_export" in this project). Nothing else can read cost. Until the export has data, the saved result says what is missing.
+// Needs the server account to have BigQuery Job User on the project and BigQuery Data Viewer on the dataset.
+async function takeCost() {
+  const project = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+  const result = { at: Timestamp.now(), ok: false, months: [], services: [] };
+  try {
+    const token = (await applicationDefault().getAccessToken()).access_token;
+    const run = async (sql) => {
+      const res = await fetch('https://bigquery.googleapis.com/bigquery/v2/projects/' + project + '/queries', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: sql, useLegacySql: false, timeoutMs: 60000, maximumBytesBilled: '1000000000' }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { const error = new Error('BigQuery answered ' + res.status + ': ' + String((body.error && body.error.message) || '').slice(0, 220)); error.status = res.status; throw error; }
+      if (body.jobComplete === false) throw new Error('The cost query did not finish in time. Try again.');
+      return (body.rows || []).map((row) => row.f.map((cell) => cell.v));
+    };
+    const table = '`' + project + '.billing_export.gcp_billing_export_v1_*`';
+    const net = 'SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0))';
+    const months = await run('SELECT FORMAT_DATE("%Y-%m", DATE(usage_start_time)) AS month, ' + net + ' AS cost, ANY_VALUE(currency) AS currency FROM ' + table +
+      ' WHERE usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 200 DAY) GROUP BY month ORDER BY month DESC LIMIT 7');
+    const services = await run('SELECT service.description AS service, ' + net + ' AS cost FROM ' + table +
+      ' WHERE FORMAT_DATE("%Y-%m", DATE(usage_start_time)) = FORMAT_DATE("%Y-%m", CURRENT_DATE()) GROUP BY service ORDER BY cost DESC LIMIT 8');
+    result.months = months.map(([month, cost, currency]) => ({ month, cost: Math.round(Number(cost) * 100) / 100, currency }));
+    result.services = services.map(([name, cost]) => ({ name: String(name).slice(0, 60), cost: Math.round(Number(cost) * 100) / 100 }));
+    result.ok = true;
+    if (!result.months.length) result.note = 'The export is on but has no rows yet. Google adds the first rows within a day.';
+  } catch (error) {
+    result.error = String(error.message || error).slice(0, 300);
+    if (error.status === 404 || /Not found/i.test(result.error)) result.hint = 'The billing export is not set up yet. In the Google Cloud console open Billing > Billing export, and turn on the standard BigQuery export into a dataset named billing_export.';
+    else if (error.status === 403) result.hint = 'Give the server account BigQuery Job User on the project and BigQuery Data Viewer on the billing_export dataset.';
+    logger.error('Cost snapshot failed', error);
+  }
+  await db.doc('platformJobs/cost').set(result);
+  return { ok: result.ok, error: result.error || null, hint: result.hint || null, note: result.note || null };
+}
+exports.costSnapshot = onSchedule({ schedule: '40 4 * * *', timeZone: 'Asia/Kolkata', memory: '256MiB', timeoutSeconds: 120 }, async () => { await takeCost(); });
