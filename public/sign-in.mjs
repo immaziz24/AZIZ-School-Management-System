@@ -2787,10 +2787,36 @@ async function recordLogin(user) {
     if (sessionStorage.getItem('aziz-login-logged') === user.uid) return;
     const fs = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js');
     const stamp = String(9999999999999 - Date.now()).padStart(13, '0');
-    await fs.setDoc(fs.doc(fs.getFirestore(app), 'loginHistory', user.uid + '_' + stamp), { uid: user.uid, email: user.email || '', at: fs.serverTimestamp() });
+    let mfa;
+    try { const au = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js'); mfa = au.multiFactor(user).enrolledFactors.length > 0; } catch { mfa = undefined; }
+    await fs.setDoc(fs.doc(fs.getFirestore(app), 'loginHistory', user.uid + '_' + stamp), { uid: user.uid, email: user.email || '', agent: String(navigator.userAgent || '').slice(0, 160), ...(typeof mfa === 'boolean' ? { mfa } : {}), at: fs.serverTimestamp() });
     sessionStorage.setItem('aziz-login-logged', user.uid);
   } catch { /* history is best effort */ }
 }
+// Sends an uncaught browser error to the platform so the super admin can see it (signed-in users only, at most 3 different errors per visit).
+let errorReportsSent = 0;
+const errorReportsSeen = new Set();
+async function sendErrorReport(message) {
+  try {
+    const text = String(message || '').slice(0, 300);
+    if (!text || errorReportsSent >= 3 || errorReportsSeen.has(text) || /ResizeObserver|^Script error/.test(text)) return;
+    const au = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js');
+    const user = au.getAuth(app).currentUser;
+    if (!user) return;
+    errorReportsSent += 1; errorReportsSeen.add(text);
+    const fs = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js');
+    const id = 'E-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+    await fs.setDoc(fs.doc(fs.getFirestore(app), 'errorReports', id), { uid: user.uid, message: text, page: (location.pathname + location.hash).slice(0, 120), agent: String(navigator.userAgent || '').slice(0, 160), at: fs.serverTimestamp() });
+  } catch { /* reporting must never cause another error */ }
+}
+addEventListener('error', (event) => {
+  if (event.filename && !String(event.filename).startsWith(location.origin)) return;
+  sendErrorReport(String(event.message || '') + (event.filename ? ' @ ' + String(event.filename).split('/').pop().split('?')[0] + ':' + event.lineno : ''));
+});
+addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  sendErrorReport('Promise: ' + (reason && reason.message ? reason.message : String(reason)));
+});
 function resetQrScreen() {
   stopQrScreen('');
   qrSection.hidden = true;

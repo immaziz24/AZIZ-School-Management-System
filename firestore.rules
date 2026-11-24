@@ -117,7 +117,7 @@ service cloud.firestore {
     // Server job results (feature 092). platformJobs/{id}: the nightly backup, fee reminder and health check results. Written only by
     // the server; the platform administrator reads them.
     match /platformJobs/{jobId} {
-      allow get, list: if request.auth != null && isPlatformAdmin();
+      allow get, list: if request.auth != null && (isPlatformAdmin() || staffCan('ops'));
       allow write: if false;
     }
 
@@ -159,8 +159,8 @@ service cloud.firestore {
     // platformAudit/{id}: the permanent record of what the platform administrator did. Written once, never changed or deleted by anyone.
     // Fields: actor (uid), actorEmail, action, schoolId, reason, detail (before and after, text), at (server time).
     match /platformAudit/{auditId} {
-      allow get, list: if isPlatformAdmin();
-      allow create: if isPlatformAdmin() && auditId.matches('A-[A-Za-z0-9-]{4,40}') && validAudit(request.resource.data)
+      allow get, list: if isPlatformAdmin() || staffCan('audit');
+      allow create: if (isPlatformAdmin() || staffActive() || staffJoining()) && auditId.matches('A-[A-Za-z0-9-]{4,40}') && validAudit(request.resource.data)
         && request.resource.data.actor == request.auth.uid && request.resource.data.at == request.time;
       allow update, delete: if false;
     }
@@ -195,13 +195,115 @@ service cloud.firestore {
 
     // loginHistory/{uid}_{13 digits}: one entry per sign-in session, written by the user. Only the platform administrator reads them.
     match /loginHistory/{loginId} {
-      allow get, list: if isPlatformAdmin();
+      allow get, list: if isPlatformAdmin() || staffCan('audit');
       allow create: if request.auth != null && loginId.matches(request.auth.uid + '_[0-9]{13}')
+        && request.resource.data.keys().hasOnly(['uid', 'email', 'at', 'agent', 'mfa'])
+        && request.resource.data.keys().hasAll(['uid', 'at'])
+        && (!request.resource.data.keys().hasAny(['mfa']) || request.resource.data.mfa is bool)
+        && request.resource.data.uid == request.auth.uid && request.resource.data.at == request.time
+        && optText(request.resource.data, 'email', 120) && optText(request.resource.data, 'agent', 160);
+      allow update, delete: if false;
+    }
+
+    // ---- Batch 79 (Mark 4): internal staff, incidents, infrastructure, errors and failed access ----
+    // staffInvites/{email}: an invitation to work in the Super Admin panel with limited access. The id is the lower-case email address. The invited
+    // person (signed in with that verified email) may accept it once, which creates platformStaff/{uid} in the same batch.
+    match /staffInvites/{inviteEmail} {
+      allow get: if isPlatformAdmin() || (request.auth != null && request.auth.token.get('email_verified', false) == true
+        && request.auth.token.get('email', '').lower() == inviteEmail);
+      allow list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && inviteEmail.matches('[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,100}') && validStaffInvite(request.resource.data)
+        && request.resource.data.email == inviteEmail && request.resource.data.status == 'invited'
+        && request.resource.data.by == request.auth.uid && request.resource.data.at == request.time
+        && !request.resource.data.keys().hasAny(['acceptedAt'])
+        && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
+      allow update: if (isPlatformAdmin() && validStaffInvite(request.resource.data) && request.resource.data.email == inviteEmail
+          && request.resource.data.status in ['invited', 'cancelled'] && resource.data.status != 'accepted'
+          && request.resource.data.by == request.auth.uid && request.resource.data.at == request.time
+          && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId)))
+        || (request.auth != null && request.auth.token.get('email_verified', false) == true
+          && request.auth.token.get('email', '').lower() == inviteEmail && resource.data.status == 'invited'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt'])
+          && request.resource.data.status == 'accepted' && request.resource.data.acceptedAt == request.time);
+      allow delete: if false;
+    }
+
+    // platformStaff/{uid}: an internal staff member. Created only by accepting an invitation (same role and permissions as the invitation);
+    // changed or revoked only by the super admin, with an audit entry in the same batch. Revoking sets status 'revoked'; nothing is deleted.
+    match /platformStaff/{staffUid} {
+      allow get: if request.auth != null && (request.auth.uid == staffUid || isPlatformAdmin());
+      allow list: if isPlatformAdmin();
+      allow create: if request.auth != null && request.auth.uid == staffUid && validStaffMember(request.resource.data)
+        && request.auth.token.get('email_verified', false) == true
+        && request.resource.data.email == request.auth.token.get('email', '').lower()
+        && request.resource.data.status == 'active' && request.resource.data.joinedAt == request.time
+        && !request.resource.data.keys().hasAny(['revokedAt', 'changedAt'])
+        && exists(/databases/$(database)/documents/staffInvites/$(request.resource.data.email))
+        && get(/databases/$(database)/documents/staffInvites/$(request.resource.data.email)).data.status == 'invited'
+        && get(/databases/$(database)/documents/staffInvites/$(request.resource.data.email)).data.role == request.resource.data.role
+        && get(/databases/$(database)/documents/staffInvites/$(request.resource.data.email)).data.perms == request.resource.data.perms
+        && getAfter(/databases/$(database)/documents/staffInvites/$(request.resource.data.email)).data.status == 'accepted'
+        && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
+      allow update: if isPlatformAdmin() && validStaffMember(request.resource.data) && request.resource.data.email == resource.data.email
+        && request.resource.data.joinedAt == resource.data.joinedAt && request.resource.data.changedAt == request.time
+        && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
+      allow delete: if false;
+    }
+
+    // platformIncidents/{I-...}: a security or operations incident the platform is tracking.
+    match /platformIncidents/{incidentId} {
+      allow get, list: if isPlatformAdmin() || staffCan('audit');
+      allow create: if (isPlatformAdmin() || staffCan('audit')) && incidentId.matches('I-[A-Za-z0-9-]{4,40}') && validIncident(request.resource.data)
+        && request.resource.data.status == 'open' && request.resource.data.openedBy == request.auth.uid
+        && request.resource.data.openedAt == request.time && request.resource.data.updatedAt == request.time
+        && !request.resource.data.keys().hasAny(['resolvedAt'])
+        && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
+      allow update: if (isPlatformAdmin() || staffCan('audit')) && validIncident(request.resource.data)
+        && request.resource.data.openedBy == resource.data.openedBy && request.resource.data.openedAt == resource.data.openedAt
+        && request.resource.data.updatedAt == request.time
+        && (request.resource.data.status != 'resolved' || request.resource.data.resolvedAt == request.time)
+        && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
+      allow delete: if false;
+    }
+
+    // platformInfra/{YYYY-MM}: the month's usage and cost readings the platform administrator copies in from the Firebase and Google Cloud consoles.
+    match /platformInfra/{monthId} {
+      allow get, list: if isPlatformAdmin() || staffCan('ops');
+      allow create, update: if (isPlatformAdmin() || staffCan('ops')) && monthId.matches('20[0-9]{2}-(0[1-9]|1[0-2])') && validInfra(request.resource.data)
+        && request.resource.data.by == request.auth.uid && request.resource.data.at == request.time;
+      allow delete: if isPlatformAdmin();
+    }
+
+    // errorReports/{E-...}: a problem the app caught in somebody's browser. Any signed-in user may report one (with their own uid); only the
+    // platform side reads them.
+    match /errorReports/{errorId} {
+      allow get, list: if isPlatformAdmin() || staffCan('ops');
+      allow create: if request.auth != null && errorId.matches('E-[A-Za-z0-9-]{4,40}')
+        && request.resource.data.keys().hasOnly(['uid', 'schoolId', 'message', 'page', 'agent', 'at'])
+        && request.resource.data.keys().hasAll(['uid', 'message', 'at'])
+        && request.resource.data.uid == request.auth.uid && request.resource.data.at == request.time
+        && textLen(request.resource.data.message, 1, 300) && optText(request.resource.data, 'schoolId', 40)
+        && optText(request.resource.data, 'page', 120) && optText(request.resource.data, 'agent', 160);
+      allow update: if false;
+      allow delete: if isPlatformAdmin();
+    }
+
+    // accessAttempts/{uid}_{13 digits}: a signed-in person who opened the Super Admin page without being allowed in.
+    match /accessAttempts/{attemptId} {
+      allow get, list: if isPlatformAdmin() || staffCan('audit');
+      allow create: if request.auth != null && attemptId.matches(request.auth.uid + '_[0-9]{13}')
         && request.resource.data.keys().hasOnly(['uid', 'email', 'at', 'agent'])
         && request.resource.data.keys().hasAll(['uid', 'at'])
         && request.resource.data.uid == request.auth.uid && request.resource.data.at == request.time
         && optText(request.resource.data, 'email', 120) && optText(request.resource.data, 'agent', 160);
       allow update, delete: if false;
+    }
+
+    // Batch 79 settings: infraLimits (the quotas the Infrastructure page compares against) and backupPolicy (how often backups should run and be kept).
+    match /platformConfig/{docId} {
+      allow get: if (isPlatformAdmin() || staffCan('ops')) && docId in ['infraLimits', 'backupPolicy'];
+      allow create, update: if isPlatformAdmin() && docId == 'infraLimits' && validInfraLimits(request.resource.data);
+      allow create, update: if isPlatformAdmin() && docId == 'backupPolicy' && validBackupPolicy(request.resource.data);
     }
 
     // featureCatalogue/{key}: every switchable feature, its state (live, beta, off), rollout percentage, the plans that include it and the
@@ -248,13 +350,14 @@ service cloud.firestore {
     // supportTickets/{id}: schoolId, subject, body, status open/answered/closed, createdBy, createdOn, optional reply.
     // A school owner raises tickets for the own school; the platform administrator reads and answers them.
     match /supportTickets/{ticketId} {
-      allow get, list: if request.auth != null && (isPlatformAdmin() || isSchoolViewer(resource.data.schoolId));
+      allow get, list: if request.auth != null && (isPlatformAdmin() || staffCan('support') || isSchoolViewer(resource.data.schoolId));
       allow create: if request.auth != null && isSchoolOwner(request.resource.data.schoolId)
         && ticketId.matches('[A-Za-z0-9-]{1,30}') && validSupportTicket(request.resource.data)
         && request.resource.data.status == 'open' && request.resource.data.createdBy == request.auth.uid
-        && !request.resource.data.keys().hasAny(['reply']);
-      allow update: if isPlatformAdmin() && validSupportTicket(request.resource.data)
-        && request.resource.data.schoolId == resource.data.schoolId;
+        && !request.resource.data.keys().hasAny(['reply', 'assignedTo', 'assignedEmail', 'priority', 'dueOn']);
+      allow update: if (isPlatformAdmin() || staffCan('support')) && validSupportTicket(request.resource.data)
+        && request.resource.data.schoolId == resource.data.schoolId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reply', 'assignedTo', 'assignedEmail', 'priority', 'dueOn']);
     }
 
     // Extra storage requests (features 127, 157). storageRequests/{id}: the owner asks for more storage space (mb); the platform
@@ -297,8 +400,8 @@ service cloud.firestore {
     }
 
     match /schools/{schoolId} {
-      allow get: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId) || isPlatformAdmin());
-      allow list: if isPlatformAdmin();
+      allow get: if request.auth != null && (isSchoolViewer(schoolId) || isFeeStaff(schoolId) || isPlatformAdmin() || staffCan('support') || staffCan('finance'));
+      allow list: if isPlatformAdmin() || staffCan('support') || staffCan('finance');
       // Self-service signup (features 065, 099). The signed-in user creates the school, becomes its owner and
       // gets a trial billing record in the same batch. A school ID is a lowercase slug and cannot be reused.
       allow create: if request.auth != null && validNewSchool(request.resource.data)
@@ -1273,7 +1376,7 @@ service cloud.firestore {
       }
 
       match /billing/{docId} {
-        allow get: if request.auth != null && docId == 'main' && (isSchoolViewer(schoolId) || isPlatformAdmin());
+        allow get: if request.auth != null && docId == 'main' && (isSchoolViewer(schoolId) || isPlatformAdmin() || staffCan('finance'));
         allow create, update: if isPlatformAdmin() && docId == 'main' && validBilling(request.resource.data);
         allow create: if request.auth != null && docId == 'main'
           && !exists(/databases/$(database)/documents/schools/$(schoolId))
@@ -1286,14 +1389,14 @@ service cloud.firestore {
 
       // Invoices (071, 089). invoices/{id}: period, amount, dueOn, status due/paid/overdue, optional paidOn and note.
       match /invoices/{invoiceId} {
-        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
+        allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin() || staffCan('finance'));
         allow create, update: if isPlatformAdmin() && invoiceId.matches('[A-Za-z0-9-]{1,30}') && validInvoice(request.resource.data);
         allow delete: if isPlatformAdmin();
 
         // Payments, failed attempts and refunds against an invoice (Batch 77). Written once, never changed. Every entry carries the id of its
         // audit entry, which must be created in the same batch.
         match /payments/{paymentId} {
-          allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin());
+          allow get, list: if request.auth != null && (isSchoolViewer(schoolId) || isPlatformAdmin() || staffCan('finance'));
           allow create: if isPlatformAdmin() && paymentId.matches('PAY-[A-Za-z0-9-]{4,40}') && validInvoicePayment(request.resource.data)
             && request.resource.data.by == request.auth.uid && request.resource.data.at == request.time
             && existsAfter(/databases/$(database)/documents/platformAudit/$(request.resource.data.auditId));
@@ -2988,9 +3091,84 @@ service cloud.firestore {
         && optText(item, 'reply', 300);
     }
 
+    // Internal staff (Batch 79). staffActive: a signed-in member of the platform staff whose access has not been revoked.
+    function staffDocPath() { return /databases/$(database)/documents/platformStaff/$(request.auth.uid); }
+    function staffActive() {
+      return request.auth != null && exists(staffDocPath()) && get(staffDocPath()).data.status == 'active';
+    }
+    function staffCan(perm) {
+      return staffActive() && get(staffDocPath()).data.perms.get(perm, false) == true;
+    }
+    // A person accepting an invitation may write the one audit line that says so, before the staff record exists.
+    function staffJoining() {
+      return request.auth != null && request.auth.token.get('email_verified', false) == true
+        && request.resource.data.action == 'staff-joined'
+        && exists(/databases/$(database)/documents/staffInvites/$(request.auth.token.get('email', '').lower()))
+        && get(/databases/$(database)/documents/staffInvites/$(request.auth.token.get('email', '').lower())).data.status == 'invited';
+    }
+    function validPerms(perms) {
+      return perms is map && perms.keys().hasOnly(['support', 'finance', 'audit', 'ops'])
+        && perms.get('support', false) is bool && perms.get('finance', false) is bool
+        && perms.get('audit', false) is bool && perms.get('ops', false) is bool;
+    }
+    function validStaffInvite(item) {
+      return item.keys().hasOnly(['email', 'role', 'perms', 'status', 'by', 'at', 'auditId', 'acceptedAt'])
+        && item.keys().hasAll(['email', 'role', 'perms', 'status', 'by', 'at', 'auditId'])
+        && item.role in ['support', 'finance', 'auditor', 'operations']
+        && validPerms(item.perms)
+        && item.status in ['invited', 'cancelled', 'accepted']
+        && item.auditId is string && item.auditId.matches('A-[A-Za-z0-9-]{4,40}');
+    }
+    function validStaffMember(item) {
+      return item.keys().hasOnly(['email', 'role', 'perms', 'status', 'joinedAt', 'revokedAt', 'changedAt', 'auditId'])
+        && item.keys().hasAll(['email', 'role', 'perms', 'status', 'joinedAt', 'auditId'])
+        && textLen(item.email, 3, 120)
+        && item.role in ['support', 'finance', 'auditor', 'operations']
+        && validPerms(item.perms)
+        && item.status in ['active', 'revoked']
+        && item.auditId is string && item.auditId.matches('A-[A-Za-z0-9-]{4,40}');
+    }
+    function validIncident(item) {
+      return item.keys().hasOnly(['title', 'severity', 'status', 'schoolId', 'notes', 'openedBy', 'openedAt', 'updatedAt', 'resolvedAt', 'auditId'])
+        && item.keys().hasAll(['title', 'severity', 'status', 'openedBy', 'openedAt', 'updatedAt', 'auditId'])
+        && textLen(item.title, 3, 120)
+        && item.severity in ['low', 'medium', 'high', 'critical']
+        && item.status in ['open', 'investigating', 'resolved']
+        && optText(item, 'schoolId', 40) && optText(item, 'notes', 1500)
+        && item.auditId is string && item.auditId.matches('A-[A-Za-z0-9-]{4,40}');
+    }
+    function validInfra(item) {
+      return item.keys().hasOnly(['reads', 'writes', 'deletes', 'storageMb', 'bandwidthMb', 'authActive', 'costInr', 'note', 'by', 'at'])
+        && item.keys().hasAll(['reads', 'writes', 'deletes', 'storageMb', 'bandwidthMb', 'authActive', 'costInr', 'by', 'at'])
+        && intIn(item.reads, 0, 1000000000000) && intIn(item.writes, 0, 1000000000000) && intIn(item.deletes, 0, 1000000000000)
+        && intIn(item.storageMb, 0, 100000000) && intIn(item.bandwidthMb, 0, 100000000)
+        && intIn(item.authActive, 0, 100000000) && intIn(item.costInr, 0, 1000000000)
+        && optText(item, 'note', 300);
+    }
+    function validInfraLimits(item) {
+      return item.keys().hasOnly(['readsPerDay', 'writesPerDay', 'storageGb', 'bandwidthGb', 'authMau', 'budgetInr', 'alertPct'])
+        && item.keys().hasAll(['readsPerDay', 'writesPerDay', 'storageGb', 'bandwidthGb', 'authMau', 'budgetInr', 'alertPct'])
+        && intIn(item.readsPerDay, 1, 1000000000000) && intIn(item.writesPerDay, 1, 1000000000000)
+        && intIn(item.storageGb, 1, 10000000) && intIn(item.bandwidthGb, 1, 10000000)
+        && intIn(item.authMau, 1, 1000000000) && intIn(item.budgetInr, 0, 1000000000)
+        && intIn(item.alertPct, 10, 100);
+    }
+    function validBackupPolicy(item) {
+      return item.keys().hasOnly(['keepDays', 'frequency', 'alertAfterHours', 'notifyEmail'])
+        && item.keys().hasAll(['keepDays', 'frequency', 'alertAfterHours'])
+        && intIn(item.keepDays, 7, 3650)
+        && item.frequency in ['daily', 'weekly']
+        && intIn(item.alertAfterHours, 6, 720)
+        && optText(item, 'notifyEmail', 120);
+    }
+
     function validSupportTicket(item) {
-      return item.keys().hasOnly(['schoolId', 'subject', 'body', 'status', 'createdBy', 'createdOn', 'reply'])
+      return item.keys().hasOnly(['schoolId', 'subject', 'body', 'status', 'createdBy', 'createdOn', 'reply', 'assignedTo', 'assignedEmail', 'priority', 'dueOn'])
         && item.keys().hasAll(['schoolId', 'subject', 'body', 'status', 'createdBy', 'createdOn'])
+        && (!item.keys().hasAny(['assignedTo']) || textLen(item.assignedTo, 1, 40))
+        && optText(item, 'assignedEmail', 120)
+        && (!item.keys().hasAny(['priority']) || item.priority in ['low', 'normal', 'high', 'urgent'])
+        && (!item.keys().hasAny(['dueOn']) || dateText(item.dueOn))
         && item.schoolId is string && item.schoolId.matches('[a-z0-9-]{1,40}')
         && namedText(item.subject, 120)
         && namedText(item.body, 2000)

@@ -13,6 +13,7 @@
     h1,h2,h3{font-family:'Cormorant Garamond',Georgia,serif;font-weight:600;margin:0}
     a{color:var(--gold)}
     [hidden]{display:none !important}
+    .meter{height:8px;background:#1b2542;border-radius:6px;overflow:hidden;margin:4px 0 12px}.meter i{display:block;height:100%;background:var(--green)}.meter.warn i{background:#d9a23b}.meter.bad i{background:var(--red)}
     .shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
     nav.side{background:var(--navy2);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;overflow:auto}
     .brand{display:flex;align-items:center;gap:10px;margin:0 6px 18px}
@@ -104,9 +105,14 @@
       <a class="item" data-r="themes" href="#/themes">Themes</a>
       <a class="item" data-r="features" href="#/features">Feature access</a>
       <a class="item" data-r="storage" href="#/storage">Storage</a>
-      <div class="sep">Control</div>
+      <div class="sep">Operations and security</div>
+      <a class="item" data-r="infra" href="#/infra">Infrastructure</a>
+      <a class="item" data-r="backups" href="#/backups">Backups</a>
+      <a class="item" data-r="support" href="#/support">Support tickets</a>
+      <a class="item" data-r="incidents" href="#/incidents">Incidents</a>
       <a class="item" data-r="audit" href="#/audit">Audit log</a>
       <a class="item" data-r="security" href="#/security">Security and access</a>
+      <a class="item" data-r="staff" href="#/staff">Internal staff</a>
       <div class="sep">More tools</div>
       <a class="item" href="/app?legacy=1">Health, billing, tickets, themes</a>
     </nav>
@@ -122,6 +128,6 @@
     </main>
   </div>
   <div id="toast" role="status"></div>
-  <script type="module" src="./admin.mjs?v=batch-78c"></script>
+  <script type="module" src="./admin.mjs?v=batch-79"></script>
 </body>
 </html>

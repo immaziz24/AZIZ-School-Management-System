@@ -1,16 +1,16 @@
 // Super Admin page (Batch 76, Mark 1). Platform administrators only: the database rules decide who may read or write, not this file.
 // Every change writes a permanent entry to platformAudit in the same batch.
 import { app } from './firebase-client.mjs';
-import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail, multiFactor } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
-  getFirestore, collection, doc, getDoc, getDocs, getDocFromServer, getDocsFromServer, setDoc, updateDoc, deleteDoc, writeBatch,
+  getFirestore, collection, doc, getDoc, getDocs, getDocFromServer, getDocsFromServer, setDoc, updateDoc, deleteDoc, deleteField, writeBatch,
   query, where, orderBy, limit, documentId, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const auth = getAuth(app);
 const db = getFirestore(app);
 const $ = (id) => document.getElementById(id);
-const S = { user: null, schools: [], plans: [], loaded: false, alerts: [], ownersCache: null };
+const S = { user: null, role: 'admin', staff: null, schools: [], plans: [], loaded: false, alerts: [], opsAlerts: [], limits: null, ownersCache: null };
 
 // ---------- small helpers ----------
 function h(tag, attrs = {}, ...kids) {
@@ -151,7 +151,7 @@ function buildAlerts() {
     if (b.studentLimit && s.usage && s.usage.students && s.usage.students / b.studentLimit >= 0.9) alerts.push({ level: 'warn', school: s, text: 'Students are at ' + Math.round(s.usage.students / b.studentLimit * 100) + '% of the plan limit' });
   }
   S.alerts = alerts;
-  const bell = $('bellN'); bell.textContent = alerts.length; bell.hidden = alerts.length === 0;
+  updateBell();
 }
 function fillSwitcher() {
   const select = $('switcher');
@@ -193,7 +193,8 @@ async function viewDashboard() {
       stat('Alerts', num(S.alerts.length))),
     h('div', { class: 'card' }, h('h3', {}, 'Alerts'),
       S.alerts.length ? S.alerts.slice(0, 50).map((a) => h('div', { class: 'alert' }, h('span', { class: 'pill ' + a.level }, a.level === 'bad' ? 'Act' : 'Watch'),
-        h('a', { href: '#/school/' + a.school.id }, a.school.name), h('span', { class: 'muted' }, a.text))) : h('div', { class: 'empty' }, 'No alerts. Every school looks healthy.')));
+        h('a', { href: '#/school/' + a.school.id }, a.school.name), h('span', { class: 'muted' }, a.text))) : h('div', { class: 'empty' }, 'No alerts. Every school looks healthy.')),
+    ...((S.opsAlerts || []).length ? [h('div', { class: 'card' }, h('h3', {}, 'Operations alerts'), S.opsAlerts.map((a) => h('div', { class: 'alert' }, h('span', { class: 'pill ' + a.level }, a.level === 'bad' ? 'Act' : 'Watch'), h('a', { href: a.href }, a.text))))] : []));
 }
 
 async function viewSchools() {
@@ -570,19 +571,6 @@ async function showHistory(plan) {
       h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, when(r.at)), h('td', {}, money(r.monthlyPrice)), h('td', {}, money(r.yearlyPrice)), h('td', {}, money(r.setupFee)), h('td', { class: 'muted' }, r.note || ''))))) : h('div', { class: 'empty' }, 'No history yet.'),
     h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: () => { dlg.close(); dlg.remove(); } }, 'Close')));
   document.body.append(dlg); dlg.showModal();
-}
-
-async function viewAudit() {
-  setCrumbs('Audit log');
-  view().replaceChildren(loading('Loading the audit log.'));
-  const snap = await getDocs(query(collection(db, 'platformAudit'), orderBy('at', 'desc'), limit(200)));
-  const rows = snap.docs.map((d) => d.data());
-  view().replaceChildren(h('h2', {}, 'Audit log'),
-    h('p', { class: 'muted' }, 'The newest 200 entries. Entries can be added but never edited or deleted.'),
-    rows.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Who', 'Action', 'School', 'Reason', 'Detail'].map((t) => h('th', {}, t)))),
-      h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, when(r.at)), h('td', {}, r.actorEmail || String(r.actor).slice(0, 8)), h('td', {}, h('b', {}, r.action)),
-        h('td', {}, r.schoolId ? h('a', { href: '#/school/' + r.schoolId }, r.schoolId) : '-'), h('td', {}, r.reason || '-'), h('td', { class: 'muted', style: 'max-width:340px;word-break:break-word' }, r.detail || '-'))))))
-      : h('div', { class: 'empty' }, 'Nothing recorded yet.'));
 }
 
 async function viewSecurity() {
@@ -1330,10 +1318,520 @@ async function viewStorage() {
       }) }, 'Change policy')));
 }
 
+// ---------- Mark 4: operations and security (Batch 79) ----------
+// Internal staff get limited access: the database rules decide what each permission may read or change. This page only hides what a person cannot use.
+const show = (...parts) => view().replaceChildren(...parts.flat().filter((p) => p !== null && p !== undefined && p !== false));
+const isAdmin = () => S.role === 'admin';
+const can = (perm) => isAdmin() || Boolean(S.staff && S.staff.perms && S.staff.perms[perm] === true);
+const ROUTE_PERM = { support: 'support', billing: 'finance', audit: 'audit', incidents: 'audit', infra: 'ops', backups: 'ops' };
+const routeAllowed = (name) => isAdmin() || (ROUTE_PERM[name] !== undefined && can(ROUTE_PERM[name]));
+const ROLE_PRESETS = { support: ['support'], finance: ['finance'], auditor: ['audit'], operations: ['ops', 'support'] };
+const ROLE_LABEL = { support: 'Support', finance: 'Finance', auditor: 'Auditor', operations: 'Operations' };
+const PERM_LABEL = { support: 'Support tickets', finance: 'Finance (read only)', audit: 'Audit log and incidents', ops: 'Infrastructure and backups' };
+const permsFor = (role, extras) => {
+  const out = { support: false, finance: false, audit: false, ops: false };
+  for (const key of ROLE_PRESETS[role] || []) out[key] = true;
+  for (const key of extras || []) out[key] = true;
+  return out;
+};
+const permText = (perms) => Object.keys(PERM_LABEL).filter((k) => perms && perms[k] === true).map((k) => PERM_LABEL[k]).join(', ') || 'none';
+const msOf = (r) => (r && r.at && r.at.toMillis ? r.at.toMillis() : 0);
+const ago = (ms) => {
+  if (!ms) return 'never';
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 60) return Math.max(mins, 0) + ' min ago';
+  if (mins < 2880) return Math.round(mins / 60) + ' h ago';
+  return Math.round(mins / 1440) + ' days ago';
+};
+function meter(used, limit, label) {
+  const pct = limit > 0 ? Math.min(100, Math.round(used / limit * 100)) : 0;
+  const cls = pct >= 100 ? 'bad' : pct >= (S.limits ? S.limits.alertPct : 80) ? 'warn' : '';
+  return h('div', {}, h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', {}, label), h('span', { class: 'muted' }, num(used) + ' of ' + num(limit) + ' (' + pct + '%)')),
+    h('div', { class: 'meter ' + cls }, h('i', { style: 'width:' + pct + '%' })));
+}
+function exportCsv(name, header, rows) {
+  const safe = (v) => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
+  const text = [header, ...rows].map((r) => r.map(safe).join(',')).join('\r\n');
+  const link = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/csv' })), download: name });
+  document.body.append(link); link.click(); link.remove();
+}
+function applyRoleToPage() {
+  const side = document.querySelectorAll('nav.side a.item[data-r]');
+  for (const a of side) a.hidden = !routeAllowed(a.dataset.r);
+  const staffOnly = !isAdmin();
+  for (const el of document.querySelectorAll('nav.side a.item:not([data-r])')) el.hidden = staffOnly;
+  for (const el of document.querySelectorAll('[data-adminonly]')) el.hidden = staffOnly;
+  if (staffOnly) {
+    $('switcher').hidden = true; $('gsearch').parentElement.hidden = true; $('bell').hidden = true;
+    $('who').textContent = ($('who').textContent || '') + ' (' + (ROLE_LABEL[S.staff.role] || 'staff') + ')';
+  }
+  const seps = [...document.querySelectorAll('nav.side .sep')];
+  for (const sep of seps) {
+    let next = sep.nextElementSibling; let any = false;
+    while (next && !next.classList.contains('sep')) { if (!next.hidden) any = true; next = next.nextElementSibling; }
+    sep.hidden = !any;
+  }
+}
+function firstAllowedRoute() {
+  if (isAdmin()) return 'dashboard';
+  return ['support', 'billing', 'audit', 'incidents', 'infra', 'backups'].find(routeAllowed) || 'denied';
+}
+function updateBell() {
+  const total = S.alerts.length + (S.opsAlerts ? S.opsAlerts.length : 0);
+  const bell = $('bellN'); bell.textContent = total; bell.hidden = total === 0;
+}
+
+// ---- operations alerts: failing backups, fresh errors, serious open incidents ----
+const DEFAULT_LIMITS = { readsPerDay: 50000, writesPerDay: 20000, storageGb: 5, bandwidthGb: 100, authMau: 50000, budgetInr: 2000, alertPct: 80 };
+async function loadLimits() {
+  try { const snap = await getDoc(doc(db, 'platformConfig', 'infraLimits')); S.limits = snap.exists() ? { ...DEFAULT_LIMITS, ...snap.data() } : { ...DEFAULT_LIMITS }; }
+  catch { S.limits = { ...DEFAULT_LIMITS }; }
+  return S.limits;
+}
+const DEFAULT_BACKUP = { keepDays: 30, frequency: 'daily', alertAfterHours: 36 };
+async function readBackups() {
+  const [policySnap, jobs, health] = await Promise.all([
+    getDoc(doc(db, 'platformConfig', 'backupPolicy')).catch(() => null),
+    getDocs(collection(db, 'platformJobs')).catch(() => null),
+    getDoc(doc(db, 'platformJobs', 'health')).catch(() => null),
+  ]);
+  const policy = { ...DEFAULT_BACKUP, ...(policySnap && policySnap.exists() ? policySnap.data() : {}) };
+  const runs = jobs ? jobs.docs.filter((d) => /^backup-/.test(d.id)).map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id)) : [];
+  const stamp = (run) => { const t = run.at && run.at.toMillis ? run.at.toMillis() : typeof run.at === 'string' ? Date.parse(run.at) : Date.parse(run.id.slice(7) + 'T00:00:00Z'); return Number.isFinite(t) ? t : 0; };
+  const problems = [];
+  const last = runs[0];
+  if (!last) problems.push({ level: 'warn', text: 'No backup has reported yet.' });
+  else {
+    const failedN = Array.isArray(last.failed) ? last.failed.length : 0;
+    if (failedN || (Number(last.done) < Number(last.schools))) problems.push({ level: 'bad', text: 'The latest backup (' + last.id.slice(7) + ') saved ' + last.done + ' of ' + last.schools + ' schools' + (failedN ? ', ' + failedN + ' failed.' : '.') });
+    const hours = (Date.now() - stamp(last)) / 3600000;
+    if (hours > policy.alertAfterHours) problems.push({ level: 'bad', text: 'The last backup is ' + Math.round(hours) + ' hours old. The policy allows ' + policy.alertAfterHours + '.' });
+  }
+  if (health && health.exists()) {
+    const hd = health.data();
+    if (hd.backupFailed && hd.backupFailed.length) problems.push({ level: 'bad', text: 'The health check reports ' + hd.backupFailed.length + ' school(s) with a failed backup.' });
+    if (hd.backupStale && hd.backupStale.length) problems.push({ level: 'warn', text: 'The health check reports ' + hd.backupStale.length + ' school(s) with an out-of-date backup.' });
+    for (const p of hd.problems || []) problems.push({ level: 'warn', text: 'Health check: ' + String(p).slice(0, 200) });
+  }
+  return { policy, runs, problems, health: health && health.exists() ? health.data() : null };
+}
+async function opsAlerts() {
+  const out = [];
+  try {
+    if (can('ops')) {
+      const b = await readBackups();
+      for (const p of b.problems) out.push({ level: p.level, text: p.text, href: '#/backups' });
+      const errs = await getDocs(query(collection(db, 'errorReports'), orderBy('at', 'desc'), limit(100))).catch(() => null);
+      if (errs) { const n = errs.docs.filter((d) => msOf(d.data()) > Date.now() - 86400000).length; if (n >= 5) out.push({ level: n >= 20 ? 'bad' : 'warn', text: n + ' app errors were reported in the last 24 hours.', href: '#/infra' }); }
+    }
+    if (can('audit')) {
+      const inc = await getDocs(query(collection(db, 'platformIncidents'), where('status', '!=', 'resolved'))).catch(() => null);
+      if (inc) { const hot = inc.docs.filter((d) => ['high', 'critical'].includes(d.data().severity)).length; if (hot) out.push({ level: 'bad', text: hot + ' serious incident(s) still open.', href: '#/incidents' }); }
+    }
+  } catch { /* alerts are a convenience */ }
+  S.opsAlerts = out; updateBell();
+}
+
+// ---------- Infrastructure ----------
+async function viewInfra() {
+  setCrumbs('Infrastructure');
+  show(loading('Loading usage, costs and errors.'));
+  const limits = await loadLimits();
+  const month = today().slice(0, 7);
+  const [monthsSnap, errs, logins] = await Promise.all([
+    getDocs(collection(db, 'platformInfra')).catch(() => null),
+    getDocs(query(collection(db, 'errorReports'), orderBy('at', 'desc'), limit(100))).catch(() => null),
+    can('audit') ? getDocs(query(collection(db, 'loginHistory'), orderBy('at', 'desc'), limit(500))).catch(() => null) : Promise.resolve(null),
+  ]);
+  if (isAdmin()) await loadSchools().catch(() => {});
+  const months = monthsSnap ? monthsSnap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id)) : [];
+  const cur = months.find((m) => m.id === month) || null;
+  const dayOfMonth = Math.max(1, new Date().getDate());
+  const storageMb = S.schools.reduce((t, s) => t + (Number(s.billing && s.billing.storageCheckedMb) || Number(s.usage && s.usage.storageMb) || 0), 0);
+  const topStorage = [...S.schools].map((s) => ({ s, mb: Number(s.billing && s.billing.storageCheckedMb) || Number(s.usage && s.usage.storageMb) || 0 })).sort((a, b) => b.mb - a.mb).slice(0, 5);
+  const students = S.schools.reduce((t, s) => t + (Number(s.usage && s.usage.students) || 0), 0);
+  const activeUsers = logins ? new Set(logins.docs.filter((d) => msOf(d.data()) > Date.now() - 30 * 86400000).map((d) => d.data().uid)).size : null;
+  const cost = cur ? cur.costInr : 0;
+  const costPct = limits.budgetInr > 0 ? Math.round(cost / limits.budgetInr * 100) : 0;
+  const errRows = errs ? errs.docs.map((d) => ({ id: d.id, ...d.data() })) : [];
+  const groups = new Map();
+  for (const e of errRows) { const g = groups.get(e.message) || { message: e.message, n: 0, last: 0, pages: new Set() }; g.n++; g.last = Math.max(g.last, msOf(e)); if (e.page) g.pages.add(e.page); groups.set(e.message, g); }
+  const errGroups = [...groups.values()].sort((a, b) => b.last - a.last);
+  const errDay = errRows.filter((e) => msOf(e) > Date.now() - 86400000).length;
+
+  const record = () => guarded(async () => {
+    const v = await formDialog({ title: 'Record usage and cost', note: 'Copy these from the Firebase console (Usage tab) and the Google Cloud billing report. They are readings you type in; this page does not measure them itself.',
+      ok: 'Save readings', fields: [
+        { key: 'month', label: 'Month (YYYY-MM)', required: true, value: month, pattern: /^20[0-9]{2}-(0[1-9]|1[0-2])$/, patternText: 'Use the form 2026-12.' },
+        { key: 'reads', label: 'Firestore document reads this month', type: 'number', required: true, value: cur ? cur.reads : 0 },
+        { key: 'writes', label: 'Firestore document writes this month', type: 'number', required: true, value: cur ? cur.writes : 0 },
+        { key: 'deletes', label: 'Firestore document deletes this month', type: 'number', required: true, value: cur ? cur.deletes : 0 },
+        { key: 'storageMb', label: 'File storage used (MB)', type: 'number', required: true, value: cur ? cur.storageMb : Math.round(storageMb) },
+        { key: 'bandwidthMb', label: 'Download bandwidth this month (MB)', type: 'number', required: true, value: cur ? cur.bandwidthMb : 0 },
+        { key: 'authActive', label: 'Active sign-in users this month', type: 'number', required: true, value: cur ? cur.authActive : (activeUsers || 0) },
+        { key: 'costInr', label: 'Cost this month (Rs)', type: 'number', required: true, value: cur ? cur.costInr : 0 },
+        { key: 'note', label: 'Note (optional)', value: cur && cur.note ? cur.note : '' }] });
+    if (!v) return;
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'platformInfra', v.month), { reads: v.reads, writes: v.writes, deletes: v.deletes, storageMb: v.storageMb, bandwidthMb: v.bandwidthMb, authActive: v.authActive, costInr: v.costInr, ...(v.note ? { note: v.note.slice(0, 300) } : {}), by: S.user.uid, at: serverTimestamp() });
+    audit(batch, 'infra-readings', '', '', JSON.stringify({ month: v.month, cost: v.costInr }));
+    await batch.commit(); toast('Readings saved.'); await viewInfra();
+  });
+  const editLimits = () => guarded(async () => {
+    const v = await formDialog({ title: 'Limits and budget', note: 'The quotas the meters compare against. The starting values are the usual free amounts; set them to what your Firebase plan really allows.', ok: 'Save limits', fields: [
+      { key: 'readsPerDay', label: 'Reads per day', type: 'number', required: true, value: limits.readsPerDay },
+      { key: 'writesPerDay', label: 'Writes per day', type: 'number', required: true, value: limits.writesPerDay },
+      { key: 'storageGb', label: 'File storage (GB)', type: 'number', required: true, value: limits.storageGb },
+      { key: 'bandwidthGb', label: 'Bandwidth per month (GB)', type: 'number', required: true, value: limits.bandwidthGb },
+      { key: 'authMau', label: 'Active users per month', type: 'number', required: true, value: limits.authMau },
+      { key: 'budgetInr', label: 'Monthly budget (Rs)', type: 'number', required: true, value: limits.budgetInr },
+      { key: 'alertPct', label: 'Warn at this percent (10 to 100)', type: 'number', required: true, value: limits.alertPct }, REASON] });
+    if (!v) return;
+    if (v.readsPerDay < 1 || v.writesPerDay < 1 || v.storageGb < 1 || v.bandwidthGb < 1 || v.authMau < 1 || v.alertPct < 10 || v.alertPct > 100) { toast('Limits must be at least 1, and the warning percent between 10 and 100.'); return; }
+    const { reason, ...data } = v;
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'platformConfig', 'infraLimits'), data);
+    audit(batch, 'infra-limits', '', reason, JSON.stringify(data));
+    await batch.commit(); toast('Limits saved.'); await viewInfra();
+  });
+  const clearErrors = () => guarded(async () => {
+    if (!errRows.length || !confirm('Remove the ' + errRows.length + ' error reports shown here? This cannot be undone.')) return;
+    const batch = writeBatch(db);
+    for (const e of errRows.slice(0, 400)) batch.delete(doc(db, 'errorReports', e.id));
+    audit(batch, 'errors-cleared', '', '', errRows.length + ' reports');
+    await batch.commit(); toast('Error reports cleared.'); await viewInfra();
+  });
+
+  show(h('h2', {}, 'Infrastructure'),
+    h('p', { class: 'muted' }, 'Usage, bandwidth, cost and errors for the whole platform. Reads, writes, bandwidth and cost are readings you copy in from the Firebase and Google Cloud consoles; schools, students, storage and sign-ins are measured from your own records.'),
+    h('div', { class: 'row' }, h('button', { class: 'btn gold', onclick: record }, 'Record this month\'s readings'), isAdmin() ? h('button', { class: 'btn', onclick: editLimits }, 'Limits and budget') : null),
+    h('div', { class: 'two' },
+      h('div', { class: 'card' }, h('h3', {}, 'Firestore (database)'),
+        cur ? [meter(Math.round(cur.reads / dayOfMonth), limits.readsPerDay, 'Reads per day (monthly total / days so far)'), meter(Math.round(cur.writes / dayOfMonth), limits.writesPerDay, 'Writes per day'),
+          h('p', { class: 'muted' }, 'This month: ' + num(cur.reads) + ' reads, ' + num(cur.writes) + ' writes, ' + num(cur.deletes) + ' deletes.')]
+          : h('p', { class: 'muted' }, 'No readings for ' + month + ' yet. Press "Record this month\'s readings".'),
+        isAdmin() ? h('p', { class: 'muted' }, S.schools.length + ' schools and ' + num(students) + ' students are stored.') : null),
+      h('div', { class: 'card' }, h('h3', {}, 'File storage'),
+        isAdmin() ? [meter(Math.round(storageMb / 1024 * 10) / 10, limits.storageGb, 'All schools together (GB)'),
+          h('table', {}, h('tbody', {}, topStorage.map((t) => h('tr', {}, h('td', {}, h('a', { href: '#/school/' + t.s.id }, t.s.name)), h('td', {}, num(Math.round(t.mb)) + ' MB'))))),
+          h('p', { class: 'muted' }, 'Uses each school\'s reconciled figure when there is one, otherwise the size the school reports.')]
+          : h('p', { class: 'muted' }, cur ? num(cur.storageMb) + ' MB recorded for ' + month + '.' : 'Not recorded yet.')),
+      h('div', { class: 'card' }, h('h3', {}, 'Authentication'),
+        cur ? meter(cur.authActive, limits.authMau, 'Active users this month (recorded)') : h('p', { class: 'muted' }, 'Not recorded yet.'),
+        activeUsers !== null ? h('p', { class: 'muted' }, activeUsers + ' different people signed in during the last 30 days (counted from the sign-in history, newest 500 sign-ins).') : null),
+      h('div', { class: 'card' }, h('h3', {}, 'Bandwidth'),
+        cur ? meter(Math.round(cur.bandwidthMb / 1024 * 10) / 10, limits.bandwidthGb, 'Downloads this month (GB)') : h('p', { class: 'muted' }, 'Not recorded yet.'))),
+    h('div', { class: 'card' }, h('h3', {}, 'Costs'),
+      h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', {}, month + ': ' + money(cost) + ' of a ' + money(limits.budgetInr) + ' budget'),
+        h('span', { class: 'pill ' + (costPct >= 100 ? 'bad' : costPct >= limits.alertPct ? 'warn' : 'ok') }, costPct >= 100 ? 'Over budget' : costPct >= limits.alertPct ? 'Close to budget' : 'Within budget')),
+      h('div', { class: 'meter ' + (costPct >= 100 ? 'bad' : costPct >= limits.alertPct ? 'warn' : '') }, h('i', { style: 'width:' + Math.min(100, costPct) + '%' })),
+      months.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Month', 'Cost', 'Reads', 'Writes', 'Storage', 'Bandwidth', 'Active users'].map((t) => h('th', {}, t)))),
+        h('tbody', {}, months.slice(0, 6).map((m) => h('tr', {}, h('td', {}, m.id), h('td', {}, money(m.costInr)), h('td', {}, num(m.reads)), h('td', {}, num(m.writes)), h('td', {}, num(m.storageMb) + ' MB'), h('td', {}, num(m.bandwidthMb) + ' MB'), h('td', {}, num(m.authActive))))))) : null),
+    h('div', { class: 'card' }, h('h3', {}, 'Error alerts'),
+      h('p', { class: 'muted' }, errDay + ' error report(s) in the last 24 hours. Browsers of signed-in users send these automatically (at most 3 per visit).'),
+      errGroups.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Error', 'Times', 'Last seen', 'Where'].map((t) => h('th', {}, t)))),
+        h('tbody', {}, errGroups.slice(0, 20).map((g) => h('tr', {}, h('td', { style: 'max-width:420px;word-break:break-word' }, g.message), h('td', {}, g.n), h('td', {}, ago(g.last)), h('td', { class: 'muted' }, [...g.pages].slice(0, 2).join(', ') || '-')))))) : h('div', { class: 'empty' }, 'No errors reported.'),
+      isAdmin() && errRows.length ? h('button', { class: 'btn red sm', onclick: clearErrors }, 'Clear these reports') : null));
+}
+
+// ---------- Backups ----------
+async function viewBackups() {
+  setCrumbs('Backups');
+  show(loading('Loading backups.'));
+  const b = await readBackups();
+  const editPolicy = () => guarded(async () => {
+    const v = await formDialog({ title: 'Backup retention and alerts', note: 'This is the policy the platform follows. The nightly server job makes the backups; removing backups older than this and sending the alert email need the server job to read this policy, which is not wired in yet.', ok: 'Save policy', fields: [
+      { key: 'keepDays', label: 'Keep each backup for (days, 7 to 3650)', type: 'number', required: true, value: b.policy.keepDays },
+      { key: 'frequency', label: 'How often', type: 'select', options: [['daily', 'Every day'], ['weekly', 'Every week']], value: b.policy.frequency },
+      { key: 'alertAfterHours', label: 'Raise an alert when the last backup is older than (hours, 6 to 720)', type: 'number', required: true, value: b.policy.alertAfterHours },
+      { key: 'notifyEmail', label: 'Alert email (optional)', value: b.policy.notifyEmail || '' }, REASON] });
+    if (!v) return;
+    if (v.keepDays < 7 || v.keepDays > 3650 || v.alertAfterHours < 6 || v.alertAfterHours > 720) { toast('Check the day and hour ranges.'); return; }
+    const data = { keepDays: v.keepDays, frequency: v.frequency, alertAfterHours: v.alertAfterHours, ...(v.notifyEmail ? { notifyEmail: v.notifyEmail.slice(0, 120) } : {}) };
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'platformConfig', 'backupPolicy'), data);
+    audit(batch, 'backup-policy', '', v.reason, JSON.stringify(data));
+    await batch.commit(); toast('Policy saved.'); await viewBackups();
+  });
+  show(h('h2', {}, 'Backups'),
+    h('div', { class: 'card' }, h('h3', {}, 'Failure alerts'),
+      b.problems.length ? b.problems.map((p) => h('div', { class: 'alert' }, h('span', { class: 'pill ' + p.level }, p.level === 'bad' ? 'Act' : 'Watch'), h('span', {}, p.text)))
+        : h('div', { class: 'empty' }, 'The latest backup finished and is within the allowed age.')),
+    h('div', { class: 'card' }, h('h3', {}, 'Retention policy'),
+      h('p', {}, 'Keep for ' + b.policy.keepDays + ' days. Run ' + (b.policy.frequency === 'weekly' ? 'every week' : 'every day') + '. Alert after ' + b.policy.alertAfterHours + ' hours without a backup' + (b.policy.notifyEmail ? '. Email: ' + b.policy.notifyEmail : '') + '.'),
+      isAdmin() ? h('button', { class: 'btn', onclick: editPolicy }, 'Change policy') : null),
+    h('div', { class: 'card' }, h('h3', {}, 'Recent backup runs'),
+      b.runs.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Run', 'Schools saved', 'Failed', 'Status'].map((t) => h('th', {}, t)))),
+        h('tbody', {}, b.runs.slice(0, 14).map((r) => { const failed = Array.isArray(r.failed) ? r.failed.length : 0; const ok = !failed && Number(r.done) >= Number(r.schools);
+          return h('tr', {}, h('td', {}, r.id.slice(7)), h('td', {}, num(r.done) + ' of ' + num(r.schools)), h('td', {}, failed), h('td', {}, h('span', { class: 'pill ' + (ok ? 'ok' : 'bad') }, ok ? 'Complete' : 'Needs attention'))); })))) : h('div', { class: 'empty' }, 'No backup has reported yet.')));
+}
+
+// ---------- Support ----------
+const PRIORITY_ORDER = { urgent: 0, high: 1, normal: 2, low: 3 };
+const PRIORITY_CLASS = { urgent: 'bad', high: 'warn', normal: '', low: '' };
+S.supFilter = 'open';
+async function viewSupport() {
+  setCrumbs('Support tickets');
+  show(loading('Loading tickets.'));
+  const [snap, staffSnap] = await Promise.all([getDocs(collection(db, 'supportTickets')), isAdmin() ? getDocs(collection(db, 'platformStaff')).catch(() => null) : Promise.resolve(null)]);
+  await loadSchools().catch(() => {});
+  const nameOf = (id) => { const s = S.schools.find((x) => x.id === id); return s ? s.name : id; };
+  const people = [[S.user.uid, S.user.email || 'Me']];
+  if (staffSnap) for (const d of staffSnap.docs) if (d.data().status === 'active' && d.id !== S.user.uid) people.push([d.id, d.data().email]);
+  const emailFor = (uid) => (people.find((p) => p[0] === uid) || [uid, ''])[1];
+  const todayText = today();
+  const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() })).map((t) => ({ ...t, priority: t.priority || 'normal' }));
+  const overdue = (t) => t.status !== 'closed' && t.dueOn && t.dueOn < todayText;
+  const filters = { open: (t) => t.status !== 'closed', mine: (t) => t.assignedTo === S.user.uid && t.status !== 'closed', overdue, unassigned: (t) => !t.assignedTo && t.status !== 'closed', all: () => true };
+  const shown = rows.filter(filters[S.supFilter] || filters.open).sort((a, b) =>
+    (a.status === 'closed') - (b.status === 'closed') || PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || String(a.dueOn || '9999').localeCompare(String(b.dueOn || '9999')) || String(a.createdOn).localeCompare(String(b.createdOn)));
+
+  const openTicket = (t) => guarded(async () => {
+    const v = await formDialog({ title: t.subject, note: nameOf(t.schoolId) + ' - raised ' + t.createdOn + ': ' + t.body, ok: 'Save', fields: [
+      { key: 'reply', label: 'Reply to the school', type: 'textarea', value: t.reply || '' },
+      { key: 'status', label: 'Status', type: 'select', options: [['open', 'Open'], ['answered', 'Answered'], ['closed', 'Closed']], value: t.status },
+      { key: 'priority', label: 'Priority', type: 'select', options: [['low', 'Low'], ['normal', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']], value: t.priority },
+      { key: 'dueOn', label: 'Deadline (optional)', type: 'date', value: t.dueOn || '' },
+      { key: 'assignedTo', label: 'Assigned to', type: 'select', options: [['', 'Nobody'], ...people], value: t.assignedTo || '' }] });
+    if (!v) return;
+    const patch = { status: v.status, priority: v.priority };
+    patch.reply = v.reply ? v.reply.slice(0, 2000) : deleteField();
+    patch.dueOn = v.dueOn ? v.dueOn : deleteField();
+    if (v.assignedTo) { patch.assignedTo = v.assignedTo; patch.assignedEmail = (emailFor(v.assignedTo) || '').slice(0, 120); } else { patch.assignedTo = deleteField(); patch.assignedEmail = deleteField(); }
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'supportTickets', t.id), patch);
+    audit(batch, 'ticket-update', t.schoolId, '', JSON.stringify({ ticket: t.id, status: v.status, priority: v.priority, due: v.dueOn || '', to: v.assignedTo ? emailFor(v.assignedTo) : '' }));
+    await batch.commit(); toast('Ticket saved.'); await viewSupport();
+  });
+  const tab = (key, label, n) => h('button', { class: 'btn' + (S.supFilter === key ? ' gold' : ''), onclick: () => { S.supFilter = key; viewSupport(); } }, label + ' (' + n + ')');
+  show(h('h2', {}, 'Support tickets'),
+    h('div', { class: 'row' }, tab('open', 'Open', rows.filter(filters.open).length), tab('mine', 'Assigned to me', rows.filter(filters.mine).length), tab('unassigned', 'Unassigned', rows.filter(filters.unassigned).length),
+      tab('overdue', 'Overdue', rows.filter(filters.overdue).length), tab('all', 'All', rows.length)),
+    shown.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Priority', 'School', 'Subject', 'Deadline', 'Assigned to', 'Status', ''].map((t) => h('th', {}, t)))),
+      h('tbody', {}, shown.map((t) => h('tr', {}, h('td', {}, h('span', { class: 'pill ' + PRIORITY_CLASS[t.priority] }, t.priority)), h('td', {}, nameOf(t.schoolId)), h('td', {}, t.subject, h('div', { class: 'muted' }, t.createdOn)),
+        h('td', {}, t.dueOn ? h('span', { class: overdue(t) ? 'pill bad' : '' }, t.dueOn + (overdue(t) ? ' (overdue)' : '')) : '-'), h('td', {}, t.assignedEmail || (t.assignedTo ? 'Someone' : 'Nobody')), h('td', {}, t.status),
+        h('td', {}, h('button', { class: 'btn sm', onclick: () => openTicket(t) }, 'Open'))))))) : h('div', { class: 'empty' }, 'No tickets here.'));
+}
+
+// ---------- Incidents ----------
+const SEVERITY_CLASS = { low: '', medium: 'warn', high: 'bad', critical: 'bad' };
+S.incFilter = 'open';
+async function createIncident(preset = {}) {
+  const v = await formDialog({ title: 'Open an incident', ok: 'Open incident', fields: [
+    { key: 'title', label: 'What happened (short)', required: true, minLen: 3, value: preset.title || '' },
+    { key: 'severity', label: 'Severity', type: 'select', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['critical', 'Critical']], value: preset.severity || 'medium' },
+    { key: 'schoolId', label: 'School ID (optional)', value: preset.schoolId || '', pattern: /^[a-z0-9-]{1,40}$/, patternText: 'A school id is lowercase letters, numbers and dashes.' },
+    { key: 'notes', label: 'Details and first steps', type: 'textarea', value: preset.notes || '' }] });
+  if (!v) return false;
+  const batch = writeBatch(db);
+  const auditId = audit(batch, 'incident-open', v.schoolId, v.title, v.notes ? v.notes.slice(0, 500) : '');
+  batch.set(doc(db, 'platformIncidents', newId('I-')), { title: v.title.slice(0, 120), severity: v.severity, status: 'open', ...(v.schoolId ? { schoolId: v.schoolId } : {}), ...(v.notes ? { notes: v.notes.slice(0, 1500) } : {}),
+    openedBy: S.user.uid, openedAt: serverTimestamp(), updatedAt: serverTimestamp(), auditId });
+  await batch.commit(); toast('Incident opened.'); return true;
+}
+async function viewIncidents() {
+  setCrumbs('Incidents');
+  show(loading('Loading incidents.'));
+  const snap = await getDocs(collection(db, 'platformIncidents'));
+  const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => msOfField(b, 'openedAt') - msOfField(a, 'openedAt'));
+  const shown = S.incFilter === 'all' ? rows : rows.filter((r) => r.status !== 'resolved');
+  const edit = (r) => guarded(async () => {
+    const v = await formDialog({ title: r.title, note: 'Opened ' + when(r.openedAt), ok: 'Save', fields: [
+      { key: 'status', label: 'Status', type: 'select', options: [['open', 'Open'], ['investigating', 'Investigating'], ['resolved', 'Resolved']], value: r.status },
+      { key: 'severity', label: 'Severity', type: 'select', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['critical', 'Critical']], value: r.severity },
+      { key: 'notes', label: 'Notes and what was done', type: 'textarea', value: r.notes || '' }] });
+    if (!v) return;
+    const batch = writeBatch(db);
+    const auditId = audit(batch, 'incident-update', r.schoolId || '', r.title, JSON.stringify({ from: r.status, to: v.status, severity: v.severity }));
+    const patch = { status: v.status, severity: v.severity, notes: v.notes ? v.notes.slice(0, 1500) : deleteField(), updatedAt: serverTimestamp(), auditId };
+    patch.resolvedAt = v.status === 'resolved' ? serverTimestamp() : deleteField();
+    batch.update(doc(db, 'platformIncidents', r.id), patch);
+    await batch.commit(); toast('Incident saved.'); await viewIncidents();
+  });
+  show(h('h2', {}, 'Incidents'),
+    h('p', { class: 'muted' }, 'Security and operations incidents. Opening, changing and resolving one is written to the audit log.'),
+    h('div', { class: 'row' }, h('button', { class: 'btn gold', onclick: () => guarded(async () => { if (await createIncident()) await viewIncidents(); }) }, 'Open an incident'),
+      h('button', { class: 'btn' + (S.incFilter === 'open' ? ' gold' : ''), onclick: () => { S.incFilter = 'open'; viewIncidents(); } }, 'Open'),
+      h('button', { class: 'btn' + (S.incFilter === 'all' ? ' gold' : ''), onclick: () => { S.incFilter = 'all'; viewIncidents(); } }, 'All')),
+    shown.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Opened', 'Severity', 'Incident', 'School', 'Status', ''].map((t) => h('th', {}, t)))),
+      h('tbody', {}, shown.map((r) => h('tr', {}, h('td', {}, when(r.openedAt)), h('td', {}, h('span', { class: 'pill ' + SEVERITY_CLASS[r.severity] }, r.severity)), h('td', {}, h('b', {}, r.title), r.notes ? h('div', { class: 'muted', style: 'max-width:420px;word-break:break-word' }, r.notes) : null),
+        h('td', {}, r.schoolId ? (isAdmin() ? h('a', { href: '#/school/' + r.schoolId }, r.schoolId) : r.schoolId) : '-'), h('td', {}, r.status), h('td', {}, h('button', { class: 'btn sm', onclick: () => edit(r) }, 'Update'))))))) : h('div', { class: 'empty' }, 'No incidents here.'));
+}
+function msOfField(r, key) { return r[key] && r[key].toMillis ? r[key].toMillis() : 0; }
+
+// ---------- Internal staff ----------
+async function viewStaff() {
+  setCrumbs('Internal staff');
+  show(loading('Loading staff.'));
+  const [staffSnap, inviteSnap] = await Promise.all([getDocs(collection(db, 'platformStaff')), getDocs(collection(db, 'staffInvites'))]);
+  const staff = staffSnap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+  const invites = inviteSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((i) => i.status !== 'accepted');
+  await pool(staff, 6, async (m) => {
+    const logins = await getDocs(query(collection(db, 'loginHistory'), where('uid', '==', m.uid))).catch(() => null);
+    const rows = logins ? logins.docs.map((d) => d.data()).sort((a, b) => msOf(b) - msOf(a)) : [];
+    m.lastLogin = rows[0] ? msOf(rows[0]) : 0; m.mfa = rows[0] && typeof rows[0].mfa === 'boolean' ? rows[0].mfa : null;
+  });
+  const extraFields = (perms) => Object.keys(PERM_LABEL).map((k) => ({ key: 'x_' + k, label: 'Also allow: ' + PERM_LABEL[k], type: 'checkbox', value: perms ? perms[k] === true : false }));
+  const pickExtras = (v) => Object.keys(PERM_LABEL).filter((k) => v['x_' + k]);
+
+  const invite = () => guarded(async () => {
+    const v = await formDialog({ title: 'Invite a staff member', note: 'They sign in at /admin with this email address (verified, for example a Google account). Pick a role; the boxes add permissions on top of it.', ok: 'Send invitation', fields: [
+      { key: 'email', label: 'Email address', type: 'email', required: true, pattern: /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,100}$/, patternText: 'Enter a valid email address.' },
+      { key: 'role', label: 'Role', type: 'select', options: Object.entries(ROLE_LABEL).map(([k, t]) => [k, t + ' (' + permText(permsFor(k, [])) + ')']) },
+      ...extraFields(null), REASON] });
+    if (!v) return;
+    const email = v.email.toLowerCase();
+    if (staff.some((m) => m.email === email && m.status === 'active')) { toast('That person is already on the staff.'); return; }
+    const perms = permsFor(v.role, pickExtras(v));
+    const batch = writeBatch(db);
+    const auditId = audit(batch, 'staff-invite', '', v.reason, JSON.stringify({ email, role: v.role, perms: permText(perms) }));
+    batch.set(doc(db, 'staffInvites', email), { email, role: v.role, perms, status: 'invited', by: S.user.uid, at: serverTimestamp(), auditId });
+    await batch.commit(); toast('Invitation saved. Ask them to sign in at /admin.'); await viewStaff();
+  });
+  const change = (m) => guarded(async () => {
+    const v = await formDialog({ title: 'Change ' + m.email, ok: 'Save changes', fields: [
+      { key: 'role', label: 'Role', type: 'select', options: Object.entries(ROLE_LABEL), value: m.role }, ...extraFields(m.perms), REASON] });
+    if (!v) return;
+    const perms = permsFor(v.role, pickExtras(v));
+    const batch = writeBatch(db);
+    const auditId = audit(batch, 'staff-change', '', v.reason, JSON.stringify({ email: m.email, from: m.role + ': ' + permText(m.perms), to: v.role + ': ' + permText(perms) }));
+    batch.update(doc(db, 'platformStaff', m.uid), { role: v.role, perms, changedAt: serverTimestamp(), auditId });
+    await batch.commit(); toast('Saved.'); await viewStaff();
+  });
+  const setStatus = (m, status) => guarded(async () => {
+    const v = await formDialog({ title: (status === 'revoked' ? 'Revoke access for ' : 'Restore access for ') + m.email, note: status === 'revoked' ? 'They lose all access at once. Their past actions stay in the audit log.' : 'They get back the role and permissions they had.', ok: status === 'revoked' ? 'Revoke access' : 'Restore access', fields: [REASON] });
+    if (!v) return;
+    const batch = writeBatch(db);
+    const auditId = audit(batch, status === 'revoked' ? 'staff-revoke' : 'staff-restore', '', v.reason, m.email);
+    batch.update(doc(db, 'platformStaff', m.uid), { status, revokedAt: status === 'revoked' ? serverTimestamp() : deleteField(), changedAt: serverTimestamp(), auditId });
+    await batch.commit(); toast(status === 'revoked' ? 'Access revoked.' : 'Access restored.'); await viewStaff();
+  });
+  const setInvite = (i, status) => guarded(async () => {
+    const batch = writeBatch(db);
+    const auditId = audit(batch, status === 'cancelled' ? 'staff-invite-cancel' : 'staff-invite', '', '', i.email);
+    batch.update(doc(db, 'staffInvites', i.id), { status, by: S.user.uid, at: serverTimestamp(), auditId });
+    await batch.commit(); toast(status === 'cancelled' ? 'Invitation cancelled.' : 'Invitation sent again.'); await viewStaff();
+  });
+  show(h('h2', {}, 'Internal staff'),
+    h('p', { class: 'muted' }, 'People who help run the platform with limited access. Finance access is read-only: staff can see invoices and payments but cannot create or change them. Support access covers tickets only. Nothing here opens a school\'s own records; that still needs a super admin access pass.'),
+    h('div', { class: 'row' }, h('button', { class: 'btn gold', onclick: invite }, 'Invite staff')),
+    h('div', { class: 'card' }, h('h3', {}, 'Staff'),
+      staff.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Person', 'Role', 'Can use', 'Last sign-in', 'Second factor', 'Status', ''].map((t) => h('th', {}, t)))),
+        h('tbody', {}, staff.map((m) => h('tr', {}, h('td', {}, m.email), h('td', {}, ROLE_LABEL[m.role] || m.role), h('td', { class: 'muted' }, permText(m.perms)), h('td', {}, ago(m.lastLogin)),
+          h('td', {}, m.mfa === null ? 'not recorded' : m.mfa ? 'enrolled' : 'not enrolled'), h('td', {}, h('span', { class: 'pill ' + (m.status === 'active' ? 'ok' : 'bad') }, m.status)),
+          h('td', { class: 'row' }, m.status === 'active' ? [h('button', { class: 'btn sm', onclick: () => change(m) }, 'Change'), h('button', { class: 'btn sm red', onclick: () => setStatus(m, 'revoked') }, 'Revoke')]
+            : h('button', { class: 'btn sm', onclick: () => setStatus(m, 'active') }, 'Restore'))))))) : h('div', { class: 'empty' }, 'No staff yet.')),
+    h('div', { class: 'card' }, h('h3', {}, 'Invitations'),
+      invites.length ? h('table', {}, h('tbody', {}, invites.map((i) => h('tr', {}, h('td', {}, i.email, h('div', { class: 'muted' }, (ROLE_LABEL[i.role] || i.role) + ' - ' + permText(i.perms))), h('td', {}, h('span', { class: 'pill ' + (i.status === 'invited' ? 'warn' : '') }, i.status)),
+        h('td', {}, i.status === 'invited' ? h('button', { class: 'btn sm red', onclick: () => setInvite(i, 'cancelled') }, 'Cancel') : h('button', { class: 'btn sm', onclick: () => setInvite(i, 'invited') }, 'Invite again')))))) : h('div', { class: 'empty' }, 'No open invitations.')));
+}
+
+// ---------- Audit (action log, school access, permission changes, logins, suspicious activity) ----------
+const AUDIT_TABS = [['log', 'Action log'], ['access', 'School access'], ['permissions', 'Permission changes'], ['logins', 'Sign-ins and MFA'], ['suspicious', 'Suspicious activity']];
+const ACCESS_ACTION = /^(open-school|revoke-access-pass)/;
+const PERMISSION_ACTION = /^(staff-|require-mfa|revoke-|invite-owner|owner-|feature-override|feature-apply|change-plan)/;
+const istHour = (ms) => Number(new Date(ms).toLocaleString('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }));
+function findSuspicious(entries, logins, attempts) {
+  const flags = []; const now = Date.now(); const DAY = 86400000;
+  const byKey = (list, key, since) => { const m = new Map(); for (const r of list) if (msOf(r) > now - since) { const k = key(r); m.set(k, (m.get(k) || []).concat(r)); } return m; };
+  for (const [who, list] of byKey(attempts, (r) => r.email || r.uid, DAY)) if (list.length >= 3) flags.push({ level: 'bad', title: 'Repeated blocked access', detail: who + ' was refused entry to the Super Admin page ' + list.length + ' times in 24 hours.', school: '' });
+  const opens = entries.filter((r) => /^open-school/.test(r.action));
+  for (const [who, list] of byKey(opens, (r) => r.actorEmail || r.actor, DAY)) {
+    const sensitive = list.filter((r) => r.action.includes('sensitive')).length;
+    if (sensitive >= 3) flags.push({ level: 'bad', title: 'Many sensitive access passes', detail: who + ' opened ' + sensitive + ' sensitive passes in 24 hours.', school: '' });
+    else if (list.length >= 10) flags.push({ level: 'warn', title: 'Many school openings', detail: who + ' opened schools ' + list.length + ' times in 24 hours.', school: '' });
+  }
+  for (const [who, list] of byKey(opens, (r) => r.actorEmail || r.actor, 7 * DAY)) {
+    const sorted = [...list].sort((a, b) => msOf(a) - msOf(b));
+    for (let i = 0; i < sorted.length; i++) {
+      const window = sorted.filter((r) => msOf(r) >= msOf(sorted[i]) && msOf(r) < msOf(sorted[i]) + 3600000);
+      if (new Set(window.map((r) => r.schoolId)).size >= 5) { flags.push({ level: 'bad', title: 'Many schools in one hour', detail: who + ' opened ' + new Set(window.map((r) => r.schoolId)).size + ' different schools within an hour (' + when(sorted[i].at) + ').', school: '' }); break; }
+    }
+  }
+  const night = opens.filter((r) => msOf(r) > now - 7 * DAY && istHour(msOf(r)) < 5);
+  for (const r of night.slice(0, 8)) flags.push({ level: 'warn', title: 'Access at night', detail: (r.actorEmail || r.actor) + ' opened ' + (r.schoolId || 'a school') + ' at ' + when(r.at) + ' (between midnight and 5 am India time).', school: r.schoolId || '' });
+  for (const [uid, list] of byKey(logins, (r) => r.uid, 7 * DAY)) {
+    const agents = new Set(list.map((r) => r.agent).filter(Boolean));
+    if (agents.size >= 4) flags.push({ level: 'warn', title: 'Many devices for one account', detail: (list[0].email || uid) + ' signed in from ' + agents.size + ' different browsers or devices in 7 days.', school: '' });
+  }
+  return flags;
+}
+async function viewAudit(tab = 'log') {
+  if (!AUDIT_TABS.some(([k]) => k === tab)) tab = 'log';
+  setCrumbs('Audit log');
+  show(loading('Loading the audit log.'));
+  const needLogins = tab === 'logins' || tab === 'suspicious';
+  const [snap, loginSnap, attemptSnap, grantSnap] = await Promise.all([
+    getDocs(query(collection(db, 'platformAudit'), orderBy('at', 'desc'), limit(500))),
+    needLogins ? getDocs(query(collection(db, 'loginHistory'), orderBy('at', 'desc'), limit(300))).catch(() => null) : Promise.resolve(null),
+    needLogins ? getDocs(query(collection(db, 'accessAttempts'), orderBy('at', 'desc'), limit(150))).catch(() => null) : Promise.resolve(null),
+    tab === 'access' && isAdmin() ? getDocs(collection(db, 'platformGrants')).catch(() => null) : Promise.resolve(null),
+  ]);
+  const entries = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const logins = loginSnap ? loginSnap.docs.map((d) => d.data()) : [];
+  const attempts = attemptSnap ? attemptSnap.docs.map((d) => d.data()) : [];
+  const tabs = h('div', { class: 'row' }, AUDIT_TABS.map(([k, label]) => h('a', { class: 'btn' + (k === tab ? ' gold' : ''), href: '#/audit/' + k }, label)));
+  const auditTable = (list) => list.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Who', 'Action', 'School', 'Reason', 'Detail'].map((t) => h('th', {}, t)))),
+    h('tbody', {}, list.map((r) => h('tr', {}, h('td', {}, when(r.at)), h('td', {}, r.actorEmail || String(r.actor).slice(0, 8)), h('td', {}, h('b', {}, r.action)),
+      h('td', {}, r.schoolId ? (isAdmin() ? h('a', { href: '#/school/' + r.schoolId }, r.schoolId) : r.schoolId) : '-'), h('td', {}, r.reason || '-'), h('td', { class: 'muted', style: 'max-width:340px;word-break:break-word' }, r.detail || '-')))))) : h('div', { class: 'empty' }, 'Nothing recorded here yet.');
+  const head = h('h2', {}, 'Audit log');
+  const lead = h('p', { class: 'muted' }, 'Entries can be added but never edited or deleted.');
+  if (tab === 'log') {
+    const box = h('input', { type: 'search', placeholder: 'Filter by person, action, school or reason' });
+    const holder = h('div');
+    const draw = () => { const w = box.value.trim().toLowerCase(); holder.replaceChildren(auditTable(w ? entries.filter((r) => [r.actorEmail, r.action, r.schoolId, r.reason, r.detail].some((v) => String(v || '').toLowerCase().includes(w))) : entries)); };
+    box.addEventListener('input', draw); draw();
+    show(head, lead, tabs, h('div', { class: 'row' }, h('div', { style: 'flex:1;min-width:220px' }, box),
+      h('button', { class: 'btn', onclick: () => exportCsv('audit-log.csv', ['When', 'Who', 'Action', 'School', 'Reason', 'Detail'], entries.map((r) => [when(r.at), r.actorEmail || r.actor, r.action, r.schoolId || '', r.reason || '', r.detail || ''])) }, 'Download as CSV')),
+      h('p', { class: 'muted' }, 'The newest 500 entries.'), holder);
+    return;
+  }
+  if (tab === 'access') {
+    const now = Date.now();
+    const live = grantSnap ? grantSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((g) => g.expiresAt && g.expiresAt.toMillis() > now) : [];
+    show(head, lead, tabs, h('p', { class: 'muted' }, 'Every time a super admin opened a school, and every access pass revoked. A school page shows only its own history.'),
+      live.length ? h('div', { class: 'card' }, h('h3', {}, 'Open right now'), h('table', {}, h('tbody', {}, live.map((g) => h('tr', {}, h('td', {}, g.schoolId), h('td', {}, g.tier), h('td', {}, 'until ' + when(g.expiresAt)), h('td', { class: 'muted' }, g.reason))))) ) : null,
+      auditTable(entries.filter((r) => ACCESS_ACTION.test(r.action))));
+    return;
+  }
+  if (tab === 'permissions') {
+    show(head, lead, tabs, h('p', { class: 'muted' }, 'Changes to who can do what: staff invitations, role and permission changes, revoked access, plan and feature changes, and the MFA switch.'),
+      auditTable(entries.filter((r) => PERMISSION_ACTION.test(r.action))));
+    return;
+  }
+  if (tab === 'logins') {
+    const cfg = await getDoc(doc(db, 'platformConfig', 'security')).catch(() => null);
+    const mfaOn = cfg && cfg.exists() && cfg.data().requireMfa === true;
+    const mine = multiFactor(auth.currentUser).enrolledFactors.length;
+    const latest = new Map();
+    for (const r of logins) if (!latest.has(r.uid)) latest.set(r.uid, r);
+    show(head, lead, tabs,
+      h('div', { class: 'two' },
+        h('div', { class: 'card' }, h('h3', {}, 'MFA'), h('p', {}, 'Requirement for sensitive access passes: ', h('b', {}, mfaOn ? 'on' : 'off')), h('p', {}, 'Your own account has ' + mine + ' second factor(s) enrolled.'),
+          h('p', { class: 'muted' }, 'Staff show "enrolled" only if their latest sign-in recorded it. Change the requirement under Security and access.')),
+        h('div', { class: 'card' }, h('h3', {}, 'Blocked access'), h('p', { class: 'muted' }, 'Signed-in people who opened the Super Admin page without permission. Wrong-password attempts happen before sign-in, so Firebase Authentication keeps those, not this page.'),
+          attempts.length ? h('table', {}, h('tbody', {}, attempts.slice(0, 25).map((r) => h('tr', {}, h('td', {}, r.email || String(r.uid).slice(0, 8)), h('td', {}, when(r.at)), h('td', { class: 'muted' }, String(r.agent || '').slice(0, 60)))))) : h('div', { class: 'empty' }, 'None.'))),
+      h('div', { class: 'card' }, h('h3', {}, 'Sign-in history'), h('p', { class: 'muted' }, 'Newest 300 sign-ins from every school. MFA shows whether the account had a second factor when it signed in.'),
+        logins.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Person', 'MFA', 'Browser'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, logins.slice(0, 100).map((r) => h('tr', {}, h('td', {}, when(r.at)), h('td', {}, r.email || String(r.uid).slice(0, 8)), h('td', {}, typeof r.mfa === 'boolean' ? (r.mfa ? 'yes' : 'no') : '-'), h('td', { class: 'muted' }, String(r.agent || '').slice(0, 70))))))) : h('div', { class: 'empty' }, 'No sign-ins recorded.')));
+    return;
+  }
+  const flags = findSuspicious(entries, logins, attempts);
+  show(head, lead, tabs, h('p', { class: 'muted' }, 'Simple rules over the last week of records: repeated blocked access, many access passes, many schools in an hour, night-time access and many devices for one account. A flag is a reason to look, not proof.'),
+    flags.length ? flags.map((f) => h('div', { class: 'card' }, h('div', { class: 'row', style: 'justify-content:space-between' }, h('div', {}, h('span', { class: 'pill ' + f.level }, f.level === 'bad' ? 'Act' : 'Watch'), ' ', h('b', {}, f.title)),
+      can('audit') ? h('button', { class: 'btn sm', onclick: () => guarded(async () => { await createIncident({ title: f.title, severity: f.level === 'bad' ? 'high' : 'medium', schoolId: f.school, notes: f.detail }); }) }, 'Open incident') : null), h('p', { class: 'muted' }, f.detail)))
+      : h('div', { class: 'empty' }, 'Nothing suspicious in the last 7 days.'));
+}
+
 // ---------- routing ----------
 async function route() {
   const parts = (location.hash || '#/dashboard').replace(/^#\/?/, '').split('/');
   const name = parts[0] || 'dashboard';
+  if (!isAdmin() && (name === 'dashboard' || !routeAllowed(name))) {
+    const first = firstAllowedRoute();
+    if (first === 'denied') { show(h('div', { class: 'empty' }, 'Your staff role has no pages yet. Ask the super admin to give you a permission.')); return; }
+    if (name !== first) { location.hash = '#/' + first; return; }
+  }
   for (const a of document.querySelectorAll('nav.side a.item[data-r]')) a.classList.toggle('on', a.dataset.r === (name === 'school' ? 'schools' : name));
   await guarded(async () => {
     if (name === 'schools') await viewSchools();
@@ -1348,7 +1846,12 @@ async function route() {
     else if (name === 'themes') await viewThemes();
     else if (name === 'features') await viewFeatures();
     else if (name === 'storage') await viewStorage();
-    else if (name === 'audit') await viewAudit();
+    else if (name === 'audit') await viewAudit(parts[1] || 'log');
+    else if (name === 'infra') await viewInfra();
+    else if (name === 'backups') await viewBackups();
+    else if (name === 'support') await viewSupport();
+    else if (name === 'incidents') await viewIncidents();
+    else if (name === 'staff') await viewStaff();
     else if (name === 'security') await viewSecurity();
     else await viewDashboard();
   }).then(() => {});
@@ -1372,17 +1875,56 @@ function wireTop() {
   addEventListener('hashchange', route);
 }
 
+async function recordAttempt(user) {
+  try {
+    if (sessionStorage.getItem('aziz-denied') === user.uid) return;
+    const stamp = String(9999999999999 - Date.now()).padStart(13, '0');
+    await setDoc(doc(db, 'accessAttempts', user.uid + '_' + stamp), { uid: user.uid, email: String(user.email || '').slice(0, 120), agent: navigator.userAgent.slice(0, 160), at: serverTimestamp() });
+    sessionStorage.setItem('aziz-denied', user.uid);
+  } catch { /* the record is best effort */ }
+}
+async function acceptInvite(user, invite) {
+  const email = user.email.toLowerCase();
+  const batch = writeBatch(db);
+  const auditId = newId('A-');
+  batch.set(doc(db, 'platformAudit', auditId), { actor: user.uid, actorEmail: email, action: 'staff-joined', detail: String(invite.role), at: serverTimestamp() });
+  batch.set(doc(db, 'platformStaff', user.uid), { email, role: invite.role, perms: invite.perms, status: 'active', joinedAt: serverTimestamp(), auditId });
+  batch.update(doc(db, 'staffInvites', email), { status: 'accepted', acceptedAt: serverTimestamp() });
+  await batch.commit();
+}
 onAuthStateChanged(auth, async (user) => {
   if (!user) { location.replace('/app'); return; }
-  let isAdmin = false;
-  try { isAdmin = (await getDocFromServer(doc(db, 'platformAdmins', user.uid))).exists(); } catch { isAdmin = false; }
-  if (!isAdmin) {
-    $('gate').replaceChildren(h('div', { style: 'text-align:center' }, h('h2', {}, 'Super admin only'), h('p', { class: 'muted' }, 'This account is not a platform administrator.'), h('a', { href: '/app' }, 'Go to the school app')));
+  let role = null; let staffData = null; let revoked = false; let invite = null;
+  try { if ((await getDocFromServer(doc(db, 'platformAdmins', user.uid))).exists()) role = 'admin'; } catch { /* not an admin */ }
+  if (!role) {
+    try {
+      const mine = await getDocFromServer(doc(db, 'platformStaff', user.uid));
+      if (mine.exists()) { if (mine.data().status === 'active') { role = 'staff'; staffData = mine.data(); } else revoked = true; }
+    } catch { /* no staff record */ }
+  }
+  if (!role && !revoked && user.email && user.emailVerified) {
+    try { const found = await getDocFromServer(doc(db, 'staffInvites', user.email.toLowerCase())); if (found.exists() && found.data().status === 'invited') invite = found.data(); } catch { /* no invitation */ }
+  }
+  if (!role && invite) {
+    const button = h('button', { class: 'btn gold' }, 'Accept the invitation');
+    const note = h('p', { class: 'err' });
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try { await acceptInvite(user, invite); location.reload(); } catch (error) { note.textContent = friendly(error); button.disabled = false; }
+    });
+    $('gate').replaceChildren(h('div', { style: 'text-align:center;max-width:420px' }, h('h2', {}, 'You are invited'), h('p', { class: 'muted' }, 'You have been invited to the AZIZ Super Admin panel as ' + (ROLE_LABEL[invite.role] || invite.role) + ': ' + permText(invite.perms) + '.'), button, note));
     return;
   }
-  S.user = user;
+  if (!role) {
+    recordAttempt(user);
+    $('gate').replaceChildren(h('div', { style: 'text-align:center' }, h('h2', {}, revoked ? 'Access revoked' : 'Super admin only'), h('p', { class: 'muted' }, revoked ? 'Your staff access has been revoked.' : 'This account is not a platform administrator or staff member. If you were invited, sign in with the email address that received the invitation (it must be verified).'), h('a', { href: '/app' }, 'Go to the school app')));
+    return;
+  }
+  S.user = user; S.role = role; S.staff = staffData;
   $('who').textContent = user.email || user.uid;
   $('gate').hidden = true; $('gate').style.display = 'none'; $('shell').hidden = false;
+  applyRoleToPage();
   wireTop();
   route();
+  if (can('ops') || can('audit')) opsAlerts();
 });
