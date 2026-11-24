@@ -299,6 +299,10 @@ service cloud.firestore {
       allow get: if (isPlatformAdmin() || staffCan('ops')) && docId in ['infraLimits', 'backupPolicy'];
       allow create, update: if isPlatformAdmin() && docId == 'infraLimits' && validInfraLimits(nd());
       allow create, update: if isPlatformAdmin() && docId == 'backupPolicy' && validBackupPolicy(nd());
+      // Batch 80 settings. Branding, maintenance and legal are public (the sign-in page and every school app show them), locale needs a sign-in,
+      // email and payment are for the platform administrator only. Never store secret keys in any of them.
+      allow get: if docId in ['branding', 'maintenance', 'legal'] || (request.auth != null && docId == 'locale') || (isPlatformAdmin() && docId in ['email', 'payment']);
+      allow create, update: if isPlatformAdmin() && docId in ['branding', 'locale', 'email', 'payment', 'maintenance', 'legal'] && nd().size() <= 12;
     }
 
     // featureCatalogue/{key}: every switchable feature, its state (live, beta, off), rollout percentage, the plans that include it and the
@@ -1956,7 +1960,7 @@ service cloud.firestore {
         && intIn(item.percent, 0, 100)
         && item.status in ['applied', 'approved', 'rejected']
         && dateText(item.appliedOn)
-        && (!('decidedOn' in item) || dateText(item.decidedOn))
+        && optDate(item, 'decidedOn')
         && (item.status == 'applied' || ('decidedOn' in item))
         && optText(item, 'note', 200);
     }
@@ -1969,7 +1973,7 @@ service cloud.firestore {
         && namedText(item.text, 1000)
         && item.kind in ['trip', 'photo', 'other']
         && item.status in ['open', 'closed']
-        && (!('dueOn' in item) || dateText(item.dueOn))
+        && optDate(item, 'dueOn')
         && dateText(item.createdOn);
     }
 
@@ -1987,10 +1991,10 @@ service cloud.firestore {
       return item.keys().hasOnly(['phone', 'address', 'emergencyName', 'emergencyPhone', 'updatedOn'])
         && item.keys().hasAll(['updatedOn'])
         && dateText(item.updatedOn)
-        && (!('phone' in item) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')))
+        && optMatch(item, 'phone', '[0-9+() -]{0,20}')
         && optText(item, 'address', 200)
         && optText(item, 'emergencyName', 80)
-        && (!('emergencyPhone' in item) || (item.emergencyPhone is string && item.emergencyPhone.matches('[0-9+() -]{0,20}')));
+        && optMatch(item, 'emergencyPhone', '[0-9+() -]{0,20}');
     }
 
     function validReservation(item) {
@@ -2009,7 +2013,7 @@ service cloud.firestore {
         && textLen(item.name, 1, 40)
         && intIn(item.beds, 1, 50)
         && optText(item, 'block', 40)
-        && (!('monthlyFee' in item) || (intIn(item.monthlyFee, 0, 1000000)));
+        && optInt(item, 'monthlyFee', 0, 1000000);
     }
 
     function validHostelStay(item) {
@@ -2021,7 +2025,7 @@ service cloud.firestore {
         && textLen(item.roomName, 1, 40)
         && dateText(item.from)
         && item.status in ['staying', 'left']
-        && (!('leftOn' in item) || dateText(item.leftOn));
+        && optDate(item, 'leftOn');
     }
 
     function validCanteenMenu(item) {
@@ -2030,7 +2034,7 @@ service cloud.firestore {
         && item.day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         && item.meal in ['Breakfast', 'Lunch', 'Snacks', 'Dinner']
         && textLen(item.items, 1, 300)
-        && (!('price' in item) || (intIn(item.price, 0, 100000)));
+        && optInt(item, 'price', 0, 100000);
     }
 
     function validCanteenPlan(item) {
@@ -2054,14 +2058,14 @@ service cloud.firestore {
         && item.keys().hasAll(['kind', 'title', 'requestedBy', 'requestedByName', 'createdOn', 'status'])
         && item.kind in ['purchase', 'expense', 'repair', 'event', 'other']
         && textLen(item.title, 1, 80)
-        && (!('amount' in item) || intIn(item.amount, 0, 100000000))
+        && optInt(item, 'amount', 0, 100000000)
         && optText(item, 'note', 300)
         && item.requestedBy is string
         && textLen(item.requestedByName, 1, 60)
         && dateText(item.createdOn)
         && item.status in ['pending', 'approved', 'rejected']
         && (!('decidedBy' in item) || item.decidedBy is string)
-        && (!('decidedOn' in item) || dateText(item.decidedOn))
+        && optDate(item, 'decidedOn')
         && optText(item, 'decisionNote', 200);
     }
 
@@ -2073,7 +2077,7 @@ service cloud.firestore {
         && textLen(item.relation, 1, 40)
         && item.code is string && item.code.matches('[0-9]{6}')
         && item.active is bool && item.createdBy is string
-        && (!('phone' in item) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')));
+        && optMatch(item, 'phone', '[0-9+() -]{0,20}');
     }
 
     function validPickupLog(item) {
@@ -2126,8 +2130,8 @@ service cloud.firestore {
         && idText(item.studentId)
         && item.answers is string && item.answers.matches('[0-3x](,[0-3x]){0,59}')
         && item.by is string && item.at is timestamp
-        && (!('score' in item) || (intIn(item.score, 0, 1200)))
-        && (!('gradedOn' in item) || dateText(item.gradedOn));
+        && optInt(item, 'score', 0, 1200)
+        && optDate(item, 'gradedOn');
     }
 
     function validProgress(item) {
@@ -2167,7 +2171,7 @@ service cloud.firestore {
         && namedText(item.staffName, 120)
         && item.kind in ['id-proof', 'contract', 'certificate', 'qualification', 'police', 'medical', 'other']
         && namedText(item.title, 100)
-        && (!('expiryOn' in item) || dateText(item.expiryOn))
+        && optDate(item, 'expiryOn')
         && optText(item, 'note', 200)
         && namedText(item.fileName, 120)
         && item.contentType in ['application/pdf', 'image/jpeg', 'image/png']
@@ -2375,7 +2379,7 @@ service cloud.firestore {
     function validFeeStructure(item) {
       return item.keys().hasOnly(['yearId', 'classId', 'head', 'name', 'amount', 'dueOn'])
         && item.keys().hasAll(['yearId', 'classId', 'head', 'name', 'amount'])
-        && (!('dueOn' in item) || (item.dueOn is string && item.dueOn.matches('20[0-9]{2}-[0-9]{2}-[0-9]{2}')))
+        && optMatch(item, 'dueOn', '20[0-9]{2}-[0-9]{2}-[0-9]{2}')
         && idText(item.yearId)
         && idText(item.classId)
         && idText(item.head)
@@ -2483,7 +2487,7 @@ service cloud.firestore {
     function validLoan(item) {
       return item.keys().hasOnly(['bookId', 'studentId', 'issuedOn', 'dueOn', 'returnedOn', 'issuedBy', 'renewals'])
         && item.keys().hasAll(['bookId', 'studentId', 'issuedOn', 'dueOn', 'issuedBy'])
-        && (!('renewals' in item) || (intIn(item.renewals, 1, 3)))
+        && optInt(item, 'renewals', 1, 3)
         && idText(item.bookId)
         && idText(item.studentId)
         && dateText(item.issuedOn) && item.issuedOn >= '2020-01-01'
@@ -2508,10 +2512,10 @@ service cloud.firestore {
         && namedText(item.name, 80)
         && namedText(item.purpose, 120)
         && optText(item, 'whom', 80)
-        && (!('phone' in item) || (item.phone is string && item.phone.matches('[0-9+() -]{0,20}')))
+        && optMatch(item, 'phone', '[0-9+() -]{0,20}')
         && dateText(item.date) && item.date >= '2020-01-01'
         && item.timeIn is string && item.timeIn.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
-        && (!('timeOut' in item) || (item.timeOut is string && item.timeOut.matches('([01][0-9]|2[0-3]):[0-5][0-9]')))
+        && optMatch(item, 'timeOut', '([01][0-9]|2[0-3]):[0-5][0-9]')
         && item.recordedBy is string;
     }
 
@@ -2529,19 +2533,19 @@ service cloud.firestore {
 
     function validRoute(item) {
       return item.keys().hasOnly(['name', 'vehicle', 'driver', 'driverPhone', 'stops', 'monthlyFee'])
-        && (!('monthlyFee' in item) || (intIn(item.monthlyFee, 0, 100000)))
+        && optInt(item, 'monthlyFee', 0, 100000)
         && item.keys().hasAll(['name'])
         && namedText(item.name, 60)
         && optText(item, 'vehicle', 30)
         && optText(item, 'driver', 60)
-        && (!('driverPhone' in item) || (item.driverPhone is string && item.driverPhone.matches('[0-9+() -]{0,20}')))
+        && optMatch(item, 'driverPhone', '[0-9+() -]{0,20}')
         && optText(item, 'stops', 300);
     }
 
     function validRider(item) {
       return item.keys().hasOnly(['studentId', 'routeId', 'stop', 'months'])
         && item.keys().hasAll(['studentId', 'routeId'])
-        && (!('months' in item) || (intIn(item.months, 0, 12)))
+        && optInt(item, 'months', 0, 12)
         && idText(item.studentId)
         && item.routeId is string && id30(item.routeId)
         && optText(item, 'stop', 60);
@@ -2565,10 +2569,10 @@ service cloud.firestore {
     function validExpense(item) {
       return item.keys().hasOnly(['date', 'category', 'amount', 'note', 'status', 'payMode', 'vendor', 'decidedOn'])
         && item.keys().hasAll(['date', 'category', 'amount'])
-        && (!('status' in item) || item.status in ['pending', 'approved', 'rejected'])
-        && (!('payMode' in item) || item.payMode in ['cash', 'bank', 'upi', 'cheque'])
+        && optIn(item, 'status', ['pending', 'approved', 'rejected'])
+        && optIn(item, 'payMode', ['cash', 'bank', 'upi', 'cheque'])
         && optText(item, 'vendor', 80)
-        && (!('decidedOn' in item) || dateText(item.decidedOn))
+        && optDate(item, 'decidedOn')
         && dateText(item.date)
         && namedText(item.category, 40)
         && intIn(item.amount, 1, 100000000)
@@ -2600,21 +2604,21 @@ service cloud.firestore {
         && item.keys().hasAll(['name', 'role'])
         && namedText(item.name, 80)
         && namedText(item.role, 40)
-        && (!('phone' in item) || (item.phone is string && item.phone.matches('[0-9+() -]{1,20}')))
+        && optMatch(item, 'phone', '[0-9+() -]{1,20}')
         && optText(item, 'email', 80)
-        && (!('joinedOn' in item) || (dateText(item.joinedOn)))
+        && optDate(item, 'joinedOn')
         && optText(item, 'qualification', 100)
-        && (!('emergencyPhone' in item) || (item.emergencyPhone is string && item.emergencyPhone.matches('[0-9+() -]{1,20}')))
+        && optMatch(item, 'emergencyPhone', '[0-9+() -]{1,20}')
         && optText(item, 'address', 200)
-        && (!('experienceYears' in item) || (intIn(item.experienceYears, 0, 60)))
+        && optInt(item, 'experienceYears', 0, 60)
         && optText(item, 'employeeId', 20)
         && optText(item, 'department', 40)
-        && (!('employmentType' in item) || item.employmentType in ['permanent', 'contract', 'part-time', 'visiting'])
+        && optIn(item, 'employmentType', ['permanent', 'contract', 'part-time', 'visiting'])
         && optText(item, 'subjects', 100)
-        && (!('dateOfBirth' in item) || (dateText(item.dateOfBirth)))
-        && (!('gender' in item) || item.gender in ['male', 'female', 'other'])
-        && (!('bloodGroup' in item) || item.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'])
-        && (!('leftOn' in item) || (dateText(item.leftOn)));
+        && optDate(item, 'dateOfBirth')
+        && optIn(item, 'gender', ['male', 'female', 'other'])
+        && optIn(item, 'bloodGroup', ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'])
+        && optDate(item, 'leftOn');
     }
 
     function validVehicle(item) {
@@ -2623,9 +2627,9 @@ service cloud.firestore {
         && namedText(item.regNo, 20)
         && optText(item, 'model', 60)
         && intIn(item.capacity, 1, 200)
-        && (!('insuranceExpiry' in item) || (dateText(item.insuranceExpiry)))
-        && (!('fitnessExpiry' in item) || (dateText(item.fitnessExpiry)))
-        && (!('licenseExpiry' in item) || (dateText(item.licenseExpiry)))
+        && optDate(item, 'insuranceExpiry')
+        && optDate(item, 'fitnessExpiry')
+        && optDate(item, 'licenseExpiry')
         && optText(item, 'routeId', 40);
     }
 
@@ -2634,7 +2638,7 @@ service cloud.firestore {
         && item.keys().hasAll(['staffName', 'date', 'rating'])
         && optText(item, 'cycle', 40)
         && optText(item, 'goals', 300)
-        && (!('status' in item) || item.status in ['draft', 'submitted', 'approved'])
+        && optIn(item, 'status', ['draft', 'submitted', 'approved'])
         && namedText(item.staffName, 80)
         && dateText(item.date) && item.date >= '2020-01-01'
         && intIn(item.rating, 1, 5)
@@ -2646,7 +2650,7 @@ service cloud.firestore {
         && item.keys().hasAll(['name', 'trade'])
         && namedText(item.name, 80)
         && namedText(item.trade, 60)
-        && (!('phone' in item) || (item.phone is string && item.phone.matches('[0-9+() -]{1,20}')))
+        && optMatch(item, 'phone', '[0-9+() -]{1,20}')
         && optText(item, 'note', 200);
     }
 
@@ -2695,10 +2699,10 @@ service cloud.firestore {
         && dateText(item.date)
         && optText(item, 'note', 500)
         && optText(item, 'assignedTo', 80)
-        && (!('priority' in item) || item.priority in ['low', 'normal', 'high'])
-        && (!('dueOn' in item) || dateText(item.dueOn))
+        && optIn(item, 'priority', ['low', 'normal', 'high'])
+        && optDate(item, 'dueOn')
         && optText(item, 'response', 500)
-        && (!('respondedOn' in item) || dateText(item.respondedOn));
+        && optDate(item, 'respondedOn');
     }
 
     function validAsset(item) {
@@ -2708,7 +2712,7 @@ service cloud.firestore {
         && namedText(item.place, 60)
         && intIn(item.cost, 0, 1000000000)
         && item.condition in ['Good', 'Fair', 'Poor']
-        && (!('boughtOn' in item) || (dateText(item.boughtOn)));
+        && optDate(item, 'boughtOn');
     }
 
     function validSale(item) {
@@ -2732,7 +2736,7 @@ service cloud.firestore {
     function validTraining(item) {
       return item.keys().hasOnly(['staffName', 'course', 'date', 'hours', 'status'])
         && item.keys().hasAll(['staffName', 'course', 'date', 'hours'])
-        && (!('status' in item) || item.status in ['planned', 'completed'])
+        && optIn(item, 'status', ['planned', 'completed'])
         && namedText(item.staffName, 80)
         && namedText(item.course, 120)
         && dateText(item.date)
@@ -2758,6 +2762,10 @@ service cloud.firestore {
     function keysOnly(l) { return request.resource.data.keys().hasOnly(l); }
     function keysAll(l) { return request.resource.data.keys().hasAll(l); }
     function nd() { return request.resource.data; }
+    function optInt(i, k, a, b) { return !(k in i) || intIn(i[k], a, b); }
+    function optDate(i, k) { return !(k in i) || dateText(i[k]); }
+    function optIn(i, k, l) { return !(k in i) || i[k] in l; }
+    function optMatch(i, k, p) { return !(k in i) || (i[k] is string && i[k].matches(p)); }
     function id30(v) { return v.matches('[A-Za-z0-9-]{1,30}'); }
     function idText(v) { return v is string && v.matches('[a-z0-9-]{1,20}'); }
     function intIn(v, a, b) { return v is int && v >= a && v <= b; }
@@ -2781,31 +2789,31 @@ service cloud.firestore {
         && item.plan is string && item.plan.matches('[a-z][a-z0-9-]{1,29}')
         && item.status in ['trial', 'active', 'suspended', 'cancelled', 'pending']
         && (!('trialEnds' in item) || item.trialEnds is timestamp)
-        && (!('graceDays' in item) || (intIn(item.graceDays, 0, 90)))
-        && (!('studentLimit' in item) || (intIn(item.studentLimit, 0, 1000000)))
-        && (!('staffLimit' in item) || (intIn(item.staffLimit, 0, 1000000)))
-        && (!('storageMb' in item) || (intIn(item.storageMb, 0, 10000000)))
-        && (!('monthlyPrice' in item) || (intIn(item.monthlyPrice, 0, 10000000)))
-        && (!('renewsOn' in item) || dateText(item.renewsOn))
+        && optInt(item, 'graceDays', 0, 90)
+        && optInt(item, 'studentLimit', 0, 1000000)
+        && optInt(item, 'staffLimit', 0, 1000000)
+        && optInt(item, 'storageMb', 0, 10000000)
+        && optInt(item, 'monthlyPrice', 0, 10000000)
+        && optDate(item, 'renewsOn')
         && (!('legalHold' in item) || item.legalHold is bool)
         && (!('autoBilling' in item) || item.autoBilling is bool)
-        && (!('startedOn' in item) || dateText(item.startedOn))
-        && (!('storageCheckedMb' in item) || intIn(item.storageCheckedMb, 0, 100000000))
-        && (!('storageCheckedOn' in item) || dateText(item.storageCheckedOn))
+        && optDate(item, 'startedOn')
+        && optInt(item, 'storageCheckedMb', 0, 100000000)
+        && optDate(item, 'storageCheckedOn')
         && optText(item, 'note', 200);
     }
 
     function validInvoice(item) {
       return item.keys().hasOnly(['period', 'amount', 'dueOn', 'status', 'paidOn', 'note', 'kind', 'amountPaid', 'refunded'])
         && item.keys().hasAll(['period', 'amount', 'dueOn', 'status'])
-        && (!('kind' in item) || item.kind in ['subscription', 'setup'])
+        && optIn(item, 'kind', ['subscription', 'setup'])
         && (!('amountPaid' in item) || (intIn(item.amountPaid, 0, 100000000) && item.amountPaid <= item.amount))
         && (!('refunded' in item) || (intIn(item.refunded, 0, 100000000) && item.refunded <= item.get('amountPaid', 0)))
         && item.period is string && item.period.matches('[0-9]{4}-[0-9]{2}')
         && intIn(item.amount, 0, 100000000)
         && dateText(item.dueOn)
         && item.status in ['due', 'paid', 'overdue']
-        && (!('paidOn' in item) || dateText(item.paidOn))
+        && optDate(item, 'paidOn')
         && optText(item, 'note', 200);
     }
 
@@ -2819,8 +2827,8 @@ service cloud.firestore {
       return item.keys().hasOnly(['domain', 'status', 'note', 'createdOn', 'dnsTarget', 'checkedOn', 'ssl'])
         && item.keys().hasAll(['domain', 'status', 'createdOn'])
         && optionalText(item, 'dnsTarget', 100)
-        && (!('checkedOn' in item) || dateText(item.checkedOn))
-        && (!('ssl' in item) || item.ssl in ['pending', 'active'])
+        && optDate(item, 'checkedOn')
+        && optIn(item, 'ssl', ['pending', 'active'])
         && item.domain is string && item.domain.matches('[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?[.][a-z]{2,20}')
         && item.status in ['requested', 'dns-pending', 'verified', 'rejected']
         && dateText(item.createdOn)
@@ -2838,12 +2846,12 @@ service cloud.firestore {
 
     function validUsage(item) {
       return item.keys().hasOnly(['students', 'staff', 'classes', 'payments', 'storageMb', 'updatedAt'])
-        && (!('storageMb' in item) || (intIn(item.storageMb, 0, 100000000)))
+        && optInt(item, 'storageMb', 0, 100000000)
         && item.keys().hasAll(['students', 'staff', 'updatedAt'])
         && intIn(item.students, 0, 10000000)
         && intIn(item.staff, 0, 10000000)
-        && (!('classes' in item) || (intIn(item.classes, 0, 10000000)))
-        && (!('payments' in item) || (intIn(item.payments, 0, 100000000)))
+        && optInt(item, 'classes', 0, 10000000)
+        && optInt(item, 'payments', 0, 100000000)
         && item.updatedAt == request.time;
     }
 
@@ -2853,7 +2861,7 @@ service cloud.firestore {
         && dateText(item.date)
         && namedText(item.what, 200)
         && maxText(item.result, 500)
-        && (!('minutes' in item) || (intIn(item.minutes, 0, 100000)));
+        && optInt(item, 'minutes', 0, 100000);
     }
 
     function validStorageRequest(item) {
@@ -2864,7 +2872,7 @@ service cloud.firestore {
         && optText(item, 'note', 300)
         && item.status in ['pending', 'approved', 'rejected']
         && item.createdBy is string && dateText(item.createdOn)
-        && (!('decidedOn' in item) || dateText(item.decidedOn))
+        && optDate(item, 'decidedOn')
         && optText(item, 'reply', 300);
     }
 
@@ -2944,8 +2952,8 @@ service cloud.firestore {
         && item.keys().hasAll(['schoolId', 'subject', 'body', 'status', 'createdBy', 'createdOn'])
         && (!('assignedTo' in item) || textLen(item.assignedTo, 1, 40))
         && optText(item, 'assignedEmail', 120)
-        && (!('priority' in item) || item.priority in ['low', 'normal', 'high', 'urgent'])
-        && (!('dueOn' in item) || dateText(item.dueOn))
+        && optIn(item, 'priority', ['low', 'normal', 'high', 'urgent'])
+        && optDate(item, 'dueOn')
         && item.schoolId is string && item.schoolId.matches('[a-z0-9-]{1,40}')
         && namedText(item.subject, 120)
         && namedText(item.body, 2000)
@@ -3084,8 +3092,8 @@ service cloud.firestore {
     function validHealthRecord(item) {
       return item.keys().hasOnly(['studentId', 'bloodGroup', 'allergies', 'conditions', 'emergencyContact', 'notes', 'vaccinations', 'lastCheckup', 'nextCheckup'])
         && optionalText(item, 'vaccinations', 200)
-        && (!('lastCheckup' in item) || dateText(item.lastCheckup))
-        && (!('nextCheckup' in item) || dateText(item.nextCheckup))
+        && optDate(item, 'lastCheckup')
+        && optDate(item, 'nextCheckup')
         && item.keys().hasAll(['studentId', 'bloodGroup'])
         && idText(item.studentId)
         && item.bloodGroup in ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
@@ -3127,14 +3135,14 @@ service cloud.firestore {
         && intIn(item.allowances, 0, 10000000)
         && intIn(item.deductions, 0, 10000000)
         && item.deductions <= item.basic + item.allowances
-        && (!('paidOn' in item) || (dateText(item.paidOn)))
+        && optDate(item, 'paidOn')
         && optText(item, 'note', 200);
     }
 
     function validMessage(item) {
       return item.keys().hasOnly(['studentId', 'subject', 'body', 'createdAt', 'createdBy', 'reply', 'repliedAt', 'mod', 'modNote'])
         && item.keys().hasAll(['studentId', 'subject', 'body', 'createdAt', 'createdBy'])
-        && (!('mod' in item) || item.mod in ['flagged', 'hidden'])
+        && optIn(item, 'mod', ['flagged', 'hidden'])
         && optionalText(item, 'modNote', 200)
         && idText(item.studentId)
         && namedText(item.subject, 100)
@@ -3142,7 +3150,7 @@ service cloud.firestore {
         && dateText(item.createdAt) && item.createdAt >= '2020-01-01'
         && item.createdBy is string
         && (!('reply' in item) || (namedText(item.reply, 1000)))
-        && (!('repliedAt' in item) || (dateText(item.repliedAt)));
+        && optDate(item, 'repliedAt');
     }
 
     function optionalText(item, key, max) {
@@ -3170,7 +3178,7 @@ service cloud.firestore {
 
     function validSiteExtras(item) {
       return item.keys().hasOnly(['theme', 'tv', 'tvPrev', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6'])
-        && (!('tv' in item) || (intIn(item.tv, 1, 20)))
+        && optInt(item, 'tv', 1, 20)
         && (!('tvPrev' in item) || (('tv' in item) && intIn(item.tvPrev, 1, 20)))
         && (!('theme' in item) || (item.theme is string && item.theme.matches('mk-[a-z0-9]{3,12}')) || item.theme in ['classic', 'royal', 'emerald', 'crimson', 'midnight', 'saffron', 'ocean', 'slate', 'teal', 'maroon', 'indigo', 'forest', 'sunrise', 'rose', 'charcoal', 'sky',
           'obsidian', 'champagne', 'sapphire', 'emerald-noir', 'ruby', 'rose-gold', 'sandstone', 'lavender', 'sage', 'blush', 'pearl', 'platinum', 'copper', 'abyss', 'amethyst', 'bordeaux', 'olive', 'denim', 'mocha', 'aurora'])
@@ -3262,7 +3270,7 @@ service cloud.firestore {
         && dateText(item.submittedOn)
         && item.createdBy is string
         && optionalText(item, 'feedback', 500)
-        && (!('feedbackAt' in item) || (dateText(item.feedbackAt)));
+        && optDate(item, 'feedbackAt');
     }
 
     function validAssessment(item) {
@@ -3323,12 +3331,12 @@ service cloud.firestore {
       return student.keys().hasOnly(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status', 'dob', 'address',
           'gender', 'motherName', 'previousSchool', 'emergencyPhone', 'guardianEmail', 'tcNo', 'docsReceived'])
         && student.keys().hasAll(['admissionNo', 'name', 'guardianName', 'guardianPhone', 'status'])
-        && (!('dob' in student) || (dateText(student.dob)))
+        && optDate(student, 'dob')
         && optText(student, 'address', 200)
-        && (!('gender' in student) || student.gender in ['male', 'female', 'other'])
+        && optIn(student, 'gender', ['male', 'female', 'other'])
         && optText(student, 'motherName', 120)
         && optText(student, 'previousSchool', 120)
-        && (!('emergencyPhone' in student) || (student.emergencyPhone is string && student.emergencyPhone.matches('[0-9+() -]{0,20}')))
+        && optMatch(student, 'emergencyPhone', '[0-9+() -]{0,20}')
         && optText(student, 'guardianEmail', 100)
         && optText(student, 'tcNo', 40)
         && (!('docsReceived' in student) || (student.docsReceived is list && student.docsReceived.size() <= 8

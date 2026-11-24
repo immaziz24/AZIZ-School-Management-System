@@ -696,12 +696,14 @@ function printInvoice(school, inv) {
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Invoice</title><style>body{font:15px/1.5 Georgia,serif;color:#111;margin:40px auto;max-width:720px}h1{color:#0b1f3a;margin:0}table{width:100%;border-collapse:collapse;margin:22px 0}td,th{padding:8px;border-bottom:1px solid #ccc;text-align:left}.r{text-align:right}.tot td{font-weight:bold;border-top:2px solid #0b1f3a}.mut{color:#555}@media print{button{display:none}}</style></head><body></body></html>');
   w.document.title = 'Invoice ' + inv.id;
   const line = (label, value, cls) => h('tr', { class: cls || '' }, h('td', {}, label), h('td', { class: 'r' }, value));
+  const payLines = S.pay ? [S.pay.gstNumber ? 'Tax number: ' + S.pay.gstNumber : '', S.pay.upiId ? 'UPI: ' + S.pay.upiId : '', S.pay.bankDetails || '', S.pay.instructions || ''].filter(Boolean) : [];
   const body = h('div', {}, h('h1', {}, 'AZIZ School Management System'), h('p', { class: 'mut' }, 'Tax invoice'),
     h('p', {}, h('b', {}, 'Invoice: '), inv.id, h('br'), h('b', {}, 'Period: '), inv.period, h('br'), h('b', {}, 'Due: '), inv.dueOn, h('br'), h('b', {}, 'Status: '), inv.status),
     h('p', {}, h('b', {}, 'Billed to: '), school.name, h('br'), school.address || '', school.address ? h('br') : null, school.contactEmail || ''),
     h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Description'), h('th', { class: 'r' }, 'Amount'))),
       h('tbody', {}, line((inv.kind === 'setup' ? 'Setup fee' : 'Subscription') + ' ' + inv.period + (inv.note ? ' (' + inv.note + ')' : ''), money(inv.amount)),
         line('Received', money(inv.amountPaid || 0)), (inv.refunded ? line('Refunded', money(inv.refunded)) : null), line('Balance due', money(owing(inv)), 'tot'))),
+    payLines.length ? h('p', {}, h('b', {}, 'How to pay'), ...payLines.flatMap((t) => [h('br'), t])) : null,
     h('p', { class: 'mut' }, 'Generated ' + new Date().toLocaleString('en-IN') + '.'),
     h('button', { onclick: () => w.print() }, 'Print or save as PDF'));
   w.document.body.append(w.document.adoptNode(body));
@@ -732,6 +734,7 @@ async function viewBilling() {
   setCrumbs('Billing and invoices');
   view().replaceChildren(loading('Loading every school\'s invoices.'));
   await loadInvoices();
+  if (isAdmin()) S.pay = await readSettingDoc('payment');
   const all = S.schools.flatMap((school) => (school.invoices || []).map((inv) => ({ school, inv })));
   const filter = h('select', {}, [['unpaid', 'Unpaid'], ['overdue', 'Overdue'], ['all', 'All invoices']].map(([v, t]) => h('option', { value: v }, t)));
   const searchBox = h('input', { type: 'search', placeholder: 'Search by school or invoice number' });
@@ -1324,7 +1327,7 @@ const show = (...parts) => view().replaceChildren(...parts.flat().filter((p) => 
 const isAdmin = () => S.role === 'admin';
 const can = (perm) => isAdmin() || Boolean(S.staff && S.staff.perms && S.staff.perms[perm] === true);
 const ROUTE_PERM = { support: 'support', billing: 'finance', audit: 'audit', incidents: 'audit', infra: 'ops', backups: 'ops' };
-const routeAllowed = (name) => isAdmin() || (ROUTE_PERM[name] !== undefined && can(ROUTE_PERM[name]));
+const routeAllowed = (name) => isAdmin() || (name === 'reports' ? can('finance') || can('support') : ROUTE_PERM[name] !== undefined && can(ROUTE_PERM[name]));
 const ROLE_PRESETS = { support: ['support'], finance: ['finance'], auditor: ['audit'], operations: ['ops', 'support'] };
 const ROLE_LABEL = { support: 'Support', finance: 'Finance', auditor: 'Auditor', operations: 'Operations' };
 const PERM_LABEL = { support: 'Support tickets', finance: 'Finance (read only)', audit: 'Audit log and incidents', ops: 'Infrastructure and backups' };
@@ -1374,7 +1377,7 @@ function applyRoleToPage() {
 }
 function firstAllowedRoute() {
   if (isAdmin()) return 'dashboard';
-  return ['support', 'billing', 'audit', 'incidents', 'infra', 'backups'].find(routeAllowed) || 'denied';
+  return ['support', 'billing', 'reports', 'audit', 'incidents', 'infra', 'backups'].find(routeAllowed) || 'denied';
 }
 function updateBell() {
   const total = S.alerts.length + (S.opsAlerts ? S.opsAlerts.length : 0);
@@ -1824,6 +1827,245 @@ async function viewAudit(tab = 'log') {
 }
 
 // ---------- routing ----------
+// ---------- Mark 5 (Batch 80): reports, platform settings and insights ----------
+const dayOf = (v) => (v && v.toDate ? v.toDate().toISOString().slice(0, 10) : typeof v === 'string' ? v.slice(0, 10) : '');
+const msOfAny = (v) => (v && v.toMillis ? v.toMillis() : typeof v === 'string' ? (Date.parse(v) || 0) : 0);
+const pct = (a, b) => (b > 0 ? Math.round(a / b * 100) : 0);
+const REPORT_TABS = [['schools', 'Schools'], ['subscriptions', 'Subscriptions'], ['revenue', 'Revenue'], ['storage', 'Storage'], ['support', 'Support']];
+const reportTabAllowed = (tab) => isAdmin() || (tab === 'support' ? can('support') : (tab === 'subscriptions' || tab === 'revenue') && can('finance'));
+
+async function buildReport(tab) {
+  if (tab === 'support') {
+    const [snap] = await Promise.all([getDocs(collection(db, 'supportTickets')), loadSchools().catch(() => {})]);
+    const nameOf = (id) => { const s = S.schools.find((x) => x.id === id); return s ? s.name : id; };
+    const by = new Map();
+    const dueCut = today();
+    for (const d of snap.docs) {
+      const t = d.data(); const row = by.get(t.schoolId) || { open: 0, closed: 0, hot: 0, late: 0, oldest: '' };
+      if (t.status === 'closed') row.closed += 1;
+      else {
+        row.open += 1;
+        if (t.priority === 'urgent' || t.priority === 'high') row.hot += 1;
+        if (t.dueOn && t.dueOn < dueCut) row.late += 1;
+        if (!row.oldest || String(t.createdOn) < row.oldest) row.oldest = String(t.createdOn || '');
+      }
+      by.set(t.schoolId, row);
+    }
+    const rows = [...by.entries()].sort((a, b) => b[1].open - a[1].open).map(([id, r]) => [nameOf(id), r.open, r.closed, r.hot, r.late, r.oldest]);
+    const sum = (k) => rows.reduce((t, r) => t + r[k], 0);
+    return { title: 'Support report', header: ['School', 'Open tickets', 'Closed tickets', 'Urgent or high (open)', 'Past deadline', 'Oldest open since'], rows,
+      stats: [['Open tickets', num(sum(1))], ['Closed tickets', num(sum(2))], ['Urgent or high, open', num(sum(3))], ['Past deadline', num(sum(4))]] };
+  }
+  if (tab === 'subscriptions' || tab === 'revenue') await loadInvoices(); else await loadSchools();
+  const live = S.schools.filter((s) => !s.archived);
+  if (tab === 'schools') {
+    const rows = S.schools.map((s) => [s.name, s.id, statusOf(s), s.billing ? s.billing.plan || '' : '', s.usage ? Number(s.usage.students) || 0 : 0, s.usage ? Number(s.usage.staff) || 0 : 0,
+      s.billing ? Number(s.billing.studentLimit) || '' : '', effectiveMb(s)]);
+    return { title: 'School report', header: ['School', 'School ID', 'Status', 'Plan', 'Students', 'Staff', 'Student limit', 'Storage used (MB)'], rows,
+      stats: [['Schools', num(S.schools.length)], ['Live', num(live.length)], ['Students', num(rows.reduce((t, r) => t + r[4], 0))], ['Staff', num(rows.reduce((t, r) => t + r[5], 0))]] };
+  }
+  if (tab === 'subscriptions') {
+    const rows = live.map((s) => { const inv = (s.invoices || []).filter((i) => i.status !== 'paid');
+      return [s.name, s.billing ? s.billing.plan || '' : 'none', statusOf(s), s.billing ? Number(s.billing.monthlyPrice) || 0 : 0, s.billing ? dayOf(s.billing.startedOn) : '', s.billing ? dayOf(s.billing.trialEnds) : '',
+        inv.length, inv.reduce((t, i) => t + owing(i), 0)]; });
+    const active = live.filter((s) => s.billing && s.billing.status === 'active');
+    return { title: 'Subscription report', header: ['School', 'Plan', 'Status', 'Monthly price (Rs)', 'Paid plan started', 'Trial ends', 'Unpaid invoices', 'Amount owing (Rs)'], rows,
+      stats: [['Active subscriptions', num(active.length)], ['On trial', num(live.filter((s) => s.billing && s.billing.status === 'trial').length)], ['Monthly recurring revenue', money(active.reduce((t, s) => t + (Number(s.billing.monthlyPrice) || 0), 0))], ['Owing', money(rows.reduce((t, r) => t + r[7], 0))]] };
+  }
+  if (tab === 'revenue') {
+    const months = new Map();
+    for (const s of S.schools) for (const i of s.invoices || []) {
+      const key = i.period || 'unknown'; const m = months.get(key) || { n: 0, billed: 0, paid: 0, refunded: 0, owing: 0 };
+      m.n += 1; m.billed += Number(i.amount) || 0; m.paid += Number(i.amountPaid) || 0; m.refunded += Number(i.refunded) || 0; m.owing += owing(i); months.set(key, m);
+    }
+    const rows = [...months.entries()].sort((a, b) => String(b[0]).localeCompare(String(a[0]))).map(([k, m]) => [k, m.n, m.billed, m.paid, m.refunded, m.owing]);
+    const sum = (k) => rows.reduce((t, r) => t + r[k], 0);
+    return { title: 'Revenue report', header: ['Period', 'Invoices', 'Billed (Rs)', 'Collected (Rs)', 'Refunded (Rs)', 'Still owing (Rs)'], rows,
+      stats: [['Billed', money(sum(2))], ['Collected', money(sum(3))], ['Refunded', money(sum(4))], ['Still owing', money(sum(5))]] };
+  }
+  const rows = live.filter((s) => s.billing).map((s) => { const used = effectiveMb(s); const limit = Number(s.billing.storageMb) || 0;
+    return [s.name, used, limit, pct(used, limit), s.billing.storageCheckedOn || '']; }).sort((a, b) => b[3] - a[3]);
+  return { title: 'Storage report', header: ['School', 'Used (MB)', 'Limit (MB)', 'Used (%)', 'Last measured on'], rows,
+    stats: [['Total used (MB)', num(rows.reduce((t, r) => t + r[1], 0))], ['Over 80%', num(rows.filter((r) => r[3] >= 80).length)], ['Over limit', num(rows.filter((r) => r[3] >= 100).length)]] };
+}
+
+function printReport(title, header, rows) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups for this page, then try again.'); return; }
+  const d = w.document;
+  const el = (tag, text) => { const e = d.createElement(tag); if (text !== undefined) e.textContent = String(text); return e; };
+  d.title = title;
+  const style = el('style', 'body{font:13px Arial,sans-serif;margin:24px;color:#111}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:4px 6px;text-align:left}th{background:#eee}h1{font-size:18px;margin:0 0 4px}p{color:#555}');
+  d.head.append(style);
+  const table = el('table'); const head = el('tr');
+  for (const t of header) head.append(el('th', t));
+  const thead = el('thead'); thead.append(head); table.append(thead);
+  const body = el('tbody');
+  for (const r of rows) { const tr = el('tr'); for (const c of r) tr.append(el('td', c)); body.append(tr); }
+  table.append(body);
+  d.body.append(el('h1', title), el('p', 'Made ' + new Date().toLocaleString('en-IN') + ' by ' + (S.user.email || '') + '. Confidential: do not share outside the company.'), table);
+  setTimeout(() => { try { w.focus(); w.print(); } catch { /* the page stays open */ } }, 400);
+}
+
+async function viewReports(tab) {
+  const tabs = REPORT_TABS.filter(([k]) => reportTabAllowed(k));
+  if (!tabs.length) { show(h('div', { class: 'empty' }, 'Your staff role has no reports yet.')); return; }
+  if (!tabs.some(([k]) => k === tab)) tab = tabs[0][0];
+  setCrumbs('Reports', (tabs.find(([k]) => k === tab) || [])[1]);
+  show(loading('Building the report.'));
+  const data = await buildReport(tab);
+  // An export needs a reason, which is kept in the audit log with what was exported. CSV and print both count as exports.
+  const exportIt = (kind) => guarded(async () => {
+    const v = await formDialog({ title: kind === 'csv' ? 'Download this report as CSV' : 'Print or save this report as PDF',
+      note: 'The report holds business data about every school. The reason, your name and the number of rows are kept in the audit log.', ok: 'Export', fields: [REASON] });
+    if (!v) return;
+    const batch = writeBatch(db);
+    audit(batch, 'export-report', '', v.reason, tab + ' ' + (kind === 'csv' ? 'CSV' : 'PDF') + ', ' + data.rows.length + ' rows');
+    await batch.commit();
+    if (kind === 'csv') exportCsv('aziz-' + tab + '-report-' + today() + '.csv', data.header, data.rows); else printReport(data.title, data.header, data.rows);
+  });
+  show(h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, data.title), h('button', { class: 'btn', onclick: () => exportIt('pdf') }, 'Print or save as PDF'), h('button', { class: 'btn gold', onclick: () => exportIt('csv') }, 'Download CSV')),
+    h('div', { class: 'row' }, tabs.map(([k, t]) => h('a', { class: 'btn' + (k === tab ? ' gold' : ''), href: '#/reports/' + k }, t))),
+    h('div', { class: 'grid' }, data.stats.map(([label, value]) => stat(label, value))),
+    h('div', { class: 'card' }, data.rows.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, data.header.map((t) => h('th', {}, t)))),
+      h('tbody', {}, data.rows.map((r) => h('tr', {}, r.map((c) => h('td', {}, typeof c === 'number' ? num(c) : String(c ?? '')))))))) : h('div', { class: 'empty' }, 'Nothing to report yet.')));
+}
+
+// ---- platform settings: one document per group in platformConfig; every change is audited ----
+const URL_PAT = /^https:\/\/[^\s]{3,200}$/;
+const MAIL_PAT = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const SETTING_GROUPS = [
+  ['branding', 'Branding', 'The name, tagline, logo and colours the platform shows. Public: anyone can read this group.', [
+    { key: 'productName', label: 'Product name', required: true, maxLen: 60 }, { key: 'tagline', label: 'Tagline', maxLen: 120 },
+    { key: 'logoUrl', label: 'Logo address (https)', pattern: URL_PAT, patternText: 'Use an https address.' },
+    { key: 'primaryColor', label: 'Main colour (#rrggbb)', pattern: /^#[0-9a-fA-F]{6}$/, patternText: 'Use a colour like #0b1a3b.' },
+    { key: 'accentColor', label: 'Accent colour (#rrggbb)', pattern: /^#[0-9a-fA-F]{6}$/, patternText: 'Use a colour like #c9a227.' },
+    { key: 'supportEmail', label: 'Public support email', pattern: MAIL_PAT, patternText: 'Use a real email address.' }]],
+  ['locale', 'Language and time', 'Defaults for new schools. Anyone signed in can read this group.', [
+    { key: 'language', label: 'Default language', type: 'select', options: [['en', 'English'], ['hi', 'Hindi'], ['bn', 'Bengali']] },
+    { key: 'timezone', label: 'Time zone', type: 'select', options: [['Asia/Kolkata', 'India (Asia/Kolkata)'], ['Asia/Dhaka', 'Bangladesh (Asia/Dhaka)'], ['Asia/Kathmandu', 'Nepal (Asia/Kathmandu)'], ['Asia/Dubai', 'Gulf (Asia/Dubai)'], ['UTC', 'UTC']] },
+    { key: 'dateFormat', label: 'Date style', type: 'select', options: [['DD/MM/YYYY', '31/12/2026'], ['MM/DD/YYYY', '12/31/2026'], ['YYYY-MM-DD', '2026-12-31']] },
+    { key: 'currency', label: 'Currency', type: 'select', options: [['INR', 'Rupee (INR)'], ['BDT', 'Taka (BDT)'], ['NPR', 'Nepali rupee (NPR)'], ['AED', 'Dirham (AED)'], ['USD', 'US dollar (USD)']] },
+    { key: 'weekStart', label: 'Week starts on', type: 'select', options: [['monday', 'Monday'], ['sunday', 'Sunday']] }]],
+  ['email', 'Email', 'How platform emails should look. Only you can read this. Sending needs the server job; never type a password or key here.', [
+    { key: 'senderName', label: 'Sender name', maxLen: 60 }, { key: 'replyTo', label: 'Reply-to address', pattern: MAIL_PAT, patternText: 'Use a real email address.' },
+    { key: 'supportEmail', label: 'Support address', pattern: MAIL_PAT, patternText: 'Use a real email address.' },
+    { key: 'provider', label: 'Mail service (name only)', type: 'select', options: [['none', 'Not chosen yet'], ['resend', 'Resend'], ['sendgrid', 'SendGrid'], ['ses', 'Amazon SES'], ['smtp', 'Own mail server']] },
+    { key: 'footerNote', label: 'Footer line on every email', maxLen: 200 }]],
+  ['payment', 'Payments', 'What the platform tells schools about paying. Only you can read this. Never type a gateway secret key; the printed invoice shows the details below.', [
+    { key: 'currency', label: 'Invoice currency', type: 'select', options: [['INR', 'Rupee (INR)'], ['BDT', 'Taka (BDT)'], ['USD', 'US dollar (USD)']] },
+    { key: 'gstPercent', label: 'GST or tax percent (0 to 40)', type: 'number' }, { key: 'gstNumber', label: 'GST or tax number', maxLen: 30 },
+    { key: 'upiId', label: 'UPI address', maxLen: 60 }, { key: 'bankDetails', label: 'Bank details for transfers', type: 'textarea', maxLen: 400 },
+    { key: 'instructions', label: 'How to pay (printed on invoices)', type: 'textarea', maxLen: 400 },
+    { key: 'gateway', label: 'Online gateway', type: 'select', options: [['none', 'None, record payments by hand'], ['razorpay', 'Razorpay (not connected yet)'], ['other', 'Other (not connected yet)']] }]],
+  ['maintenance', 'Maintenance', 'A notice bar shown at the top of every school app while it is on and today is inside the dates. It does not lock anything.', [
+    { key: 'on', label: 'Show the notice', type: 'select', options: [['off', 'Off'], ['on', 'On']] }, { key: 'message', label: 'Message (up to 200 letters)', maxLen: 200 },
+    { key: 'startsOn', label: 'Show from (optional)', type: 'date' }, { key: 'endsOn', label: 'Show until (optional)', type: 'date' }]],
+  ['legal', 'Legal and privacy', 'Links and versions for the terms and privacy policy. Public: anyone can read this group.', [
+    { key: 'termsUrl', label: 'Terms address (https)', pattern: URL_PAT, patternText: 'Use an https address.' }, { key: 'termsVersion', label: 'Terms version', maxLen: 20 },
+    { key: 'privacyUrl', label: 'Privacy policy address (https)', pattern: URL_PAT, patternText: 'Use an https address.' }, { key: 'privacyVersion', label: 'Privacy version', maxLen: 20 },
+    { key: 'retentionNote', label: 'Data retention statement', type: 'textarea', maxLen: 300 }, { key: 'grievanceEmail', label: 'Privacy or grievance contact', pattern: MAIL_PAT, patternText: 'Use a real email address.' }]],
+];
+async function readSettingDoc(id) {
+  const found = await getDocFromServer(doc(db, 'platformConfig', id)).catch(() => null);
+  return found && found.exists() ? found.data() : {};
+}
+async function viewSettings(tab) {
+  if (!isAdmin()) { show(h('div', { class: 'empty' }, 'Only the super admin changes platform settings.')); return; }
+  const group = SETTING_GROUPS.find((g) => g[0] === tab) || SETTING_GROUPS[0];
+  const [id, label, note, fields] = group;
+  setCrumbs('Settings', label);
+  show(loading('Loading settings.'));
+  const current = await readSettingDoc(id);
+  const shown = (f) => { const v = id === 'maintenance' && f.key === 'on' ? (current.on === true ? 'on' : 'off') : current[f.key];
+    if (v === undefined || v === '') return h('span', { class: 'muted' }, 'not set'); const opt = f.options ? f.options.find((o) => o[0] === v) : null; return String(opt ? opt[1] : v); };
+  const edit = () => guarded(async () => {
+    const v = await formDialog({ title: 'Change ' + label.toLowerCase() + ' settings', note, ok: 'Save', fields: [...fields.map((f) => ({ ...f,
+      value: id === 'maintenance' && f.key === 'on' ? (current.on === true ? 'on' : 'off') : current[f.key] ?? (f.type === 'select' ? f.options[0][0] : '') })), REASON] });
+    if (!v) return;
+    const data = {};
+    for (const f of fields) {
+      let value = v[f.key];
+      if (value === '' || value === undefined) continue;
+      if (f.maxLen && String(value).length > f.maxLen) { toast(f.label + ' is too long (up to ' + f.maxLen + ' letters).'); return; }
+      if (id === 'maintenance' && f.key === 'on') value = value === 'on';
+      data[f.key] = value;
+    }
+    if (id === 'branding' && !data.productName) { toast('The product name is required.'); return; }
+    if (id === 'payment' && data.gstPercent !== undefined && data.gstPercent > 40) { toast('Tax percent must be 0 to 40.'); return; }
+    if (id === 'maintenance' && data.on === true && !data.message) { toast('Write the message people should see.'); return; }
+    if (id === 'maintenance' && data.startsOn && data.endsOn && data.startsOn > data.endsOn) { toast('The end date comes before the start date.'); return; }
+    data.updatedBy = S.user.email || S.user.uid; data.updatedOn = today();
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'platformConfig', id), data);
+    audit(batch, 'platform-setting', '', v.reason, JSON.stringify({ group: id, before: current, after: data }));
+    await batch.commit(); toast('Settings saved.'); await viewSettings(id);
+  });
+  show(h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Platform settings'), h('button', { class: 'btn gold', onclick: edit }, 'Change')),
+    h('div', { class: 'row' }, SETTING_GROUPS.map(([k, t]) => h('a', { class: 'btn' + (k === id ? ' gold' : ''), href: '#/settings/' + k }, t))),
+    h('div', { class: 'card' }, h('h3', {}, label), h('p', { class: 'muted' }, note),
+      h('table', {}, h('tbody', {}, fields.map((f) => h('tr', {}, h('td', { style: 'width:40%' }, f.label), h('td', {}, shown(f)))))),
+      current.updatedBy ? h('p', { class: 'muted' }, 'Last changed by ' + current.updatedBy + ' on ' + (current.updatedOn || '?') + '. Every change is in the audit log with the old and new values.') : h('p', { class: 'muted' }, 'Nothing saved yet.')),
+    id === 'maintenance' ? h('div', { class: 'card' }, h('h3', {}, 'What people see'), current.on === true && current.message ? h('div', { class: 'alert' }, h('span', { class: 'pill warn' }, 'Notice'), h('span', {}, current.message)) : h('div', { class: 'empty' }, 'No notice is showing.')) : null);
+}
+
+// ---- insights: usage anomalies, churn indicators and a plain written summary. These are fixed rules, not AI, so they cost nothing and no data leaves the platform. ----
+async function viewInsights() {
+  setCrumbs('Insights');
+  show(loading('Working out the signals.'));
+  await loadInvoices();
+  const snap = await getDocs(collection(db, 'supportTickets')).catch(() => null);
+  const openBy = new Map();
+  if (snap) for (const d of snap.docs) { const t = d.data(); if (t.status !== 'closed') openBy.set(t.schoolId, (openBy.get(t.schoolId) || 0) + 1); }
+  const now = Date.now(); const DAY = 86400000;
+  const live = S.schools.filter((s) => !s.archived);
+  const rows = live.map((s) => {
+    const b = s.billing || {}; const u = s.usage || {}; const anomalies = []; const risks = [];
+    const students = Number(u.students) || 0; const limit = Number(b.studentLimit) || 0;
+    const used = effectiveMb(s); const cap = Number(b.storageMb) || 0;
+    const quiet = u.updatedAt ? Math.floor((now - msOfAny(u.updatedAt)) / DAY) : null;
+    if (limit && students >= limit) anomalies.push(['bad', 'At the student limit (' + students + ' of ' + limit + ')']);
+    else if (limit && students >= limit * 0.9) anomalies.push(['warn', 'Near the student limit (' + students + ' of ' + limit + ')']);
+    if (cap && used >= cap) anomalies.push(['bad', 'Storage is over its limit (' + num(used) + ' of ' + num(cap) + ' MB)']);
+    else if (cap && used >= cap * 0.9) anomalies.push(['warn', 'Storage is above 90% (' + num(used) + ' of ' + num(cap) + ' MB)']);
+    const reported = Number(u.storageMb) || 0; const measured = b.storageCheckedMb;
+    if (measured != null && reported && Math.abs(measured - reported) / Math.max(measured, reported) > 0.1) anomalies.push(['warn', 'Reported and measured storage differ by more than 10%']);
+    if (b.status === 'active' && b.plan !== 'trial' && u.students !== undefined && students === 0) anomalies.push(['warn', 'Paying school with no students recorded']);
+    if (b.status === 'active' && quiet !== null && quiet > 14) anomalies.push(['warn', 'Usage record not updated for ' + quiet + ' days']);
+    let score = 0;
+    if (['suspended', 'cancelled'].includes(b.status)) { score += 3; risks.push('Suspended or cancelled'); }
+    const overdue = (s.unpaid || []).filter((i) => i.status === 'overdue').length;
+    if (overdue) { score += 2; risks.push(overdue + ' overdue invoice(s)'); }
+    const trialMs = msOfAny(b.trialEnds);
+    if (b.status === 'trial' && trialMs) { const left = Math.ceil((trialMs - now) / DAY); if (left < 0) { score += 3; risks.push('Trial ended ' + (-left) + ' days ago'); } else if (left <= 7) { score += 2; risks.push('Trial ends in ' + left + ' days'); } }
+    if (quiet !== null && quiet > 14) { score += 2; risks.push('Quiet for ' + quiet + ' days'); }
+    if ((openBy.get(s.id) || 0) >= 3) { score += 1; risks.push((openBy.get(s.id)) + ' open support tickets'); }
+    const level = score >= 5 ? 'High' : score >= 3 ? 'Medium' : score >= 1 ? 'Low' : 'None';
+    return { s, anomalies, risks, score, level, status: statusOf(s) };
+  });
+  const risky = rows.filter((r) => r.score > 0).sort((a, b) => b.score - a.score);
+  const odd = rows.filter((r) => r.anomalies.length);
+  const count = (st) => live.filter((s) => statusOf(s) === st).length;
+  const owingAll = live.reduce((t, s) => t + (s.unpaid || []).reduce((a, i) => a + owing(i), 0), 0);
+  const lines = [
+    live.length + ' schools are live: ' + count('active') + ' active, ' + count('trial') + ' on trial, ' + (count('suspended') + count('cancelled')) + ' suspended or cancelled.',
+    risky.length ? risky.length + ' school(s) show churn signals; the most at risk are ' + risky.slice(0, 3).map((r) => r.s.name + ' (' + r.level + ')').join(', ') + '.' : 'No school shows a churn signal today.',
+    odd.length ? odd.length + ' school(s) have a usage anomaly, for example ' + odd[0].s.name + ': ' + odd[0].anomalies[0][1] + '.' : 'No usage anomalies found.',
+    'Money owing across all schools: ' + money(owingAll) + '.',
+    (S.opsAlerts || []).length ? (S.opsAlerts.length) + ' operations alert(s) are open, for example: ' + S.opsAlerts[0].text : 'No operations alerts (backups, errors and incidents look fine).',
+  ];
+  const copy = () => { try { navigator.clipboard.writeText(lines.join('\n')); toast('Summary copied.'); } catch { toast('Copy did not work; select the text instead.'); } };
+  const levelPill = (l) => h('span', { class: 'pill ' + (l === 'High' ? 'bad' : l === 'Medium' ? 'warn' : '') }, l);
+  show(h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Insights'), h('button', { class: 'btn', onclick: copy }, 'Copy summary')),
+    h('p', { class: 'muted' }, 'Worked out live from billing, usage, invoices and tickets with fixed rules. They are signals to look at, not verdicts. A written AI summary needs an AI key and is not switched on.'),
+    h('div', { class: 'card' }, h('h3', {}, 'Health summary'), lines.map((t) => h('p', {}, t))),
+    h('div', { class: 'card' }, h('h3', {}, 'Churn indicators'), risky.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['School', 'Status', 'Risk', 'Why'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, risky.map((r) => h('tr', {}, h('td', {}, h('a', { href: '#/school/' + r.s.id }, r.s.name)), h('td', {}, pillFor(r.status)), h('td', {}, levelPill(r.level)), h('td', {}, r.risks.join('; ')))))))
+      : h('div', { class: 'empty' }, 'No school shows a churn signal.')),
+    h('div', { class: 'card' }, h('h3', {}, 'Usage anomalies'), odd.length ? odd.map((r) => h('div', { class: 'alert' }, h('a', { href: '#/school/' + r.s.id }, r.s.name), r.anomalies.map(([cls, text]) => h('span', { class: 'pill ' + cls }, text))))
+      : h('div', { class: 'empty' }, 'No anomalies. Usage looks normal for every school.'), h('p', { class: 'muted' }, 'Rules used: at or near the student limit, storage near or over its limit, reported and measured storage far apart, paying school with no students, usage record not updated for 14 days.')));
+}
+
 async function route() {
   const parts = (location.hash || '#/dashboard').replace(/^#\/?/, '').split('/');
   const name = parts[0] || 'dashboard';
@@ -1852,6 +2094,9 @@ async function route() {
     else if (name === 'support') await viewSupport();
     else if (name === 'incidents') await viewIncidents();
     else if (name === 'staff') await viewStaff();
+    else if (name === 'reports') await viewReports(parts[1] || 'schools');
+    else if (name === 'settings') await viewSettings(parts[1] || 'branding');
+    else if (name === 'insights') await viewInsights();
     else if (name === 'security') await viewSecurity();
     else await viewDashboard();
   }).then(() => {});

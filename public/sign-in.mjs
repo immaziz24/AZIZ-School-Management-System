@@ -7825,7 +7825,27 @@ const FLAG_MODULES = { website: ['website', 'siteextras', 'enquiries'], finance:
 // the school's plan, rollout or beta group, or that its override switched off, and which roles may use a feature.
 let viewerRole = '';
 let roleLimits = {};
+// Maintenance notice (Batch 80): platformConfig/maintenance is public. While it is switched on and today is inside its dates, a bar shows at the top. It locks nothing.
+async function showMaintenanceBanner() {
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const found = await getDocFromServer(doc(academic.schoolRef.firestore, 'platformConfig', 'maintenance'));
+    const data = found.exists() ? found.data() : null;
+    const old = document.getElementById('maintenance-banner');
+    if (old) old.remove();
+    if (!data || data.on !== true || !data.message) return;
+    const day = new Date().toISOString().slice(0, 10);
+    if ((data.startsOn && day < data.startsOn) || (data.endsOn && day > data.endsOn)) return;
+    const bar = document.createElement('div');
+    bar.id = 'maintenance-banner';
+    bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position:sticky;top:0;z-index:50;background:#7a4b00;color:#fff;padding:10px 14px;text-align:center;font:14px/1.4 system-ui,sans-serif';
+    bar.textContent = String(data.message).slice(0, 200);
+    document.body.prepend(bar);
+  } catch { /* no notice to show */ }
+}
 async function readFlags() {
+  void showMaintenanceBanner();
   let flags = {};
   const { doc, getDocFromServer } = firestoreTools;
   try {
