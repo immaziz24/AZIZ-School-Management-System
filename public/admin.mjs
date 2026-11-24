@@ -576,7 +576,8 @@ async function showHistory(plan) {
 async function viewSecurity() {
   setCrumbs('Security and access');
   view().replaceChildren(loading('Loading.'));
-  const [grants, cfg] = await Promise.all([getDocs(collection(db, 'platformGrants')), getDoc(doc(db, 'platformConfig', 'security')).catch(() => null)]);
+  const [grants, cfg, fl] = await Promise.all([getDocs(collection(db, 'platformGrants')), getDoc(doc(db, 'platformConfig', 'security')).catch(() => null), getDoc(doc(db, 'platformJobs', 'failedLogins')).catch(() => null)]);
+  const fails = fl && fl.exists() ? fl.data() : null;
   const now = Date.now();
   const live = grants.docs.map((d) => ({ id: d.id, ...d.data() })).filter((g) => g.expiresAt && g.expiresAt.toMillis() > now);
   const mfaOn = cfg && cfg.exists() && cfg.data().requireMfa === true;
@@ -590,7 +591,25 @@ async function viewSecurity() {
     await batch.commit();
     toast('Saved.');
   }));
+  // Failed sign-ins (Batch 86): written once an hour by the server job from Identity Platform's activity log.
+  const scanNow = () => guarded(async () => {
+    const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
+    let r;
+    try { r = (await httpsCallable(getFunctions(app, 'asia-south1'), 'runLoginScanNow')()).data; } catch { toast('Could not run it. Check that the server functions are deployed.'); return; }
+    toast(r.ok ? (r.note || r.failed + ' failed sign-in(s) in the last 24 hours.') : (r.hint || r.error || 'Not available.'));
+    await viewSecurity();
+  });
+  const failCard = h('div', { class: 'card' }, h('h3', {}, 'Failed sign-ins (last 24 hours)'),
+    !fails ? h('p', { class: 'muted' }, 'Not scanned yet. This needs Identity Platform with user activity logging on. The server job runs every hour.')
+      : !fails.ok ? h('div', { class: 'alert' }, h('span', { class: 'pill bad' }, 'Not available'), h('span', {}, (fails.hint ? fails.hint + ' ' : '') + (fails.error || '')))
+        : [h('p', {}, h('b', {}, num(fails.failed)), ' failed out of ', num(fails.attempts), ' password sign-ins. Scanned ', ago(msOf(fails)), '.'),
+          fails.note ? h('p', { class: 'muted' }, fails.note) : null,
+          fails.suspicious && fails.suspicious.length ? h('div', { class: 'alert' }, h('span', { class: 'pill bad' }, 'Watch'), h('span', {}, fails.suspicious.length + ' address(es) failed 5 or more times: ' + fails.suspicious.map((x) => x.email + ' (' + x.count + ')').join(', '))) : null,
+          fails.byEmail && fails.byEmail.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Email (masked)', 'Failures'].map((t) => h('th', {}, t)))),
+            h('tbody', {}, fails.byEmail.map((x) => h('tr', {}, h('td', {}, x.email), h('td', {}, num(x.count))))))) : null],
+    isAdmin() ? h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: scanNow }, 'Scan now')) : null);
   view().replaceChildren(h('h2', {}, 'Security and access'),
+    failCard,
     h('div', { class: 'two' },
       h('div', { class: 'card' }, h('h3', {}, 'Active access passes'),
         live.length ? h('table', {}, h('tbody', {}, live.map((g) => h('tr', {}, h('td', {}, h('a', { href: '#/school/' + g.schoolId }, g.schoolId), h('div', { class: 'muted' }, g.tier + ' until ' + when(g.expiresAt))),

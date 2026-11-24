@@ -632,3 +632,73 @@ async function takeCost() {
   return { ok: result.ok, error: result.error || null, hint: result.hint || null, note: result.note || null };
 }
 exports.costSnapshot = onSchedule({ schedule: '40 4 * * *', timeZone: 'Asia/Kolkata', memory: '256MiB', timeoutSeconds: 120 }, async () => { await takeCost(); });
+
+// ---- Batch 86: failed sign-in detection (feature 097) ----
+// Needs Firebase Authentication upgraded to Identity Platform with "User activity logging" switched on (Google Cloud console > Identity Platform >
+// Settings). Google then writes one log entry per sign-in request to Cloud Logging, failures included. Once an hour (and on demand for the platform
+// administrator) this reads the last 24 hours, counts failed password sign-ins, groups them by a masked email and flags any address with 5 or more.
+// Only masked emails are saved. The server account needs the Logging Viewer role (roles/logging.viewer).
+const maskEmail = (value) => {
+  const text = String(value || '').toLowerCase();
+  const at = text.indexOf('@');
+  if (at < 1) return 'unknown';
+  return text.slice(0, Math.min(2, at)) + '***' + text.slice(at);
+};
+async function scanFailedLogins() {
+  const project = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+  const result = { at: Timestamp.now(), ok: false, attempts: 0, failed: 0, byEmail: [], suspicious: [], hours: [] };
+  try {
+    const token = (await applicationDefault().getAccessToken()).access_token;
+    const since = new Date(Date.now() - 24 * 3600000).toISOString();
+    const entries = [];
+    let pageToken;
+    for (let page = 0; page < 5; page += 1) {
+      const res = await fetch('https://logging.googleapis.com/v2/entries:list', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resourceNames: ['projects/' + project], orderBy: 'timestamp desc', pageSize: 1000, ...(pageToken ? { pageToken } : {}),
+          filter: 'logName="projects/' + project + '/logs/identitytoolkit.googleapis.com%2Frequests" AND timestamp>="' + since + '"' }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { const error = new Error('Logging answered ' + res.status + ': ' + String((body.error && body.error.message) || '').slice(0, 200)); error.status = res.status; throw error; }
+      entries.push(...(body.entries || []));
+      pageToken = body.nextPageToken;
+      if (!pageToken) break;
+    }
+    const byEmail = new Map();
+    const hours = new Map();
+    for (const entry of entries) {
+      const payload = entry.protoPayload || {};
+      const method = String(payload.methodName || '');
+      if (!/VerifyPassword|SignInWithPassword|SignInWithEmail/i.test(method)) continue;
+      result.attempts += 1;
+      const code = payload.status && payload.status.code ? Number(payload.status.code) : 0;
+      const message = String((payload.status && payload.status.message) || '');
+      if (!code && !/INVALID_PASSWORD|EMAIL_NOT_FOUND|INVALID_LOGIN_CREDENTIALS|TOO_MANY_ATTEMPTS|USER_DISABLED/i.test(message)) continue;
+      result.failed += 1;
+      const request = payload.request || {};
+      const who = maskEmail(request.email || request.identifier || (payload.authenticationInfo && payload.authenticationInfo.principalEmail));
+      byEmail.set(who, (byEmail.get(who) || 0) + 1);
+      const hour = String(entry.timestamp || '').slice(0, 13);
+      hours.set(hour, (hours.get(hour) || 0) + 1);
+      if (!result.shape) result.shape = Object.keys(payload).slice(0, 12).join(',');
+    }
+    result.byEmail = [...byEmail.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([email, count]) => ({ email, count }));
+    result.suspicious = result.byEmail.filter((row) => row.count >= 5);
+    result.hours = [...hours.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 24).map(([hour, count]) => ({ hour, count }));
+    result.ok = true;
+    if (!entries.length) result.note = 'No sign-in activity is in the log yet. Check that User activity logging is switched on in Identity Platform settings.';
+  } catch (error) {
+    result.error = String(error.message || error).slice(0, 300);
+    if (error.status === 403) result.hint = 'Give the server account the Logging Viewer role (roles/logging.viewer).';
+    logger.error('Failed-login scan failed', error);
+  }
+  await db.doc('platformJobs/failedLogins').set(result);
+  return { ok: result.ok, failed: result.failed, error: result.error || null, hint: result.hint || null, note: result.note || null };
+}
+exports.failedLoginScan = onSchedule({ schedule: '5 * * * *', timeZone: 'Asia/Kolkata', memory: '256MiB', timeoutSeconds: 120 }, async () => { await scanFailedLogins(); });
+exports.runLoginScanNow = onCall({ memory: '256MiB', timeoutSeconds: 120 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const admin = await db.doc('platformAdmins/' + request.auth.uid).get();
+  if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
+  return scanFailedLogins();
+});

@@ -95,7 +95,7 @@
 94,11,Firebase & Infrastructure Monitoring,Error alerts,Built,Built in Batch 79 per build records; live check pending,Mark 4
 95,12,Security & Audit Logs,Admin login history,Built,Built in Batch 79 per build records; live check pending,Mark 4
 96,12,Security & Audit Logs,MFA,Not started,Blocked: needs Firebase Identity Platform upgrade for MFA enrolment,Mark 4
-97,12,Security & Audit Logs,Failed-login detection,Partial,Visible failures only; wrong-password attempts cannot be captured from the browser,Mark 4
+97,12,Security & Audit Logs,Failed-login detection,Built,"Hourly server job reads Identity Platform activity log for failed password sign-ins; Security page shows counts and masked emails with 5+ failures (Batch 86; needs Identity Platform upgrade, activity logging on, Logging Viewer role, functions deploy; log shape not yet seen on real data)",Mark 4
 98,12,Security & Audit Logs,Action logs,Built,Built in Batch 79 per build records; live check pending,Mark 4
 99,12,Security & Audit Logs,School access history,Built,Built in Batch 79 per build records; live check pending,Mark 4
 100,12,Security & Audit Logs,Permission changes,Built,Built in Batch 79 per build records; live check pending,Mark 4
