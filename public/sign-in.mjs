@@ -84,6 +84,178 @@ async function renderSlots() {
   }
 }
 assignmentForm.elements.namedItem('uid').addEventListener('change', renderSlots);
+// Batch 97: weekly routine builder. One teacher, many rows (period, class, subject, times). Save writes the timetable lessons and
+// the teacher's class-and-subject entries together; Preview shows the result and any clash first.
+const rbTeacher = document.querySelector('#rb-teacher');
+const rbRowsBox = document.querySelector('#rb-rows');
+const rbDaysBox = document.querySelector('#rb-days');
+const rbStatus = document.querySelector('#rb-status');
+const rbPreview = document.querySelector('#rb-preview');
+const RB_DAYS = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat']];
+let rbRows = [];
+let rbDays = new Set([1, 2, 3, 4, 5, 6]);
+const rbMake = (tag, props, ...kids) => {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) { if (key === 'text') node.textContent = value; else if (key.startsWith('on')) node.addEventListener(key.slice(2), value); else node.setAttribute(key, value); }
+  for (const kid of kids) if (kid != null) node.append(kid);
+  return node;
+};
+const rbSubjectName = (id) => examData.subjects.find((x) => x.id === id)?.data().name ?? '';
+function rbSubjectsFor(classId) {
+  return examData.mappings.filter((m) => m.data().classId === classId).map((m) => ({ id: m.data().subjectId, name: rbSubjectName(m.data().subjectId) || m.data().subjectId }));
+}
+function rbBell(period) {
+  const hit = timetableData.find((entry) => entry.data.period === period && entry.data.start);
+  return hit ? { start: hit.data.start, end: hit.data.end } : { start: '', end: '' };
+}
+function rbNewRow() {
+  const last = rbRows[rbRows.length - 1];
+  const period = last ? Math.min(12, last.period + 1) : 1;
+  const classId = last?.classId || [...examData.classes].sort(byClassOrder)[0]?.id || '';
+  return { period, classId, subjectId: rbSubjectsFor(classId)[0]?.id ?? '', ...rbBell(period) };
+}
+function rbDrawDays() {
+  if (!rbDaysBox) return;
+  rbDaysBox.replaceChildren('Applies on: ');
+  for (const [day, name] of RB_DAYS) {
+    const box = rbMake('input', { type: 'checkbox' });
+    box.checked = rbDays.has(day);
+    box.addEventListener('change', () => { if (box.checked) rbDays.add(day); else rbDays.delete(day); });
+    rbDaysBox.append(rbMake('label', {}, box, ' ' + name + ' '));
+  }
+}
+function rbDrawRows() {
+  if (!rbRowsBox) return;
+  rbRowsBox.replaceChildren();
+  const classes = [...examData.classes].sort(byClassOrder);
+  rbRows.forEach((row, index) => {
+    const period = rbMake('select', { 'aria-label': 'Period' });
+    for (let p = 1; p <= 12; p += 1) period.append(rbMake('option', { value: String(p), text: 'Period ' + p }));
+    period.value = String(row.period);
+    period.addEventListener('change', () => {
+      row.period = Number(period.value);
+      const bell = rbBell(row.period);
+      if (!row.start && bell.start) { row.start = bell.start; row.end = bell.end; rbDrawRows(); }
+    });
+    const klass = rbMake('select', { 'aria-label': 'Class' });
+    for (const c of classes) klass.append(rbMake('option', { value: c.id, text: c.data().name }));
+    klass.value = row.classId;
+    const subject = rbMake('select', { 'aria-label': 'Subject' });
+    const fillSubjects = () => {
+      subject.replaceChildren();
+      const choices = rbSubjectsFor(row.classId);
+      if (!choices.length) subject.append(rbMake('option', { value: '', text: 'No subject linked to this class' }));
+      for (const c of choices) subject.append(rbMake('option', { value: c.id, text: c.name }));
+      if (!choices.some((c) => c.id === row.subjectId)) row.subjectId = choices[0]?.id ?? '';
+      subject.value = row.subjectId;
+    };
+    fillSubjects();
+    klass.addEventListener('change', () => { row.classId = klass.value; fillSubjects(); });
+    subject.addEventListener('change', () => { row.subjectId = subject.value; });
+    const start = rbMake('input', { type: 'time', 'aria-label': 'Starts' }); start.value = row.start;
+    const end = rbMake('input', { type: 'time', 'aria-label': 'Ends' }); end.value = row.end;
+    start.addEventListener('change', () => { row.start = start.value; });
+    end.addEventListener('change', () => { row.end = end.value; });
+    const swap = (other) => {
+      if (other < 0 || other >= rbRows.length) return;
+      const keep = rbRows[other].period; rbRows[other].period = row.period; row.period = keep;
+      [rbRows[index], rbRows[other]] = [rbRows[other], rbRows[index]];
+      rbDrawRows();
+    };
+    rbRowsBox.append(rbMake('p', { class: 'rb-row' }, period, ' ', klass, ' ', subject, ' ', start, ' to ', end, ' ',
+      rbMake('button', { type: 'button', text: 'Up', 'aria-label': 'Move up', onclick: () => swap(index - 1) }), ' ',
+      rbMake('button', { type: 'button', text: 'Down', 'aria-label': 'Move down', onclick: () => swap(index + 1) }), ' ',
+      rbMake('button', { type: 'button', text: 'Remove', onclick: () => { rbRows.splice(index, 1); if (!rbRows.length) rbRows.push(rbNewRow()); rbDrawRows(); } })));
+  });
+}
+async function rbLoadTeacher() {
+  if (!rbTeacher || !slotTools?.routine) return;
+  const uid = rbTeacher.value;
+  rbPreview.replaceChildren();
+  rbStatus.textContent = '';
+  rbDrawDays();
+  if (!uid) { rbRows = []; rbDrawRows(); return; }
+  const request = schoolRequest;
+  let existing = [];
+  try { existing = await slotTools.routine.existing(uid); } catch { existing = []; }
+  if (request !== schoolRequest || uid !== rbTeacher.value) return;
+  const seen = new Map();
+  for (const { data } of existing) {
+    const key = data.period + '_' + data.classId + '_' + data.subject;
+    if (!seen.has(key)) seen.set(key, { period: data.period, classId: data.classId, subjectId: examData.subjects.find((x) => x.data().name === data.subject)?.id ?? '', start: data.start, end: data.end });
+  }
+  rbRows = [...seen.values()].sort((a, b) => a.period - b.period);
+  if (existing.length) rbDays = new Set(existing.map(({ data }) => data.day));
+  if (!rbRows.length) rbRows = [rbNewRow()];
+  rbDrawDays();
+  rbDrawRows();
+  if (existing.length) rbStatus.textContent = 'Loaded this teacher\'s saved routine. Change it and press Save.';
+}
+function rbCheck() {
+  if (!rbTeacher.value) return 'Choose a teacher first.';
+  if (!rbDays.size) return 'Choose at least one day.';
+  const periods = new Set();
+  for (const row of rbRows) {
+    if (!row.classId || !row.subjectId) return 'Every row needs a class and a subject. Link subjects to classes in Academic Setup first.';
+    if (periods.has(row.period)) return 'Period ' + row.period + ' is used twice. One teacher cannot be in two classes in the same period.';
+    periods.add(row.period);
+    if (!row.start || !row.end || row.end <= row.start) return 'Period ' + row.period + ': give a start time and an end time that is after it.';
+  }
+  return '';
+}
+async function rbPlan() {
+  const uid = rbTeacher.value;
+  const name = teacherName(uid).slice(0, 60);
+  const desired = new Map();
+  const slots = new Map();
+  for (const row of rbRows) {
+    const subject = rbSubjectName(row.subjectId);
+    const className = nameOfClass(row.classId);
+    slots.set(row.classId + '_' + row.subjectId, { classId: row.classId, subjectId: row.subjectId, className, subject });
+    for (const day of rbDays) desired.set(row.classId + '_' + day + '_' + row.period, { classId: row.classId, className, day, period: row.period, subject, start: row.start, end: row.end, teacher: name, teacherUid: uid });
+  }
+  const all = await slotTools.routine.all();
+  const clashes = all.filter((entry) => desired.has(entry.id) && entry.data.teacherUid !== uid && (entry.data.teacher || entry.data.teacherUid));
+  const remove = all.filter((entry) => entry.data.teacherUid === uid && !desired.has(entry.id)).map((entry) => entry.id);
+  return { uid, desired, slots: [...slots.values()], clashes, remove };
+}
+document.querySelector('#rb-add')?.addEventListener('click', () => { if (rbRows.length >= 12) { rbStatus.textContent = 'A day has at most 12 periods.'; return; } rbRows.push(rbNewRow()); rbDrawRows(); });
+document.querySelector('#rb-preview-btn')?.addEventListener('click', async () => {
+  const problem = rbCheck();
+  if (problem) { rbStatus.textContent = problem; return; }
+  rbStatus.textContent = 'Checking.';
+  try {
+    const plan = await rbPlan();
+    rbPreview.replaceChildren();
+    for (const row of [...rbRows].sort((a, b) => a.period - b.period)) {
+      rbPreview.append(rbMake('li', { text: 'Period ' + row.period + ', ' + row.start + ' to ' + row.end + ': ' + nameOfClass(row.classId) + ' - ' + rbSubjectName(row.subjectId) }));
+    }
+    rbPreview.append(rbMake('li', { text: 'Days: ' + RB_DAYS.filter(([d]) => rbDays.has(d)).map(([, n]) => n).join(', ') + '. ' + plan.desired.size + ' lessons will be saved.' }));
+    for (const clash of plan.clashes) rbPreview.append(rbMake('li', { text: 'Clash: ' + clash.data.className + ' ' + DAY_NAMES[clash.data.day] + ' period ' + clash.data.period + ' already has ' + clash.data.subject + ' (' + (clash.data.teacher || 'another teacher') + '). Saving will replace it.' }));
+    if (plan.remove.length) rbPreview.append(rbMake('li', { text: plan.remove.length + ' older lessons of this teacher that are not in this routine will be removed.' }));
+    rbStatus.textContent = plan.clashes.length ? 'Preview ready. There are clashes, see below.' : 'Preview ready. Press Save to keep it.';
+  } catch { rbStatus.textContent = 'Could not check. Try again.'; }
+});
+document.querySelector('#rb-save')?.addEventListener('click', async () => {
+  const problem = rbCheck();
+  if (problem) { rbStatus.textContent = problem; return; }
+  if (!slotTools?.routine) return;
+  const request = schoolRequest;
+  rbStatus.textContent = 'Saving.';
+  try {
+    const plan = await rbPlan();
+    if (plan.clashes.length && !confirm(plan.clashes.length + ' lesson(s) of other teachers use the same class, day and period and will be replaced. Continue?')) { rbStatus.textContent = 'Not saved.'; return; }
+    await slotTools.routine.save(plan);
+    if (request !== schoolRequest) return;
+    rbStatus.textContent = 'Saved. ' + plan.desired.size + ' lessons are in the timetable and the teacher can now work in these classes and subjects.';
+    try { await loadTimetable(request); } catch { /* the timetable list refreshes on the next visit */ }
+    renderSlots();
+  } catch (error) {
+    if (request === schoolRequest) rbStatus.textContent = error.code === 'permission-denied' ? 'Not allowed. Check this person is an active teacher and the school is not suspended.' : 'Could not save. Try again.';
+  }
+});
+rbTeacher?.addEventListener('change', rbLoadTeacher);
+
 // Teacher side: every class and subject this teacher teaches, with the one chosen for this session.
 function pickTeachingSlots(primary, slots) {
   const all = [...slots];
@@ -1595,7 +1767,7 @@ function teacherName(uid) {
 }
 
 function fillTeacherSelects() {
-  for (const select of [assignmentForm.elements.namedItem('uid'), classTeacherForm.elements.namedItem('uid'), departmentForm.elements.namedItem('hodUid')]) {
+  for (const select of [assignmentForm.elements.namedItem('uid'), classTeacherForm.elements.namedItem('uid'), departmentForm.elements.namedItem('hodUid'), rbTeacher].filter(Boolean)) {
     const keep = select.value;
     select.replaceChildren();
     for (const uid of staffRoster) {
@@ -1607,6 +1779,7 @@ function fillTeacherSelects() {
     if (keep && staffRoster.includes(keep)) select.value = keep;
   }
   renderSlots();
+  rbLoadTeacher();
 }
 
 async function loadTeacherNames(members) {
@@ -4510,6 +4683,11 @@ async function loadTeacherTimetable(request, schoolRef, uid) {
     if (noticeAssignedClass) classIds.add(noticeAssignedClass);
     const slots = (await readBySlot(schoolRef, 'timetable', [...classIds]))
       .sort((a, b) => a.className.localeCompare(b.className) || slotOrder(a, b));
+    // Lessons the owner placed against this teacher in the routine builder, whichever class they are in.
+    const own = await getDocsFromServer(query(collection(schoolRef, 'timetable'), where('teacherUid', '==', uid))).then((found) => found.docs.map((record) => record.data())).catch(() => []);
+    const have = new Set(slots.map((slot) => slot.classId + '_' + slot.day + '_' + slot.period));
+    for (const lesson of own) if (!have.has(lesson.classId + '_' + lesson.day + '_' + lesson.period)) slots.push(lesson);
+    slots.sort((a, b) => a.className.localeCompare(b.className) || slotOrder(a, b));
     if (request !== schoolRequest) return;
     teacherTimetableList.replaceChildren();
     for (const slot of slots) listItem(teacherTimetableList, slot.className + ' - ' + slotText(slot));
@@ -10571,13 +10749,14 @@ function writeAudit(schoolRef, uid, action, target, docId, detail) {
 }
 
 // Session expiry: a signed-in person who does nothing for IDLE_MINUTES is signed out, with a warning two minutes before.
-const IDLE_MINUTES = 30;
+const IDLE_MINUTES = 0; // 0 = never sign out automatically (owner's choice). Set a number of minutes to bring the timeout back.
 let idleOn = false;
 let idleWarned = false;
 let idleTimer;
 let idleWarnTimer;
 let idleLast = 0;
 function idleWatch(on, throttled) {
+  if (!IDLE_MINUTES) { idleOn = false; return; }
   if (on && throttled && Date.now() - idleLast < 5000 && !idleWarned) return;
   idleOn = on;
   clearTimeout(idleTimer);
@@ -11147,6 +11326,25 @@ onAuthStateChanged(auth, async (user) => {
         if (isFirst) {
           if (left.length) batch.set(doc(schoolRef, 'teacherAssignments', uid), { className: left[0].className, subject: left[0].subject, classId: left[0].classId, subjectId: left[0].subjectId });
           else batch.delete(doc(schoolRef, 'teacherAssignments', uid));
+        }
+        await batch.commit();
+      },
+    };
+    slotTools.routine = {
+      existing: (uid) => getDocsFromServer(query(collection(schoolRef, 'timetable'), where('teacherUid', '==', uid))).then((found) => found.docs.map((record) => ({ id: record.id, data: record.data() }))),
+      all: () => getDocsFromServer(collection(schoolRef, 'timetable')).then((found) => found.docs.map((record) => ({ id: record.id, data: record.data() }))),
+      save: async ({ uid, desired, slots, remove }) => {
+        const batch = writeBatch(getFirestore(app));
+        for (const id of remove) batch.delete(doc(schoolRef, 'timetable', id));
+        for (const [id, data] of desired) batch.set(doc(schoolRef, 'timetable', id), data);
+        for (const entry of slots) {
+          batch.set(doc(schoolRef, 'teacherSlots', uid + '_' + entry.classId + '_' + entry.subjectId), { uid, classId: entry.classId, subjectId: entry.subjectId, className: entry.className, subject: entry.subject });
+          batch.set(doc(schoolRef, 'teacherClasses', uid + '_' + entry.classId), { uid, classId: entry.classId });
+        }
+        const first = await getDocFromServer(doc(schoolRef, 'teacherAssignments', uid));
+        if (slots.length && (!first.exists() || !first.data().classId)) {
+          const entry = slots[0];
+          batch.set(doc(schoolRef, 'teacherAssignments', uid), { className: entry.className, subject: entry.subject, classId: entry.classId, subjectId: entry.subjectId });
         }
         await batch.commit();
       },

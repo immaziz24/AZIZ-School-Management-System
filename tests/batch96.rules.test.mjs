@@ -151,3 +151,25 @@ test('the single older assignment can be removed by the owner only', async () =>
   await denied(remove('t1', P('teacherAssignments', 't1')), 'teacher cannot');
   await allowed(remove('owner-a', P('teacherAssignments', 't1')), 'owner can');
 });
+
+// Batch 97: the routine builder writes timetable lessons that carry the teacher's account id.
+const lesson = (extra = {}) => ({ classId: 'c5', className: 'Class 5', day: 1, period: 2, subject: 'Bengali', start: '10:00', end: '10:40', teacher: 'Jabed', ...extra });
+
+test('a timetable lesson may carry the teacher account id', async () => {
+  await allowed(set('owner-a', P('timetable', 'c5_1_2'), lesson({ teacherUid: 't1' })), 'lesson with teacherUid');
+  await allowed(set('owner-a', P('timetable', 'c5_1_3'), lesson({ period: 3 })), 'lesson without teacherUid still fine');
+});
+
+test('a timetable lesson still rejects unknown keys and an over-long teacherUid', async () => {
+  await denied(set('owner-a', P('timetable', 'c5_1_2'), lesson({ room: '12' })), 'unknown key');
+  await denied(set('owner-a', P('timetable', 'c5_1_2'), lesson({ teacherUid: 'x'.repeat(129) })), 'long teacherUid');
+});
+
+test('only the owner writes lessons; a teacher cannot', async () => {
+  await denied(set('t1', P('timetable', 'c5_1_2'), lesson({ teacherUid: 't1' })), 'teacher write');
+});
+
+test('a teacher can find their own lessons by teacherUid', async () => {
+  await allowed(set('owner-a', P('timetable', 'c5_1_2'), lesson({ teacherUid: 't1' })), 'seed');
+  assert.equal(await query('t1', A, 'timetable', [['teacherUid', 't1']]), 200);
+});

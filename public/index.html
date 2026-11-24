@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="./sign-in.css?v=batch-87">
   <style>html.booting body>main{display:none}#boot{display:none}html.booting #boot{display:grid;place-items:center;min-height:100vh;gap:14px;align-content:center;color:#9ca7c0;font:500 1rem Inter,system-ui,sans-serif}#boot i{width:34px;height:34px;border-radius:50%;border:3px solid #c9a24a44;border-top-color:#c9a24a;animation:bootspin .8s linear infinite}@keyframes bootspin{to{transform:rotate(360deg)}}html{background:#060b17}</style>
   <script>(function(){var h=document.documentElement;window.__bootDone=function(){h.classList.remove('booting')};setTimeout(window.__bootDone,6000)})();</script>
-  <link rel="modulepreload" href="./ui.mjs?v=batch-95"><link rel="modulepreload" href="./i18n.mjs?v=batch-64"><link rel="modulepreload" href="./sign-in.mjs?v=batch-96"><link rel="modulepreload" href="./platform.mjs?v=batch-95"><link rel="modulepreload" href="./firebase-client.mjs">
+  <link rel="modulepreload" href="./ui.mjs?v=batch-95"><link rel="modulepreload" href="./i18n.mjs?v=batch-64"><link rel="modulepreload" href="./sign-in.mjs?v=batch-97"><link rel="modulepreload" href="./platform.mjs?v=batch-95"><link rel="modulepreload" href="./firebase-client.mjs">
 </head>
 <body>
   <div id="boot" role="status" aria-live="polite"><i></i><span>Loading your school.</span></div>
@@ -51,6 +51,16 @@
         <p id="profile-status" role="status"></p>
       </form>
       <h3>Teacher Assignment</h3>
+      <div id="routine-builder">
+        <p>Build one teacher's day. Pick the teacher, then add a row for each period: the period, the class and the subject. Use Up and Down to rearrange, Preview to check, and Save to put it in the timetable. The teacher can then work in each class and subject you added.</p>
+        <p><label>Teacher <select id="rb-teacher"></select></label></p>
+        <p id="rb-days"></p>
+        <div id="rb-rows"></div>
+        <p><button type="button" id="rb-add">Add more</button> <button type="button" id="rb-preview-btn">Preview</button> <button type="button" id="rb-save">Save</button></p>
+        <p id="rb-status" role="status"></p>
+        <ul id="rb-preview"></ul>
+      </div>
+      <details><summary>Quick add: one class and subject without periods</summary>
       <form id="teacher-assignment">
         <p><label>Teacher <select name="uid" required></select></label></p>
         <p><label>Class and subject <select name="mappingId" required></select></label></p>
@@ -60,6 +70,7 @@
       <p><small>A teacher can teach many classes and subjects. Pick the teacher, add one class and subject, then add the next. The teacher chooses which one to work in from a dropdown on their own screen. Periods and timings are set in the Timetable module.</small></p>
       <p><strong>This teacher teaches:</strong></p>
       <ul id="assignment-list"></ul>
+      </details>
       <h3>Staff Directory</h3>
       <p id="staff-status" role="status"></p>
       <ul id="staff-list"></ul>
@@ -2203,7 +2214,7 @@
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-96');
+      await import('./sign-in.mjs?v=batch-97');
       await import('./platform.mjs?v=batch-95');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.'; window.__bootDone?.();

@@ -2506,7 +2506,7 @@ service cloud.firestore {
     }
 
     function validTimetableSlot(item) {
-      return item.keys().hasOnly(['classId', 'className', 'day', 'period', 'subject', 'start', 'end', 'teacher'])
+      return item.keys().hasOnly(['classId', 'className', 'day', 'period', 'subject', 'start', 'end', 'teacher', 'teacherUid'])
         && item.keys().hasAll(['classId', 'className', 'day', 'period', 'subject', 'start', 'end'])
         && idText(item.classId)
         && textLen(item.className, 1, 40)
@@ -2515,7 +2515,7 @@ service cloud.firestore {
         && textLen(item.subject, 1, 40)
         && item.start is string && item.start.matches('([01][0-9]|2[0-3]):[0-5][0-9]')
         && item.end is string && item.end.matches('([01][0-9]|2[0-3]):[0-5][0-9]') && item.end > item.start
-        && optText(item, 'teacher', 60);
+        && optText(item, 'teacher', 60) && optText(item, 'teacherUid', 128);
     }
 
     function validHomework(item) {
