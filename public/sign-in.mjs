@@ -8,9 +8,23 @@ import { app, PUSH_VAPID_KEY } from './firebase-client.mjs';
 
 const auth = getAuth(app);
 // The school comes from the page address (?school=green-valley); without it the original school is used.
-const SCHOOL_ID = (() => {
+// Which school is this? ?school=<id> wins. AZIZ's own address opens the demo school. Any other address (a school's own domain or
+// a subdomain the platform assigned) is looked up in domainMap, which the platform administrator fills when a domain is verified.
+const SCHOOL_ID = await (async () => {
   const wanted = new URLSearchParams(location.search).get('school') ?? '';
-  return /^[a-z][a-z0-9-]{2,29}$/.test(wanted) ? wanted : 'abcd-school';
+  if (/^[a-z][a-z0-9-]{2,29}$/.test(wanted)) return wanted;
+  const host = location.hostname.toLowerCase();
+  if (['azizschoolmanagement.plateria.in', 'www.azizschoolmanagement.plateria.in', 'localhost', '127.0.0.1'].includes(host)) return 'abcd-school';
+  try {
+    const fs = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js');
+    for (const name of [...new Set([host, host.replace(/^www\./, '')])]) {
+      try {
+        const found = await fs.getDoc(fs.doc(fs.getFirestore(app), 'domainMap', name));
+        if (found.exists() && /^[a-z][a-z0-9-]{2,29}$/.test(found.data().schoolId)) return found.data().schoolId;
+      } catch { /* no link for this name */ }
+    }
+  } catch { /* offline: fall back below */ }
+  return 'abcd-school';
 })();
 const form = document.querySelector('#sign-in');
 const signInButton = form.querySelector('button');
