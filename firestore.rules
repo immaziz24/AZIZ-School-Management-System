@@ -148,6 +148,9 @@ service cloud.firestore {
     // platformConfig/security: the platform switch requireMfa (true or false). Turn it on only after Authentication is upgraded to Identity Platform
     // and the administrator has enrolled a second factor.
     match /platformConfig/{docId} {
+      // platformConfig/retention: how long each kind of record is kept. A policy the platform publishes; deleting old records is not automatic yet.
+      allow get: if request.auth != null && docId == 'retention';
+      allow create, update: if isPlatformAdmin() && docId == 'retention' && validRetention(request.resource.data);
       allow get: if isPlatformAdmin() && docId == 'security';
       allow create, update: if isPlatformAdmin() && docId == 'security' && request.resource.data.keys().hasOnly(['requireMfa'])
         && request.resource.data.requireMfa is bool;
@@ -198,6 +201,30 @@ service cloud.firestore {
         && request.resource.data.keys().hasAll(['uid', 'at'])
         && request.resource.data.uid == request.auth.uid && request.resource.data.at == request.time
         && optText(request.resource.data, 'email', 120) && optText(request.resource.data, 'agent', 160);
+      allow update, delete: if false;
+    }
+
+    // featureCatalogue/{key}: every switchable feature, its state (live, beta, off), rollout percentage, the plans that include it and the
+    // roles that may use it. Signed-in users read it; only the platform administrator writes it.
+    match /featureCatalogue/{featureKey} {
+      allow get, list: if request.auth != null;
+      allow create, update: if isPlatformAdmin() && featureKey.matches('[a-z][a-z0-9-]{1,29}') && validFeature(request.resource.data);
+      allow delete: if isPlatformAdmin();
+    }
+
+    // siteHolds/{schoolId}: present while the platform has taken a school's public website offline. The public page reads it before showing anything.
+    match /siteHolds/{schoolId} {
+      allow get: if true;
+      allow create, update: if isPlatformAdmin() && schoolId.matches('[a-z][a-z0-9-]{2,29}') && request.resource.data.keys().hasOnly(['held']) && request.resource.data.held == true;
+      allow delete: if isPlatformAdmin();
+      allow list: if false;
+    }
+
+    // themeHistory/{id}: every published version of a marketplace theme, kept so a theme can be rolled back. Written once.
+    match /themeHistory/{historyId} {
+      allow get, list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && historyId.matches('T-[A-Za-z0-9-]{4,40}') && validThemeHistory(request.resource.data)
+        && request.resource.data.by == request.auth.uid && request.resource.data.at == request.time;
       allow update, delete: if false;
     }
 
@@ -287,8 +314,9 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid;
       allow update: if isPlatformAdmin()
         && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['name', 'contactEmail', 'phone', 'address', 'archived', 'archivedOn'])
+          .hasOnly(['name', 'contactEmail', 'phone', 'address', 'archived', 'archivedOn', 'siteHold'])
         && validProfile(request.resource.data)
+        && (!request.resource.data.keys().hasAny(['siteHold']) || request.resource.data.siteHold is bool)
         && (!request.resource.data.keys().hasAny(['archived']) || request.resource.data.archived is bool)
         && optText(request.resource.data, 'archivedOn', 10);
 
@@ -1221,6 +1249,19 @@ service cloud.firestore {
 
       // Billing and plan (features 064, 070, 072, 089, 101, 103). billing/main is written by the platform
       // administrator; the signup batch may create the first trial record. School owners and principals read it.
+      // Per-school feature overrides and the computed entitlements the school's app reads (Batch 78). Platform administrator writes; members read.
+      match /featureOverrides/{featureKey} {
+        allow get, list: if request.auth != null && (isActiveMember(schoolId) || isPlatformAdmin());
+        allow create, update: if isPlatformAdmin() && featureKey.matches('[a-z][a-z0-9-]{1,29}')
+          && request.resource.data.keys().hasOnly(['mode']) && request.resource.data.mode in ['on', 'off'];
+        allow delete: if isPlatformAdmin();
+      }
+      match /entitlements/{docId} {
+        allow get: if request.auth != null && docId == 'main' && (isActiveMember(schoolId) || isPlatformAdmin());
+        allow create, update: if isPlatformAdmin() && docId == 'main' && validEntitlements(request.resource.data) && request.resource.data.at == request.time;
+        allow delete: if false;
+      }
+
       // Messages from the platform (Batch 77): one copy per school, so delivery and reading can be tracked. The owner may only mark one read.
       match /platformInbox/{messageId} {
         allow get, list: if request.auth != null && (isOwnerRole(schoolId) || isPlatformAdmin());
@@ -1266,6 +1307,10 @@ service cloud.firestore {
         allow create: if ownerAuth(schoolId) && requestId.matches('[A-Za-z0-9-]{1,30}')
           && validDomainRequest(request.resource.data) && request.resource.data.status == 'requested'
           && !request.resource.data.keys().hasAny(['dnsTarget', 'checkedOn', 'ssl']);
+        // The super administrator assigns a subdomain of the platform's own address (SD- ids), already verified.
+        allow create: if isPlatformAdmin() && requestId.matches('SD-[A-Za-z0-9-]{1,27}') && validDomainRequest(request.resource.data)
+          && request.resource.data.status == 'verified'
+          && request.resource.data.domain.matches('[a-z][a-z0-9-]{2,29}[.]azizschoolmanagement[.]plateria[.]in');
         allow update: if isPlatformAdmin() && validDomainRequest(request.resource.data)
           && request.resource.data.domain == resource.data.domain;
       }
@@ -2850,7 +2895,7 @@ service cloud.firestore {
 
     function validBilling(item) {
       return item.keys().hasOnly(['plan', 'status', 'trialEnds', 'graceDays', 'studentLimit', 'staffLimit', 'storageMb',
-          'monthlyPrice', 'renewsOn', 'legalHold', 'autoBilling', 'note', 'startedOn'])
+          'monthlyPrice', 'renewsOn', 'legalHold', 'autoBilling', 'note', 'startedOn', 'storageCheckedMb', 'storageCheckedOn'])
         && item.keys().hasAll(['plan', 'status'])
         && item.plan is string && item.plan.matches('[a-z][a-z0-9-]{1,29}')
         && item.status in ['trial', 'active', 'suspended', 'cancelled', 'pending']
@@ -2864,6 +2909,8 @@ service cloud.firestore {
         && (!item.keys().hasAny(['legalHold']) || item.legalHold is bool)
         && (!item.keys().hasAny(['autoBilling']) || item.autoBilling is bool)
         && (!item.keys().hasAny(['startedOn']) || dateText(item.startedOn))
+        && (!item.keys().hasAny(['storageCheckedMb']) || intIn(item.storageCheckedMb, 0, 100000000))
+        && (!item.keys().hasAny(['storageCheckedOn']) || dateText(item.storageCheckedOn))
         && optText(item, 'note', 200);
     }
 
@@ -2967,6 +3014,45 @@ service cloud.firestore {
         && textLen(g.reason, 10, 300)
         && g.auditId is string && g.auditId.matches('A-[A-Za-z0-9-]{4,40}')
         && g.expiresAt is timestamp;
+    }
+
+    function isActiveMember(schoolId) {
+      let path = /databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid);
+      return exists(path) && get(path).data.active == true;
+    }
+
+    function validRetention(r) {
+      return r.keys().hasOnly(['selfieDays', 'visitorDays', 'messageDays', 'archivedSchoolDays'])
+        && r.keys().hasAll(['selfieDays', 'visitorDays', 'messageDays', 'archivedSchoolDays'])
+        && intIn(r.selfieDays, 1, 3650) && intIn(r.visitorDays, 1, 3650) && intIn(r.messageDays, 1, 3650) && intIn(r.archivedSchoolDays, 30, 3650);
+    }
+
+    function validFeature(f) {
+      return f.keys().hasOnly(['label', 'description', 'state', 'rollout', 'plans', 'roles'])
+        && f.keys().hasAll(['label', 'state', 'rollout', 'plans', 'roles'])
+        && textLen(f.label, 2, 60) && optText(f, 'description', 300)
+        && f.state in ['live', 'beta', 'off']
+        && intIn(f.rollout, 0, 100)
+        && f.plans is list && f.plans.size() <= 30
+        && f.roles is list && f.roles.size() <= 8;
+    }
+
+    function validEntitlements(e) {
+      return e.keys().hasOnly(['off', 'beta', 'roles', 'at'])
+        && e.keys().hasAll(['off', 'beta', 'roles', 'at'])
+        && e.off is list && e.off.size() <= 80
+        && e.beta is list && e.beta.size() <= 80
+        && e.roles is map && e.roles.size() <= 80;
+    }
+
+    function validThemeHistory(t) {
+      return t.keys().hasOnly(['themeKey', 'label', 'navy', 'ivory', 'gold', 'premium', 'version', 'removed', 'by', 'at'])
+        && t.keys().hasAll(['themeKey', 'label', 'navy', 'ivory', 'gold', 'premium', 'version', 'by', 'at'])
+        && t.themeKey is string && t.themeKey.matches('mk-[a-z0-9]{3,12}')
+        && textLen(t.label, 1, 40)
+        && t.navy is string && t.navy.matches('#[0-9a-fA-F]{6}') && t.ivory is string && t.ivory.matches('#[0-9a-fA-F]{6}') && t.gold is string && t.gold.matches('#[0-9a-fA-F]{6}')
+        && t.premium is bool && intIn(t.version, 1, 10000)
+        && (!t.keys().hasAny(['removed']) || t.removed is bool);
     }
 
     function validInvoicePayment(p) {

@@ -284,7 +284,10 @@ async function viewSchool(id) {
     h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => guarded(async () => { if (await applyPlan(school)) await refresh(); }) }, 'Change plan'),
       statusOf(school) === 'active' ? null : h('button', { class: 'btn', onclick: () => guarded(async () => { if (await setStatus(school, 'active')) await refresh(); }) }, 'Activate'),
       ['active', 'trial'].includes(statusOf(school)) ? h('button', { class: 'btn red', onclick: () => guarded(async () => { if (await setStatus(school, 'suspended')) await refresh(); }) }, 'Suspend') : null,
-      school.archived ? null : h('button', { class: 'btn red', onclick: () => guarded(async () => { if (await archiveSchool(school)) await refresh(); }) }, 'Archive')));
+      school.archived ? null : h('button', { class: 'btn red', onclick: () => guarded(async () => { if (await archiveSchool(school)) await refresh(); }) }, 'Archive')),
+    h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await assignSubdomain(school)) await refresh(); }) }, 'Assign subdomain'),
+      h('a', { class: 'btn sm', href: '/school?school=' + encodeURIComponent(school.id), target: '_blank', rel: 'noopener' }, 'Preview public site'),
+      h('button', { class: 'btn sm ' + (school.siteHold ? '' : 'red'), onclick: () => guarded(async () => { if (await setSiteHold(school, !school.siteHold)) await refresh(); }) }, school.siteHold ? 'Put website online' : 'Take website offline')));
 
   const usage = school.usage || {};
   const usageCard = h('div', { class: 'card' }, h('h3', {}, 'Usage'),
@@ -310,7 +313,7 @@ async function viewSchool(id) {
   const invoicesCard = h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'flex:1' }, 'Invoices'),
     h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await createInvoice(school)) await refresh(); }) }, 'Create invoice')),
     invoiceTable(mine, false, refresh));
-  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), ownersCard, h('div', { style: 'height:14px' }), invoicesCard);
+  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), ownersCard, h('div', { style: 'height:14px' }), invoicesCard, h('div', { style: 'height:14px' }), await schoolFeaturesCard(school));
 }
 
 async function lastLogin(uid) {
@@ -372,6 +375,7 @@ async function applyPlan(school) {
   if (school.billing) batch.update(ref, fields); else batch.set(ref, { ...fields, status: 'active' });
   audit(batch, 'change-plan', school.id, v.reason, JSON.stringify({ before: school.billing ? school.billing.plan : null, after: plan.id }));
   await batch.commit();
+  try { await publishEntitlements([school], await loadCatalogue()); } catch { /* the plan change stands; Apply to all schools fixes it */ }
   toast('Plan applied.');
   return true;
 }
@@ -925,6 +929,407 @@ async function viewTrials() {
     h('div', { style: 'height:14px' }), cards.length ? h('div', { class: 'two' }, cards) : h('div', { class: 'empty' }, 'No school is on trial right now.'));
 }
 
+// ---------- Mark 3: domains, themes, feature access, storage (Batch 78) ----------
+const BASE_DOMAIN = 'azizschoolmanagement.plateria.in';
+const SEEDS = [
+  ['website', 'Public website', 'The school\'s public website pages and enquiries.'], ['finance', 'Finance', 'Fees, payroll, expenses, concessions, sales, vendors and defaulters.'],
+  ['library', 'Library', 'Library books and lending.'], ['transport', 'Transport', 'Routes and riders.'],
+  ['portal', 'Parent and student portal', 'Parent and student sign-in.'], ['premium-themes', 'Premium themes', 'Marketplace themes marked premium.']];
+const ROLE_NAMES = ['owner', 'principal', 'teacher', 'accountant', 'student', 'parent'];
+const csv = (text) => String(text || '').split(',').map((t) => t.trim()).filter(Boolean);
+
+// A DNS and HTTPS check from the browser (Google's public DNS-over-HTTPS), the same one the older panel uses.
+async function checkDomain(domain) {
+  const result = { dns: [], https: false };
+  for (const type of ['CNAME', 'A']) {
+    try {
+      const answer = await (await fetch('https://dns.google/resolve?name=' + encodeURIComponent(domain) + '&type=' + type)).json();
+      for (const record of answer.Answer || []) if (record.type === (type === 'A' ? 1 : 5)) result.dns.push(type + ' ' + String(record.data).replace(/\.$/, ''));
+    } catch { /* the other lookup may still work */ }
+  }
+  try { await fetch('https://' + domain + '/robots.txt', { mode: 'no-cors', cache: 'no-store' }); result.https = true; } catch { /* no secure page yet */ }
+  return result;
+}
+async function loadDomainRequests() {
+  await loadSchools();
+  const rows = [];
+  await pool(S.schools, 12, async (school) => {
+    const snap = await getDocs(collection(db, 'schools', school.id, 'domainRequests')).catch(() => null);
+    for (const d of snap ? snap.docs : []) rows.push({ school, id: d.id, ...d.data() });
+  });
+  return rows.sort((a, b) => String(b.createdOn).localeCompare(String(a.createdOn)));
+}
+async function setDomainState(row, changes, action, detail) {
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'schools', row.school.id, 'domainRequests', row.id), changes);
+  audit(batch, action, row.school.id, '', detail || JSON.stringify({ domain: row.domain, ...changes }));
+  return batch;
+}
+async function verifyAndPublish(row) {
+  const mapRef = doc(db, 'domainMap', row.domain);
+  const linked = await getDoc(mapRef);
+  if (linked.exists() && linked.data().schoolId !== row.school.id) { toast('That address is already linked to another school.'); return false; }
+  if (!confirm('Publish ' + row.domain + ' as the school\'s address? Visitors will see the school website there.')) return false;
+  const batch = await setDomainState(row, { status: 'verified', ssl: 'active', checkedOn: today() }, 'domain-publish');
+  batch.set(mapRef, { schoolId: row.school.id, verifiedOn: today() });
+  await batch.commit();
+  toast(row.domain + ' is published.');
+  return true;
+}
+async function unpublishDomain(row) {
+  if (!confirm('Take ' + row.domain + ' offline? The school website stops opening at that address.')) return false;
+  const batch = await setDomainState(row, { status: 'dns-pending' }, 'domain-unpublish');
+  batch.delete(doc(db, 'domainMap', row.domain));
+  await batch.commit();
+  toast(row.domain + ' is offline.');
+  return true;
+}
+function previewLinks(row) {
+  return h('span', {}, h('a', { href: '/school?school=' + encodeURIComponent(row.school.id), target: '_blank', rel: 'noopener' }, 'Preview site'),
+    row.status === 'verified' ? [' | ', h('a', { href: 'https://' + row.domain, target: '_blank', rel: 'noopener' }, 'Open live')] : null);
+}
+async function assignSubdomain(school) {
+  const v = await formDialog({ title: 'Assign a subdomain to ' + school.name, ok: 'Assign',
+    note: 'The address becomes LABEL.' + BASE_DOMAIN + '. It only opens once a wildcard DNS record (* pointing to the site) exists at Hostinger.',
+    fields: [{ key: 'label', label: 'Subdomain label', required: true, value: school.id, pattern: /^[a-z][a-z0-9-]{2,29}$/, patternText: 'Use 3 to 30 lowercase letters, numbers or dashes.' }] });
+  if (!v) return false;
+  if (['www', 'admin', 'api', 'app', 'mail', 'ftp', 'support'].includes(v.label)) { toast('That label is reserved.'); return false; }
+  const host = v.label + '.' + BASE_DOMAIN;
+  const taken = await getDocFromServer(doc(db, 'domainMap', host)).then((d) => d.exists() && d.data().schoolId !== school.id);
+  if (taken) { toast('That subdomain belongs to another school.'); return false; }
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'domainMap', host), { schoolId: school.id, verifiedOn: today() });
+  batch.set(doc(db, 'schools', school.id, 'domainRequests', newId('SD-')), { domain: host, status: 'verified', createdOn: today(), ssl: 'pending', dnsTarget: 'Wildcard record * at ' + BASE_DOMAIN, note: 'subdomain' });
+  audit(batch, 'assign-subdomain', school.id, '', host);
+  await batch.commit();
+  toast(host + ' assigned.');
+  return true;
+}
+async function setSiteHold(school, hold) {
+  const v = await formDialog({ title: (hold ? 'Take the public website offline: ' : 'Put the public website back online: ') + school.name, ok: hold ? 'Take offline' : 'Put online', fields: [REASON] });
+  if (!v) return false;
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'schools', school.id), { siteHold: hold });
+  if (hold) batch.set(doc(db, 'siteHolds', school.id), { held: true }); else batch.delete(doc(db, 'siteHolds', school.id));
+  audit(batch, hold ? 'site-offline' : 'site-online', school.id, v.reason, '');
+  await batch.commit();
+  toast(hold ? 'Website taken offline.' : 'Website is online again.');
+  return true;
+}
+async function viewDomains() {
+  setCrumbs('Domains and website');
+  view().replaceChildren(loading('Loading domain requests.'));
+  const rows = await loadDomainRequests();
+  const refresh = async () => { await loadSchools(true); await viewDomains(); };
+  const body = rows.map((row) => h('tr', {},
+    h('td', {}, h('b', {}, row.domain), h('div', { class: 'muted' }, row.dnsTarget || 'No DNS target set')),
+    h('td', {}, h('a', { href: '#/school/' + row.school.id }, row.school.name)),
+    h('td', {}, h('span', { class: 'pill ' + (row.status === 'verified' ? 'ok' : row.status === 'rejected' ? 'bad' : 'warn') }, row.status)),
+    h('td', {}, h('span', { class: 'pill ' + (row.ssl === 'active' ? 'ok' : 'warn') }, row.ssl || 'none')),
+    h('td', { class: 'muted' }, row.checkedOn || '-'), h('td', {}, previewLinks(row)),
+    h('td', {}, h('div', { class: 'row' },
+      h('button', { class: 'btn sm', onclick: () => guarded(async () => {
+        const r = await checkDomain(row.domain);
+        const batch = await setDomainState(row, { checkedOn: today(), ssl: r.https ? 'active' : 'pending' }, 'domain-check', JSON.stringify({ domain: row.domain, dns: r.dns, https: r.https }));
+        await batch.commit();
+        toast(row.domain + ': DNS ' + (r.dns.length ? r.dns.join(', ') : 'no record yet') + '. HTTPS ' + (r.https ? 'works.' : 'not working yet.'));
+        await refresh();
+      }) }, 'Check DNS and SSL'),
+      h('button', { class: 'btn sm', onclick: () => guarded(async () => {
+        const v = await formDialog({ title: 'What should ' + row.school.name + ' set at its domain provider?', ok: 'Save',
+          fields: [{ key: 'target', label: 'DNS instruction', required: true, value: row.dnsTarget || 'CNAME to ' + BASE_DOMAIN }] });
+        if (!v) return;
+        await (await setDomainState(row, { dnsTarget: v.target.slice(0, 100), status: 'dns-pending', ssl: 'pending' }, 'domain-dns-target')).commit();
+        toast('DNS instruction saved.'); await refresh();
+      }) }, 'Set DNS target'),
+      row.status !== 'verified' ? h('button', { class: 'btn sm gold', onclick: () => guarded(async () => { if (await verifyAndPublish(row)) await refresh(); }) }, 'Verify and publish')
+        : h('button', { class: 'btn sm red', onclick: () => guarded(async () => { if (await unpublishDomain(row)) await refresh(); }) }, 'Unpublish'),
+      row.status !== 'rejected' && row.status !== 'verified' ? h('button', { class: 'btn sm red', onclick: () => guarded(async () => { await (await setDomainState(row, { status: 'rejected' }, 'domain-reject')).commit(); toast('Rejected.'); await refresh(); }) }, 'Reject') : null))));
+  view().replaceChildren(
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Domains and website'),
+      h('button', { class: 'btn gold', onclick: () => guarded(async () => {
+        const v = await formDialog({ title: 'Assign a subdomain', ok: 'Continue', fields: [{ key: 'school', label: 'School', type: 'select', options: S.schools.filter((s) => !s.archived).map((s) => [s.id, s.name]) }] });
+        if (v && await assignSubdomain(S.schools.find((s) => s.id === v.school))) await refresh();
+      }) }, 'Assign a subdomain')),
+    h('p', { class: 'muted' }, 'Schools ask for a domain from their own dashboard. You set the DNS instruction, check it, then verify and publish. Subdomains of ' + BASE_DOMAIN + ' need a wildcard DNS record at Hostinger before they open.'),
+    rows.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Address', 'School', 'Status', 'SSL', 'Last checked', 'Preview', ''].map((t) => h('th', {}, t)))), h('tbody', {}, body)))
+      : h('div', { class: 'empty' }, 'No domain requests yet.'));
+}
+
+// ---------- themes ----------
+const swatch = (t) => h('span', { style: 'display:inline-flex;gap:3px;vertical-align:middle' }, [t.navy, t.ivory, t.gold].map((c) => h('i', { style: 'width:18px;height:18px;border-radius:4px;border:1px solid #888;background:' + c })));
+function previewDialog(t) {
+  return new Promise((resolve) => {
+    const card = h('div', { style: 'border-radius:10px;overflow:hidden;border:1px solid #888;margin:10px 0' },
+      h('div', { style: 'background:' + t.navy + ';color:' + t.ivory + ';padding:14px;font-weight:700' }, 'Sample School  ', h('span', { style: 'color:' + t.gold + ';font-weight:400' }, 'Admissions open')),
+      h('div', { style: 'background:' + t.ivory + ';color:' + t.navy + ';padding:14px' }, 'Welcome to the school website. ', h('b', { style: 'color:' + t.gold }, 'Highlights look like this.')));
+    const dlg = h('dialog', { class: 'dlg' }, h('h3', {}, 'Preview: ' + t.label), card,
+      h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: () => { dlg.close(); dlg.remove(); resolve(false); } }, 'Back'), h('button', { class: 'btn gold', onclick: () => { dlg.close(); dlg.remove(); resolve(true); } }, 'Publish this')));
+    document.body.append(dlg); dlg.showModal();
+  });
+}
+async function readThemes() {
+  const found = await getDoc(doc(db, 'platformConfig', 'marketplace')).catch(() => null);
+  return found && found.exists() ? (found.data().items || []) : [];
+}
+// items: the new marketplace list. entry: the history record. Both are written with an audit entry in one batch.
+async function writeThemes(items, entry, action, reason) {
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'platformConfig', 'marketplace'), { items });
+  batch.set(doc(db, 'themeHistory', newId('T-')), { themeKey: entry.key, label: entry.label, navy: entry.navy, ivory: entry.ivory, gold: entry.gold, premium: Boolean(entry.premium), version: entry.version, ...(entry.removed ? { removed: true } : {}), by: S.user.uid, at: serverTimestamp() });
+  audit(batch, action, '', reason || '', JSON.stringify({ theme: entry.key, label: entry.label, version: entry.version }));
+  await batch.commit();
+}
+async function editTheme(theme) {
+  const items = await readThemes();
+  if (!theme && items.length >= 12) { toast('Remove a theme first. Twelve is the limit.'); return false; }
+  const v = await formDialog({ title: theme ? 'Update theme ' + theme.label : 'New marketplace theme', ok: 'Preview',
+    fields: [{ key: 'label', label: 'Theme name', required: true, value: theme ? theme.label : '' },
+      { key: 'navy', label: 'Main colour', type: 'color', value: theme ? theme.navy : '#0b1f3a' }, { key: 'ivory', label: 'Background colour', type: 'color', value: theme ? theme.ivory : '#f6efdc' },
+      { key: 'gold', label: 'Accent colour', type: 'color', value: theme ? theme.gold : '#c9a24b' },
+      { key: 'premium', label: 'Premium (only schools whose plan includes Premium themes see it)', type: 'checkbox', value: theme ? theme.premium === true : false }] });
+  if (!v) return false;
+  const entry = { key: theme ? theme.key : 'mk-' + Math.random().toString(36).slice(2, 8), label: v.label.slice(0, 40), navy: v.navy, ivory: v.ivory, gold: v.gold, premium: v.premium, version: theme ? (Number(theme.version) || 1) + 1 : 1 };
+  if (!(await previewDialog(entry))) return false;
+  const next = theme ? items.map((i) => (i.key === theme.key ? entry : i)) : [...items, entry];
+  await writeThemes(next, entry, theme ? 'theme-update' : 'theme-publish');
+  toast('Theme published (version ' + entry.version + ').');
+  return true;
+}
+async function themeHistoryDialog(theme) {
+  const snap = await getDocs(query(collection(db, 'themeHistory'), where('themeKey', '==', theme.key)));
+  const rows = snap.docs.map((d) => d.data()).sort((a, b) => b.version - a.version);
+  const dlg = h('dialog', { class: 'dlg' }, h('h3', {}, 'Versions of ' + theme.label),
+    h('table', {}, h('thead', {}, h('tr', {}, ['Version', 'When', 'Colours', 'Premium', ''].map((t) => h('th', {}, t)))),
+      h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, 'v' + r.version + (r.removed ? ' (removed)' : '')), h('td', {}, when(r.at)), h('td', {}, swatch(r)), h('td', {}, r.premium ? 'Yes' : 'No'),
+        h('td', {}, r.removed ? null : h('button', { class: 'btn sm', onclick: () => guarded(async () => {
+          if (!confirm('Roll ' + theme.label + ' back to version ' + r.version + '? Schools see it at once.')) return;
+          const items = await readThemes();
+          const entry = { key: theme.key, label: r.label, navy: r.navy, ivory: r.ivory, gold: r.gold, premium: r.premium, version: Math.max(...rows.map((x) => x.version)) + 1 };
+          await writeThemes(items.map((i) => (i.key === theme.key ? entry : i)), entry, 'theme-rollback', 'rolled back to v' + r.version);
+          dlg.close(); dlg.remove(); toast('Rolled back as version ' + entry.version + '.'); await viewThemes();
+        }) }, 'Roll back to this')))))),
+    h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: () => { dlg.close(); dlg.remove(); } }, 'Close')));
+  document.body.append(dlg); dlg.showModal();
+}
+async function viewThemes() {
+  setCrumbs('Themes');
+  view().replaceChildren(loading('Loading themes.'));
+  const items = await readThemes();
+  const rows = items.map((t) => h('tr', {}, h('td', {}, h('b', {}, t.label), h('div', { class: 'muted' }, t.key)), h('td', {}, swatch(t)),
+    h('td', {}, t.premium ? h('span', { class: 'pill warn' }, 'Premium') : 'Free'), h('td', {}, 'v' + (t.version || 1)),
+    h('td', {}, h('div', { class: 'row' },
+      h('button', { class: 'btn sm', onclick: () => guarded(async () => { await previewDialog(t); }) }, 'Preview'),
+      h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await editTheme(t)) await viewThemes(); }) }, 'Update'),
+      h('button', { class: 'btn sm', onclick: () => guarded(() => themeHistoryDialog(t)) }, 'Versions and rollback'),
+      h('button', { class: 'btn sm red', onclick: () => guarded(async () => {
+        if (!confirm('Remove ' + t.label + ' from the marketplace? Schools already using it keep their saved colours.')) return;
+        await writeThemes(items.filter((i) => i.key !== t.key), { ...t, version: (Number(t.version) || 1) + 1, removed: true }, 'theme-remove');
+        toast('Theme removed.'); await viewThemes();
+      }) }, 'Remove')))));
+  view().replaceChildren(
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Themes'), h('button', { class: 'btn gold', onclick: () => guarded(async () => { if (await editTheme(null)) await viewThemes(); }) }, 'New theme')),
+    h('p', { class: 'muted' }, 'Marketplace themes appear in each school owner\'s theme gallery. Every publish and update keeps a version, so you can roll back. Premium themes need the "Premium themes" feature on the school\'s plan.'),
+    rows.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Theme', 'Colours', 'Type', 'Version', ''].map((t) => h('th', {}, t)))), h('tbody', {}, rows))) : h('div', { class: 'empty' }, 'No marketplace themes yet.'));
+}
+
+// ---------- feature access ----------
+const rollNum = (id) => [...id].reduce((t, ch) => (t * 31 + ch.charCodeAt(0)) % 100, 7);
+async function loadCatalogue() {
+  const snap = await getDocs(collection(db, 'featureCatalogue'));
+  S.features = snap.docs.map((d) => ({ key: d.id, ...d.data() })).sort((a, b) => a.label.localeCompare(b.label));
+  return S.features;
+}
+function computeEntitlements(school, features, overrides) {
+  const off = []; const beta = []; const roles = {};
+  const plan = school.billing ? school.billing.plan : '';
+  for (const f of features) {
+    const ov = overrides[f.key];
+    let on;
+    if (f.state === 'off') on = false;
+    else if (ov === 'off') on = false;
+    else if (ov === 'on') on = true;
+    else if (f.state === 'beta') on = false;
+    else if (f.plans.length && !f.plans.includes(plan)) on = false;
+    else if (f.rollout < 100 && rollNum(school.id) >= f.rollout) on = false;
+    else on = true;
+    if (!on) off.push(f.key);
+    if (f.state === 'beta') beta.push(f.key);
+    if (f.roles.length) roles[f.key] = f.roles;
+  }
+  return { off, beta, roles };
+}
+async function overridesOf(schoolId) {
+  const snap = await getDocs(collection(db, 'schools', schoolId, 'featureOverrides')).catch(() => null);
+  const map = {}; for (const d of snap ? snap.docs : []) map[d.id] = d.data().mode;
+  return map;
+}
+// Recomputes and saves the entitlements of the given schools (50 per batch).
+async function publishEntitlements(schoolList, features) {
+  const computed = [];
+  await pool(schoolList, 10, async (school) => { computed.push([school, computeEntitlements(school, features, await overridesOf(school.id))]); });
+  for (let i = 0; i < computed.length; i += 50) {
+    const batch = writeBatch(db);
+    for (const [school, e] of computed.slice(i, i + 50)) batch.set(doc(db, 'schools', school.id, 'entitlements', 'main'), { ...e, at: serverTimestamp() });
+    await batch.commit();
+  }
+  return computed.length;
+}
+async function afterFeatureChange(note) {
+  await loadSchools();
+  const features = await loadCatalogue();
+  const live = S.schools.filter((s) => !s.archived);
+  const count = await publishEntitlements(live, features);
+  const batch = writeBatch(db);
+  audit(batch, 'feature-apply', '', '', note + ' (applied to ' + count + ' schools)');
+  await batch.commit();
+  return count;
+}
+async function editFeature(f) {
+  await loadPlans();
+  const v = await formDialog({ title: f ? 'Edit feature ' + f.label : 'New feature', ok: 'Save and apply',
+    note: 'Only features wired into the app (website, finance, library, transport, portal, premium themes) change what schools see. New keys are recorded for later.',
+    fields: [
+      { key: 'key', label: 'Key (lowercase, fixed once created)', required: true, value: f ? f.key : '', readonly: Boolean(f), pattern: /^[a-z][a-z0-9-]{1,29}$/, patternText: 'Use 2 to 30 lowercase letters, numbers or dashes.' },
+      { key: 'label', label: 'Name', required: true, value: f ? f.label : '' },
+      { key: 'description', label: 'Description (optional)', value: f ? f.description || '' : '' },
+      { key: 'state', label: 'State', type: 'select', options: [['live', 'Live for everyone it applies to'], ['beta', 'Beta (only schools you grant access)'], ['off', 'Off for every school']], value: f ? f.state : 'live' },
+      { key: 'rollout', label: 'Gradual rollout, percent of schools (100 = all)', type: 'number', required: true, value: f ? f.rollout : 100 },
+      { key: 'plans', label: 'Plans that include it, comma separated (empty = every plan). Plan IDs: trial, ' + S.plans.map((p) => p.id).join(', '), value: f ? f.plans.join(', ') : '' },
+      { key: 'roles', label: 'Roles allowed to use it, comma separated from ' + ROLE_NAMES.join(', ') + ' (empty = all)', value: f ? f.roles.join(', ') : '' }],
+  });
+  if (!v) return false;
+  if (v.rollout > 100) { toast('Rollout is a percent from 0 to 100.'); return false; }
+  const roles = csv(v.roles).filter((r) => ROLE_NAMES.includes(r));
+  const data = { label: v.label.slice(0, 60), ...(v.description ? { description: v.description.slice(0, 300) } : {}), state: v.state, rollout: v.rollout, plans: csv(v.plans).slice(0, 30), roles };
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'featureCatalogue', v.key), data);
+  audit(batch, f ? 'feature-edit' : 'feature-create', '', '', JSON.stringify({ key: v.key, before: f ? { state: f.state, rollout: f.rollout, plans: f.plans, roles: f.roles } : null, after: { state: data.state, rollout: data.rollout, plans: data.plans, roles } }));
+  await batch.commit();
+  const n = await afterFeatureChange('saved ' + v.key);
+  toast('Saved and applied to ' + n + ' school(s).');
+  return true;
+}
+async function featureHistoryDialog() {
+  const snap = await getDocs(query(collection(db, 'platformAudit'), where('action', '>=', 'feature-'), where('action', '<=', 'feature-~'), limit(200)));
+  const rows = snap.docs.map((d) => d.data()).sort((a, b) => (b.at && a.at ? b.at.toMillis() - a.at.toMillis() : 0));
+  const dlg = h('dialog', { class: 'dlg' }, h('h3', {}, 'Feature change history'),
+    rows.length ? h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Who', 'Action', 'School', 'Detail'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, when(r.at)), h('td', {}, r.actorEmail || ''), h('td', {}, r.action), h('td', {}, r.schoolId || 'all'), h('td', { class: 'muted', style: 'word-break:break-word;max-width:320px' }, r.detail || ''))))) : h('div', { class: 'empty' }, 'No changes yet.'),
+    h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: () => { dlg.close(); dlg.remove(); } }, 'Close')));
+  document.body.append(dlg); dlg.showModal();
+}
+async function viewFeatures() {
+  setCrumbs('Feature access');
+  view().replaceChildren(loading('Loading the feature catalogue.'));
+  await Promise.all([loadSchools(), loadPlans()]);
+  const features = await loadCatalogue();
+  const refresh = () => viewFeatures();
+  const rows = features.map((f) => h('tr', {},
+    h('td', {}, h('b', {}, f.label), h('div', { class: 'muted' }, f.key + (f.description ? ' - ' + f.description : ''))),
+    h('td', {}, h('span', { class: 'pill ' + (f.state === 'live' ? 'ok' : f.state === 'beta' ? 'warn' : 'bad') }, f.state)),
+    h('td', {}, f.rollout + '%'), h('td', { class: 'muted' }, f.plans.length ? f.plans.join(', ') : 'Every plan'), h('td', { class: 'muted' }, f.roles.length ? f.roles.join(', ') : 'All roles'),
+    h('td', {}, h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await editFeature(f)) await refresh(); }) }, 'Edit'),
+      h('button', { class: 'btn sm red', onclick: () => guarded(async () => {
+        if (!confirm('Remove ' + f.label + ' from the catalogue? Every school gets it back, unless another switch hides it.')) return;
+        const batch = writeBatch(db); batch.delete(doc(db, 'featureCatalogue', f.key)); audit(batch, 'feature-delete', '', '', f.key); await batch.commit();
+        await afterFeatureChange('deleted ' + f.key); await refresh();
+      }) }, 'Remove')))));
+  view().replaceChildren(
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Feature access'),
+      h('button', { class: 'btn', onclick: () => guarded(() => featureHistoryDialog()) }, 'Change history'),
+      h('button', { class: 'btn', onclick: () => guarded(async () => { const n = await afterFeatureChange('manual recompute'); toast('Applied to ' + n + ' school(s).'); }) }, 'Apply to all schools'),
+      h('button', { class: 'btn gold', onclick: () => guarded(async () => { if (await editFeature(null)) await refresh(); }) }, 'New feature')),
+    h('p', { class: 'muted' }, 'The catalogue decides what each school sees: by plan, by rollout percentage, by beta access, by role, and per school (open a school to override). This hides modules in the app; it does not yet block the underlying records.'),
+    features.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Feature', 'State', 'Rollout', 'Plans', 'Roles', ''].map((t) => h('th', {}, t)))), h('tbody', {}, rows)))
+      : h('div', { class: 'card' }, h('div', { class: 'empty' }, 'The catalogue is empty.'), h('div', { class: 'row end' }, h('button', { class: 'btn gold', onclick: () => guarded(async () => {
+        const batch = writeBatch(db);
+        for (const [key, label, description] of SEEDS) batch.set(doc(db, 'featureCatalogue', key), { label, description, state: 'live', rollout: 100, plans: [], roles: [] });
+        audit(batch, 'feature-seed', '', '', SEEDS.map((x) => x[0]).join(', ')); await batch.commit();
+        await afterFeatureChange('seeded standard features'); await refresh();
+      }) }, 'Add the standard features'))));
+}
+// Per-school overrides, shown on the school page.
+async function schoolFeaturesCard(school) {
+  const features = await loadCatalogue();
+  const ov = await overridesOf(school.id);
+  const ent = computeEntitlements(school, features, ov);
+  const rows = features.map((f) => {
+    const select = h('select', {}, [['', 'Follow the catalogue'], ['on', 'Always on'], ['off', 'Always off']].map(([v, t]) => h('option', { value: v }, t)));
+    select.value = ov[f.key] || '';
+    select.addEventListener('change', () => guarded(async () => {
+      const batch = writeBatch(db);
+      if (select.value) batch.set(doc(db, 'schools', school.id, 'featureOverrides', f.key), { mode: select.value }); else batch.delete(doc(db, 'schools', school.id, 'featureOverrides', f.key));
+      audit(batch, 'feature-override', school.id, '', JSON.stringify({ feature: f.key, mode: select.value || 'catalogue' }));
+      await batch.commit();
+      ov[f.key] = select.value;
+      await publishEntitlements([school], features);
+      toast('Saved for ' + school.name + '.');
+    }));
+    const isOn = !ent.off.includes(f.key);
+    return h('tr', {}, h('td', {}, f.label, f.state === 'beta' ? h('span', { class: 'pill warn', style: 'margin-left:6px' }, 'beta') : null), h('td', {}, h('span', { class: 'pill ' + (isOn ? 'ok' : 'bad') }, isOn ? 'on' : 'off')), h('td', {}, select));
+  });
+  return h('div', { class: 'card' }, h('h3', {}, 'Feature access for this school'),
+    features.length ? h('table', {}, h('thead', {}, h('tr', {}, ['Feature', 'Now', 'Override'].map((t) => h('th', {}, t)))), h('tbody', {}, rows))
+      : h('div', { class: 'empty' }, 'No features in the catalogue yet. Open Feature access first.'),
+    h('p', { class: 'muted' }, 'Beta features are off for everyone until you choose "Always on" for a school.'));
+}
+
+// ---------- storage ----------
+const effectiveMb = (s) => Math.max(Number(s.usage && s.usage.storageMb) || 0, Number(s.billing && s.billing.storageCheckedMb) || 0);
+async function viewStorage() {
+  setCrumbs('Storage');
+  view().replaceChildren(loading('Loading storage use.'));
+  await loadSchools();
+  const retentionSnap = await getDoc(doc(db, 'platformConfig', 'retention')).catch(() => null);
+  const retention = retentionSnap && retentionSnap.exists() ? retentionSnap.data() : { selfieDays: 365, visitorDays: 365, messageDays: 730, archivedSchoolDays: 365 };
+  const refresh = async () => { await loadSchools(true); await viewStorage(); };
+  const live = S.schools.filter((s) => !s.archived && s.billing).map((s) => ({ s, used: effectiveMb(s), limit: Number(s.billing.storageMb) || 0 }))
+    .map((r) => ({ ...r, pct: r.limit ? Math.round(r.used / r.limit * 100) : 0 })).sort((a, b) => b.pct - a.pct);
+  const level = (pct) => (pct >= 100 ? ['bad', 'Over limit'] : pct >= 90 ? ['bad', 'Warning'] : pct >= 80 ? ['warn', 'Getting full'] : ['ok', 'Fine']);
+  const rows = live.map(({ s, used, limit, pct }) => {
+    const reported = Number(s.usage && s.usage.storageMb) || 0; const checked = s.billing.storageCheckedMb;
+    const mismatch = checked != null && reported && Math.abs(checked - reported) / Math.max(checked, reported) > 0.1;
+    const [cls, text] = level(pct);
+    return h('tr', {}, h('td', {}, h('a', { href: '#/school/' + s.id }, s.name)),
+      h('td', {}, barRow('', Math.min(pct, 100), 100, pct + '%')), h('td', {}, num(used) + ' of ' + num(limit) + ' MB'),
+      h('td', {}, h('span', { class: 'pill ' + cls }, text)),
+      h('td', { class: 'muted' }, 'Reported ' + num(reported) + ' MB' + (checked != null ? '; measured ' + num(checked) + ' MB on ' + (s.billing.storageCheckedOn || '?') : '; not measured') + (mismatch ? ' (differs by more than 10%)' : '')),
+      h('td', {}, h('div', { class: 'row' },
+        pct >= 80 ? h('button', { class: 'btn sm', onclick: () => guarded(async () => { await sendMessage({ kind: 'targeted', title: 'Your storage is ' + (pct >= 100 ? 'full' : 'almost full'), body: 'Your school has used ' + pct + '% of its storage. Ask AZIZ for more space or remove files you no longer need.', audience: 'Storage warning: ' + s.name, recipients: [s.id] }); }) }, 'Warn school') : null,
+        h('button', { class: 'btn sm', onclick: () => guarded(async () => {
+          const v = await formDialog({ title: 'Record measured storage for ' + s.name, ok: 'Save', note: 'Read the school\'s folder size in the Firebase console (Storage) and enter it here. The larger of reported and measured is used for warnings.',
+            fields: [{ key: 'mb', label: 'Measured storage (MB)', type: 'number', required: true, value: checked != null ? checked : reported }] });
+          if (!v) return;
+          const batch = writeBatch(db);
+          batch.update(doc(db, 'schools', s.id, 'billing', 'main'), { storageCheckedMb: v.mb, storageCheckedOn: today() });
+          audit(batch, 'storage-reconcile', s.id, '', JSON.stringify({ reported, measured: v.mb }));
+          await batch.commit(); toast('Saved.'); await refresh();
+        }) }, 'Reconcile'))));
+  });
+  const over = live.filter((r) => r.pct >= 90).length;
+  view().replaceChildren(h('h2', {}, 'Storage'),
+    h('div', { class: 'grid' }, stat('Schools', num(live.length)), stat('At 80% or more', num(live.filter((r) => r.pct >= 80).length)), stat('At 90% or more', num(over)), stat('Used in total', num(live.reduce((t, r) => t + r.used, 0)) + ' MB')),
+    h('div', { style: 'height:14px' }),
+    live.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['School', 'Use', 'Amount', 'Level', 'Reconciliation', ''].map((t) => h('th', {}, t)))), h('tbody', {}, rows))) : h('div', { class: 'empty' }, 'No schools with a plan yet.'),
+    h('p', { class: 'muted' }, 'Reported use comes from each school\'s own app. Measured use is what you read from the Firebase console. Automatic measuring needs a Cloud Function and is not built yet.'),
+    h('div', { style: 'height:14px' }),
+    h('div', { class: 'card' }, h('h3', {}, 'Retention policy'),
+      h('p', { class: 'muted' }, 'How long records are kept. This is the published policy. Old records are not deleted automatically yet.'),
+      h('p', {}, 'Staff selfies: ' + retention.selfieDays + ' days | Visitor logs: ' + retention.visitorDays + ' days | Messages: ' + retention.messageDays + ' days | Archived schools: ' + retention.archivedSchoolDays + ' days'),
+      h('button', { class: 'btn', onclick: () => guarded(async () => {
+        const v = await formDialog({ title: 'Retention policy', ok: 'Save', fields: [
+          { key: 'selfieDays', label: 'Staff selfies (days)', type: 'number', required: true, value: retention.selfieDays }, { key: 'visitorDays', label: 'Visitor logs (days)', type: 'number', required: true, value: retention.visitorDays },
+          { key: 'messageDays', label: 'Messages (days)', type: 'number', required: true, value: retention.messageDays }, { key: 'archivedSchoolDays', label: 'Archived schools, before deletion is allowed (days, 30 or more)', type: 'number', required: true, value: retention.archivedSchoolDays }, REASON] });
+        if (!v) return;
+        if (v.selfieDays < 1 || v.visitorDays < 1 || v.messageDays < 1 || v.archivedSchoolDays < 30) { toast('Check the numbers: at least 1 day, and 30 for archived schools.'); return; }
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'platformConfig', 'retention'), { selfieDays: v.selfieDays, visitorDays: v.visitorDays, messageDays: v.messageDays, archivedSchoolDays: v.archivedSchoolDays });
+        audit(batch, 'retention-policy', '', v.reason, JSON.stringify({ selfieDays: v.selfieDays, visitorDays: v.visitorDays, messageDays: v.messageDays, archivedSchoolDays: v.archivedSchoolDays }));
+        await batch.commit(); toast('Policy saved.'); await refresh();
+      }) }, 'Change policy')));
+}
+
 // ---------- routing ----------
 async function route() {
   const parts = (location.hash || '#/dashboard').replace(/^#\/?/, '').split('/');
@@ -939,6 +1344,10 @@ async function route() {
     else if (name === 'analytics') await viewAnalytics();
     else if (name === 'notifications') await viewNotifications();
     else if (name === 'trials') await viewTrials();
+    else if (name === 'domains') await viewDomains();
+    else if (name === 'themes') await viewThemes();
+    else if (name === 'features') await viewFeatures();
+    else if (name === 'storage') await viewStorage();
     else if (name === 'audit') await viewAudit();
     else if (name === 'security') await viewSecurity();
     else await viewDashboard();

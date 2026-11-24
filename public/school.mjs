@@ -203,6 +203,17 @@ if ('IntersectionObserver' in window) {
 }
 
 async function load() {
+  try {
+    // The platform can take a school's public website offline (siteHolds/<school>). Nothing of the school is shown while it is held.
+    const held = await getDoc(doc(db, 'siteHolds', SCHOOL_ID)).then((d) => d.exists()).catch(() => false);
+    if (held) {
+      status.hidden = false;
+      status.textContent = 'This website is temporarily unavailable.';
+      document.title = 'Website unavailable';
+      document.querySelectorAll('form').forEach((form) => { form.hidden = true; });
+      return;
+    }
+  } catch { /* if the check cannot run, the page loads as before */ }
   loadExtras();
   try {
     const saved = await getDoc(doc(schoolRef, 'site', 'main'));

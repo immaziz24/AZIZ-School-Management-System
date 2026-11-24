@@ -7795,12 +7795,26 @@ websiteForm.addEventListener('submit', async (event) => {
 // This hides them in the app; it does not block the underlying records.
 const FLAG_MODULES = { website: ['website', 'siteextras', 'enquiries'], finance: ['fees', 'payroll', 'expenses', 'finance', 'concessions', 'sales', 'vendors', 'defaulters'],
   library: ['library'], transport: ['routes', 'riders'] };
+// The platform's switches (platformConfig/flags) plus this school's computed entitlements (schools/<id>/entitlements/main): features that are off for
+// the school's plan, rollout or beta group, or that its override switched off, and which roles may use a feature.
+let viewerRole = '';
+let roleLimits = {};
 async function readFlags() {
+  let flags = {};
+  const { doc, getDocFromServer } = firestoreTools;
   try {
-    const { doc, getDocFromServer } = firestoreTools;
     const found = await getDocFromServer(doc(academic.schoolRef.firestore, 'platformConfig', 'flags'));
-    return found.exists() ? found.data() : {};
-  } catch { return {}; }
+    flags = found.exists() ? found.data() : {};
+  } catch { flags = {}; }
+  try {
+    const ent = await getDocFromServer(doc(academic.schoolRef, 'entitlements', 'main'));
+    if (ent.exists()) {
+      for (const key of ent.data().off ?? []) flags[key] = false;
+      roleLimits = ent.data().roles ?? {};
+      for (const [key, roles] of Object.entries(roleLimits)) if (viewerRole && Array.isArray(roles) && roles.length && !roles.includes(viewerRole)) flags[key] = false;
+    }
+  } catch { /* no entitlements yet: nothing extra is switched off */ }
+  return flags;
 }
 // Gradual rollout: a flag may also carry pct_<flag> (0-99). The school is in the rollout when a number
 // worked out from its ID, between 0 and 99, is below that percentage. The same school always gets the same answer.
@@ -8100,8 +8114,10 @@ async function addMarketplaceThemes() {
     const { doc, getDocFromServer } = firestoreTools;
     const found = await getDocFromServer(doc(academic.schoolRef.firestore, 'platformConfig', 'marketplace'));
     const hex = /^#[0-9a-fA-F]{6}$/;
+    let premiumOk = true;
+    try { const ent = await getDocFromServer(doc(academic.schoolRef, 'entitlements', 'main')); premiumOk = !(ent.exists() && (ent.data().off ?? []).includes('premium-themes')); } catch { premiumOk = true; }
     const items = (found.exists() ? found.data().items ?? [] : []).filter((item) => item && /^mk-[a-z0-9]{3,12}$/.test(item.key) && typeof item.label === 'string'
-      && hex.test(item.navy) && hex.test(item.ivory) && hex.test(item.gold));
+      && hex.test(item.navy) && hex.test(item.ivory) && hex.test(item.gold) && (item.premium !== true || premiumOk));
     if (!items.length) { marketplaceLoaded = true; return; }
     const group = document.createElement('optgroup');
     group.label = 'Marketplace themes';
@@ -10570,6 +10586,7 @@ onAuthStateChanged(auth, async (user) => {
     firestoreTools = { collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, query, serverTimestamp, setDoc, updateDoc, where };
     const schoolRef = doc(getFirestore(app), 'schools', SCHOOL_ID);
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
+    viewerRole = membership.data()?.role ?? '';
     if (request !== schoolRequest) return;
     if (membership.data()?.active === true && membership.data().role === 'teacher') {
       teacherEmail.textContent = user.email;
