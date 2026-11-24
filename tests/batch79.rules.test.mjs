@@ -321,3 +321,38 @@ test('sign-in history records whether the account had a second factor', async ()
   await denied(login('owner-g', 'owner-g_8000000000013', { mfa: 'yes' }), 'mfa must be true or false');
   await denied(login('owner-g', 'owner-g_8000000000014', { extra: 1 }), 'extra field');
 });
+
+// The rules were shortened in Batch 79 so Firebase accepts them (the compiled size limit). These checks make sure access did not change.
+const grantSeed = (tier, mins) => set(ADMIN, `platformGrants/padmin_green-valley_${tier}`, { schoolId: 'green-valley', tier, reason: 'Seeded for a test', createdBy: 'padmin', createdAt: new Date(), expiresAt: minutes(mins), auditId: 'A-SEED2' });
+
+test('access passes after the rules were shortened: each combination of standard and sensitive pass', async () => {
+  assert.equal(await set(ADMIN, `${A}/students/S1`, { name: 'Test Student', admissionNo: 'S1' }), 200);
+  assert.equal(await set(ADMIN, `${A}/healthRecords/S1`, { note: 'synthetic' }), 200);
+  await denied(get('padmin', `${A}/students/S1`), 'no pass');
+  await allowed(grantSeed('sensitive', 10), 'seed sensitive');
+  await allowed(get('padmin', `${A}/students/S1`), 'a sensitive pass alone also opens ordinary records');
+  await allowed(get('padmin', `${A}/healthRecords/S1`), 'and sensitive ones');
+  await allowed(grantSeed('standard', -5), 'seed expired standard');
+  await allowed(get('padmin', `${A}/students/S1`), 'an expired standard pass does not block a live sensitive one');
+  await denied(get('staff-support', `${A}/students/S1`), 'staff never use the super admin pass');
+  await denied(get('owner-g', 'schools/second-demo-school/students/S9'), 'an owner still cannot read another school');
+});
+
+test('an expired pass opens nothing', async () => {
+  assert.equal(await set(ADMIN, `${A}/students/S1`, { name: 'Test Student', admissionNo: 'S1' }), 200);
+  await allowed(grantSeed('standard', -5), 'seed expired standard');
+  await allowed(grantSeed('sensitive', -5), 'seed expired sensitive');
+  await denied(get('padmin', `${A}/students/S1`), 'ordinary record');
+  await denied(get('padmin', `${A}/healthRecords/S1`), 'sensitive record');
+});
+
+test('owner writes after the rules were merged: owners delete, nobody else does', async () => {
+  assert.equal(await set(ADMIN, `${A}/members/principal-g`, { role: 'principal', active: true }), 200);
+  assert.equal(await set(ADMIN, `${A}/syllabus/SY1`, { className: 'Class 1', subjectName: 'Maths', chapter: 'Numbers', status: 'Pending' }), 200);
+  await denied(remove('principal-g', `${A}/syllabus/SY1`), 'principal cannot delete');
+  await denied(remove('stranger', `${A}/syllabus/SY1`), 'stranger cannot delete');
+  await denied(remove(null, `${A}/syllabus/SY1`), 'signed out cannot delete');
+  await denied(set('owner-g', `${A}/syllabus/SY2`, { junk: 1 }), 'owner cannot write junk');
+  await denied(set('principal-g', `${A}/syllabus/SY2`, { className: 'Class 1', subjectName: 'Maths', chapter: 'Numbers', status: 'Pending' }), 'principal cannot create');
+  await allowed(remove('owner-g', `${A}/syllabus/SY1`), 'owner deletes');
+});
