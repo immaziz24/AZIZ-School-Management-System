@@ -325,7 +325,7 @@ async function viewSchool(id) {
   const invoicesCard = h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'flex:1' }, 'Invoices'),
     h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await createInvoice(school)) await refresh(); }) }, 'Create invoice')),
     invoiceTable(mine, false, refresh));
-  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), ownersCard, h('div', { style: 'height:14px' }), invoicesCard, h('div', { style: 'height:14px' }), await schoolFeaturesCard(school));
+  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), ownersCard, h('div', { style: 'height:14px' }), invoicesCard, h('div', { style: 'height:14px' }), await schoolLocationCard(school, refresh), h('div', { style: 'height:14px' }), await schoolFeaturesCard(school));
 }
 
 async function lastLogin(uid) {
@@ -1294,6 +1294,66 @@ async function viewFeatures() {
       }) }, 'Add the standard features'))));
 }
 // Per-school overrides, shown on the school page.
+// ---------- Teacher check-in location (Batch 88) ----------
+// The check-in rules (distance, GPS accuracy, live selfie, school QR) are enforced by the database rules from settings/location.
+// This card is the Super Admin way to set that document without leaving the panel.
+const TZ_OPTIONS = [['330', 'India (UTC+5:30)'], ['345', 'Nepal (UTC+5:45)'], ['360', 'Bangladesh (UTC+6:00)'], ['300', 'Pakistan (UTC+5:00)'], ['240', 'UAE (UTC+4:00)'], ['0', 'UTC (UTC+0:00)']];
+function parseCoordinates(text) {
+  const clean = String(text || '').trim();
+  const patterns = [/@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/, /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/,
+    /[?&](?:q|ll|query)=(-?\d{1,2}(?:\.\d+)?)(?:,|%2C)(-?\d{1,3}(?:\.\d+)?)/, /^(-?\d{1,2}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)$/];
+  for (const pattern of patterns) {
+    const m = clean.match(pattern);
+    if (m) { const lat = Number(m[1]); const lng = Number(m[2]); if (Math.abs(lat) <= 66 && Math.abs(lng) <= 180) return { lat, lng }; }
+  }
+  return null;
+}
+async function schoolLocationCard(school, refresh) {
+  let loc = null;
+  try { const snap = await getDocFromServer(doc(db, 'schools', school.id, 'settings', 'location')); loc = snap.exists() ? snap.data() : null; } catch { loc = null; }
+  const body = loc
+    ? [h('p', {}, 'Teachers must be within ', h('b', {}, loc.radiusM + ' m'), ' of the school, with GPS accurate to ', h('b', {}, loc.maxAccuracyM + ' m'), ' or better.'),
+      h('p', { class: 'muted' }, 'Point: ' + Number(loc.lat).toFixed(6) + ', ' + Number(loc.lng).toFixed(6) + ' | Live selfie: ' + (loc.selfieRequired ? 'required' : 'off') + ' | School QR code: ' + (loc.qrRequired ? 'required' : 'off')),
+      h('p', { class: 'muted' }, 'Each check-in and check-out saves the server time, GPS position and (if on) a selfie stamped with date and time. Hours at school are worked out from the pair.'),
+      h('p', {}, h('a', { href: 'https://www.google.com/maps?q=' + loc.lat + ',' + loc.lng, target: '_blank', rel: 'noopener' }, 'Open this point on the map'))]
+    : [h('p', { class: 'muted' }, 'Not set. Teachers cannot check in until a school location is saved.')];
+  const edit = async () => {
+    const v = await formDialog({
+      title: 'Teacher check-in location - ' + school.name,
+      note: 'Stand at the school gate or office, drop a pin in Google Maps, copy the two numbers (like 26.7271, 88.3953) or the whole map link, and paste it below. The check-in distance cannot be below 30 metres, because phone GPS is not reliable closer than that.',
+      ok: 'Save location',
+      fields: [
+        { key: 'paste', label: 'Paste coordinates or a Google Maps link (fills latitude and longitude)', placeholder: loc ? '' : 'e.g. 26.7271, 88.3953' },
+        { key: 'lat', label: 'Latitude', value: loc ? loc.lat : '', placeholder: 'e.g. 26.7271' },
+        { key: 'lng', label: 'Longitude', value: loc ? loc.lng : '', placeholder: 'e.g. 88.3953' },
+        { key: 'radiusM', label: 'Check-in distance in metres (30 to 500)', type: 'number', value: loc ? loc.radiusM : 30 },
+        { key: 'maxAccuracyM', label: 'Worst GPS accuracy accepted in metres (10 to 100)', type: 'number', value: loc ? loc.maxAccuracyM : 30 },
+        { key: 'tzMinutes', label: 'School time zone', type: 'select', options: TZ_OPTIONS, value: loc ? String(loc.tzMinutes) : '330' },
+        { key: 'selfieRequired', label: 'Teacher must take a live selfie at check-in and check-out', type: 'checkbox', value: loc ? loc.selfieRequired === true : true },
+        { key: 'qrRequired', label: 'Teacher must also scan the school QR code', type: 'checkbox', value: loc ? loc.qrRequired === true : false },
+        REASON,
+      ],
+    });
+    if (!v) return false;
+    let lat = Number(v.lat); let lng = Number(v.lng);
+    if (v.paste) { const found = parseCoordinates(v.paste); if (!found) { toast('Could not read two coordinates from what you pasted.'); return false; } lat = found.lat; lng = found.lng; }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (v.lat === '' && !v.paste) || (v.lng === '' && !v.paste)) { toast('Enter the latitude and longitude.'); return false; }
+    if (Math.abs(lat) > 66 || Math.abs(lng) > 180) { toast('Those coordinates are outside the supported range.'); return false; }
+    if (!(v.radiusM >= 30 && v.radiusM <= 500)) { toast('The check-in distance must be from 30 to 500 metres.'); return false; }
+    if (!(v.maxAccuracyM >= 10 && v.maxAccuracyM <= 100)) { toast('The accepted GPS accuracy must be from 10 to 100 metres.'); return false; }
+    lat = Math.round(lat * 1e6) / 1e6; lng = Math.round(lng * 1e6) / 1e6;
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'schools', school.id, 'settings', 'location'), { lat, lng, radiusM: v.radiusM, maxAccuracyM: v.maxAccuracyM, tzMinutes: Number(v.tzMinutes),
+      qrRequired: v.qrRequired === true, selfieRequired: v.selfieRequired === true, setBy: S.user.uid, setOn: serverTimestamp() });
+    audit(batch, 'set-school-location', school.id, v.reason, JSON.stringify({ lat, lng, radiusM: v.radiusM, maxAccuracyM: v.maxAccuracyM, selfie: v.selfieRequired === true, qr: v.qrRequired === true }));
+    await batch.commit();
+    toast('Check-in location saved.');
+    return true;
+  };
+  return h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'flex:1' }, 'Teacher check-in location and selfie'),
+    h('button', { class: 'btn sm gold', onclick: () => guarded(async () => { if (await edit()) await refresh(); }) }, loc ? 'Change' : 'Set location')), body);
+}
+
 async function schoolFeaturesCard(school) {
   const features = await loadCatalogue();
   const ov = await overridesOf(school.id);
