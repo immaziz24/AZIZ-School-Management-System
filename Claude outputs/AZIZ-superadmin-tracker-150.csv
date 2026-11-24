@@ -132,7 +132,7 @@
 131,17,Reports & Data Exports,Support reports,Built,Built in Batch 80 per build records; live check pending,Mark 5
 132,17,Reports & Data Exports,Authorized CSV/PDF exports,Built,Built in Batch 80 per build records; live check pending,Mark 5
 133,18,Platform Settings & Configuration,Branding,Built,"Platform settings: Branding; product name, tagline and support email shown in school apps (Batch 81)",Mark 5
-134,18,Platform Settings & Configuration,Language and timezone,Partial,Saved in Platform settings; no app reads it yet,Mark 5
+134,18,Platform Settings & Configuration,Language and timezone,Partial,"Default language now applies in school apps for browsers with no language chosen (Batch 82); time zone, date style and currency are saved only",Mark 5
 135,18,Platform Settings & Configuration,Email configuration,Partial,Saved in Platform settings; sending needs the server job,Mark 5
 136,18,Platform Settings & Configuration,Payment settings,Built,Platform settings: Payments; printed on invoices (Batch 80),Mark 5
 137,18,Platform Settings & Configuration,Maintenance controls,Built,Platform settings: Maintenance; notice bar in school apps (Batch 80),Mark 5

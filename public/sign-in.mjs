@@ -7853,6 +7853,15 @@ async function applyPlatformPublicSettings() {
     const [b, l] = await Promise.all([getDocFromServer(doc(fs, 'platformConfig', 'branding')).catch(() => null), getDocFromServer(doc(fs, 'platformConfig', 'legal')).catch(() => null)]);
     const brand = b && b.exists() ? b.data() : {};
     const legal = l && l.exists() ? l.data() : {};
+    // Default language (platformConfig/locale, readable once signed in): used only when this browser has no language chosen yet.
+    try {
+      const loc = await getDocFromServer(doc(fs, 'platformConfig', 'locale')).catch(() => null);
+      const want = loc && loc.exists() ? loc.data().language : '';
+      let chosen = null;
+      try { chosen = localStorage.getItem('aziz-lang'); } catch { chosen = 'x'; }
+      const pick = document.querySelector('#lang-select');
+      if (!chosen && pick && (want === 'hi' || want === 'bn')) { pick.value = want; pick.dispatchEvent(new Event('change')); }
+    } catch { /* keep English */ }
     const old = document.getElementById('platform-footer');
     if (old) old.remove();
     const ok = (u) => typeof u === 'string' && /^https:\/\/[^\s]+$/.test(u);
