@@ -1382,7 +1382,7 @@ onAuthStateChanged(auth, async (user) => {
   }
   S.user = user;
   $('who').textContent = user.email || user.uid;
-  $('gate').hidden = true; $('shell').hidden = false;
+  $('gate').hidden = true; $('gate').style.display = 'none'; $('shell').hidden = false;
   wireTop();
   route();
 });
