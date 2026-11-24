@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="./sign-in.css?v=batch-87">
   <style>html.booting body>main{display:none}#boot{display:none}html.booting #boot{display:grid;place-items:center;min-height:100vh;gap:14px;align-content:center;color:#9ca7c0;font:500 1rem Inter,system-ui,sans-serif}#boot i{width:34px;height:34px;border-radius:50%;border:3px solid #c9a24a44;border-top-color:#c9a24a;animation:bootspin .8s linear infinite}@keyframes bootspin{to{transform:rotate(360deg)}}html{background:#060b17}</style>
   <script>(function(){var h=document.documentElement;window.__bootDone=function(){h.classList.remove('booting')};setTimeout(window.__bootDone,6000)})();</script>
-  <link rel="modulepreload" href="./ui.mjs?v=batch-87"><link rel="modulepreload" href="./i18n.mjs?v=batch-64"><link rel="modulepreload" href="./sign-in.mjs?v=batch-87"><link rel="modulepreload" href="./platform.mjs?v=batch-87"><link rel="modulepreload" href="./firebase-client.mjs">
+  <link rel="modulepreload" href="./ui.mjs?v=batch-87"><link rel="modulepreload" href="./i18n.mjs?v=batch-64"><link rel="modulepreload" href="./sign-in.mjs?v=batch-90"><link rel="modulepreload" href="./platform.mjs?v=batch-90"><link rel="modulepreload" href="./firebase-client.mjs">
 </head>
 <body>
   <div id="boot" role="status" aria-live="polite"><i></i><span>Loading your school.</span></div>
@@ -50,7 +50,7 @@
       </form>
       <h3>Teacher Assignment</h3>
       <form id="teacher-assignment">
-        <p><label>Teacher Firebase UID <input name="uid" required maxlength="128" pattern="[A-Za-z0-9_\-]+"></label></p>
+        <p><label>Teacher <select name="uid" required></select></label></p>
         <p><label>Class and subject <select name="mappingId" required></select></label></p>
         <button type="submit">Save assignment</button>
         <p id="assignment-status" role="status"></p>
@@ -208,13 +208,24 @@
       </section>
       <section id="class-teachers" aria-labelledby="class-teacher-title" hidden>
         <h3 id="class-teacher-title">Class Teachers</h3>
-        <p>Each class has one class teacher, who marks its daily attendance. The account must already be an active teacher.</p>
+        <p>Each class has one class teacher, who marks its daily attendance. Pick from your active teachers. Invite a teacher first under People and invitations.</p>
         <p id="class-teacher-status" role="status"></p>
         <ul id="class-teacher-list"></ul>
         <form id="class-teacher-form">
           <p><label>Class <select name="classId" required></select></label></p>
-          <p><label>Teacher account ID (UID) <input name="uid" required maxlength="128"></label></p>
+          <p><label>Teacher <select name="uid" required></select></label></p>
           <button type="submit">Save class teacher</button>
+        </form>
+      </section>
+      <section id="departments" aria-labelledby="departments-title" hidden>
+        <h3 id="departments-title">Departments and Heads of Department</h3>
+        <p>Create a department (for example Science, Languages or Primary) and pick its head of department from your active teachers. Saving a department with the same name changes its head.</p>
+        <p id="department-status" role="status"></p>
+        <ul id="department-list"></ul>
+        <form id="department-form">
+          <p><label>Department name <input name="name" required maxlength="60"></label></p>
+          <p><label>Head of department <select name="hodUid" required></select></label></p>
+          <button type="submit">Save department</button>
         </form>
       </section>
       <section id="attendance-review" aria-labelledby="attendance-review-title" hidden>
@@ -2007,7 +2018,7 @@
       <h3>People and invitations</h3>
       <form id="invite-form" class="owner-only">
         <p><label>Email <input name="email" type="email" required maxlength="120"></label>
-          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="accountant">Fee office (fees only)</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
+          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="accountant">Fee office (fees only)</option><option value="staff">Non-teaching staff (clerk, peon, driver)</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
         <button type="submit">Send invitation</button>
       </form>
       <p><small>The invited person signs in with that email on this page and accepts. To hand over ownership: invite the new owner, then they switch the old owner off.</small></p>
@@ -2165,8 +2176,8 @@
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-87');
-      await import('./platform.mjs?v=batch-87');
+      await import('./sign-in.mjs?v=batch-90');
+      await import('./platform.mjs?v=batch-90');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.'; window.__bootDone?.();
       console.error(error);

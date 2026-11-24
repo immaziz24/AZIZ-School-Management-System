@@ -72,7 +72,11 @@ assignmentForm.addEventListener('submit', async (event) => {
   if (!saveAssignment || assignmentButton.disabled) return;
   const request = schoolRequest;
   const fields = new FormData(assignmentForm);
-  const uid = fields.get('uid').trim();
+  const uid = String(fields.get('uid') ?? '').trim();
+  if (!uid) {
+    assignmentStatus.textContent = 'Pick a teacher. Invite a teacher first under People and invitations.';
+    return;
+  }
   const link = examData.mappings.find((record) => record.id === String(fields.get('mappingId') ?? ''));
   if (!link) {
     assignmentStatus.textContent = 'Link a subject to a class in Academic Setup first.';
@@ -92,7 +96,7 @@ assignmentForm.addEventListener('submit', async (event) => {
     if (request === schoolRequest) assignmentStatus.textContent = 'Assignment saved.';
   } catch (error) {
     if (request === schoolRequest) assignmentStatus.textContent = error.code === 'permission-denied'
-      ? 'Check that this UID belongs to an active teacher at your school.'
+      ? 'Check that this person is an active teacher at your school.'
       : 'Could not save the assignment. Try again.';
   } finally {
     if (request === schoolRequest) assignmentButton.disabled = false;
@@ -1485,7 +1489,7 @@ function renderClassTeachers() {
   classTeacherList.replaceChildren();
   for (const record of classes) {
     const holder = classTeacherData.find((item) => item.id === record.id)?.data().teacherUid;
-    listItem(classTeacherList, record.data().name + ' - ' + (holder ? 'class teacher account ' + holder : 'no class teacher yet'));
+    listItem(classTeacherList, record.data().name + ' - ' + (holder ? 'class teacher: ' + teacherName(holder) : 'no class teacher yet'));
   }
   fillSelect(classTeacherForm.elements.namedItem('classId'), classes, (item) => item.name);
 }
@@ -1501,13 +1505,100 @@ classTeacherForm.addEventListener('submit', (event) => {
     return;
   }
   if (!uid || uid.length > 128 || uid.includes('/')) {
-    classTeacherStatus.textContent = 'Enter the teacher account ID (UID) from Firebase Authentication.';
+    classTeacherStatus.textContent = 'Pick a teacher. Invite a teacher first under People and invitations.';
     return;
   }
   runSetupAction(async () => {
     await academic.save('classTeachers', classId, { teacherUid: uid });
-    classTeacherForm.elements.namedItem('uid').value = '';
   }, 'Class teacher saved.', classTeacherStatus);
+});
+
+// Teacher names (Batch 90). A member record holds only a role, so the name shown is the email on the invitation the person accepted.
+let memberEmail = new Map();
+let departmentData = [];
+const departmentList = document.querySelector('#department-list');
+const departmentStatus = document.querySelector('#department-status');
+const departmentForm = document.querySelector('#department-form');
+
+function teacherName(uid) {
+  if (!uid) return '';
+  return memberEmail.get(uid) || 'Teacher account ' + uid;
+}
+
+function fillTeacherSelects() {
+  for (const select of [assignmentForm.elements.namedItem('uid'), classTeacherForm.elements.namedItem('uid'), departmentForm.elements.namedItem('hodUid')]) {
+    const keep = select.value;
+    select.replaceChildren();
+    for (const uid of staffRoster) {
+      const option = document.createElement('option');
+      option.value = uid;
+      option.textContent = teacherName(uid);
+      select.append(option);
+    }
+    if (keep && staffRoster.includes(keep)) select.value = keep;
+  }
+}
+
+async function loadTeacherNames(members) {
+  const tools = academic;
+  if (!tools) return;
+  try {
+    const found = await firestoreTools.getDocsFromServer(firestoreTools.query(firestoreTools.collection(tools.schoolRef.firestore, 'invites'),
+      firestoreTools.where('schoolId', '==', SCHOOL_ID)));
+    const emailOfInvite = new Map(found.docs.map((record) => [record.id, record.data().email]));
+    memberEmail = new Map(members.docs.map((record) => [record.id, emailOfInvite.get(record.data().inviteId)]).filter(([, email]) => email));
+  } catch { memberEmail = new Map(); }
+  try { departmentData = (await tools.list('departments')).docs; } catch { departmentData = []; }
+  fillTeacherSelects();
+  renderDepartments();
+  try { renderChecklist(); } catch { /* the checklist fills in again when the rest has loaded */ }
+}
+
+function renderDepartments() {
+  departmentList.replaceChildren();
+  for (const record of [...departmentData].sort((a, b) => a.data().name.localeCompare(b.data().name))) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Remove';
+    button.addEventListener('click', async () => {
+      if (!academic || academic.busy || !confirm('Remove the ' + record.data().name + ' department?')) return;
+      try {
+        await academic.remove('departments', record.id);
+        departmentData = departmentData.filter((item) => item.id !== record.id);
+        renderDepartments();
+        departmentStatus.textContent = 'Department removed.';
+      } catch { departmentStatus.textContent = 'Could not remove it. Try again.'; }
+    });
+    listItem(departmentList, record.data().name + ' - head of department: ' + (teacherName(record.data().hodUid) || 'not set'), button);
+  }
+  if (!departmentData.length) listItem(departmentList, 'No departments yet.');
+}
+
+departmentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!academic || academic.busy) return;
+  const fields = new FormData(departmentForm);
+  const name = String(fields.get('name') ?? '').trim();
+  const hodUid = String(fields.get('hodUid') ?? '').trim();
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
+  if (!name || !id) { departmentStatus.textContent = 'Enter a department name using letters or numbers.'; return; }
+  if (!hodUid) { departmentStatus.textContent = 'Pick a head of department. Invite a teacher first under People and invitations.'; return; }
+  const tools = academic;
+  tools.busy = true;
+  departmentStatus.textContent = 'Saving.';
+  try {
+    await tools.save('departments', id, { name, hodUid });
+    departmentData = [...departmentData.filter((item) => item.id !== id), { id, data: () => ({ name, hodUid }) }];
+    departmentForm.elements.namedItem('name').value = '';
+    renderDepartments();
+    departmentStatus.textContent = 'Department saved.';
+  } catch (error) {
+    departmentStatus.textContent = error.code === 'permission-denied'
+      ? 'This change is not allowed. Only the school owner can set departments, and the head must be an active teacher.'
+      : 'Could not save. Try again.';
+  } finally {
+    tools.busy = false;
+  }
 });
 
 // Owner review: one date at a time, class by class, then the students of one class.
@@ -1589,7 +1680,7 @@ async function renderAttendanceReview() {
       const done = count.present + count.absent + count.late + count.leave;
       if (done) marked += 1;
       addRow(attReviewBody, [record.data().name,
-        classTeacherData.find((item) => item.id === record.id)?.data().teacherUid ?? 'Not set',
+        teacherName(classTeacherData.find((item) => item.id === record.id)?.data().teacherUid) || 'Not set',
         String(list.length), String(count.present), String(count.absent), String(count.late), String(list.length - done)]);
     }
     attReviewState = { rows, marks };
@@ -1886,7 +1977,7 @@ const staffSelects = () => [...staffAttBody.querySelectorAll('select')];
 function staffLabel(uid) {
   const names = classTeacherData.filter((record) => record.data().teacherUid === uid)
     .map((record) => examData.classes.find((item) => item.id === record.id)?.data().name ?? record.id);
-  return 'Teacher account ' + uid + (names.length ? ' (class teacher of ' + names.join(', ') + ')' : '');
+  return teacherName(uid) + (names.length ? ' (class teacher of ' + names.join(', ') + ')' : '');
 }
 
 function updateStaffCounts() {
@@ -1996,6 +2087,8 @@ async function loadStaffAttendance(request) {
     if (request !== schoolRequest) return;
     staffRoster = members.docs.filter((record) => record.data().role === 'teacher' && record.data().active === true)
       .map((record) => record.id).sort();
+    await loadTeacherNames(members);
+    if (request !== schoolRequest) return;
     staffAttSection.hidden = false;
     staffAttDate.value = localToday();
     staffReportMonth.value = localToday().slice(0, 7);
@@ -2779,6 +2872,92 @@ async function showPlatformInbox(schoolRef) {
     }
     dashboard.prepend(box);
   } catch { /* the inbox is a convenience; the dashboard works without it */ }
+}
+
+// Owner 2-step sign-in (Batch 90). A school owner whose account has no authenticator app sees this screen over the dashboard until one is added.
+// This is a screen in the app, not a database rule: it protects the normal sign-in path, and the owner can still sign out from it.
+let ownerMfaOn = false;
+async function requireOwnerMfa(user) {
+  try {
+    const au = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js');
+    ownerMfaOn = au.multiFactor(user).enrolledFactors.length > 0;
+    if (ownerMfaOn || document.querySelector('#owner-mfa-gate')) return;
+    const gate = document.createElement('div');
+    gate.id = 'owner-mfa-gate';
+    gate.setAttribute('role', 'dialog');
+    gate.setAttribute('aria-modal', 'true');
+    gate.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(5,10,25,.97);display:flex;align-items:flex-start;justify-content:center;padding:18px;overflow:auto';
+    const box = document.createElement('div');
+    box.style.cssText = 'max-width:460px;width:100%;margin:auto;background:#fff;color:#111;border-radius:14px;padding:22px;line-height:1.5';
+    const title = document.createElement('h3');
+    title.textContent = 'Protect your school account';
+    const intro = document.createElement('p');
+    intro.textContent = 'You are the school owner, so this account can see every student, fee and staff record. Add a 6-digit code from an authenticator app so nobody can sign in with your password alone. It takes about a minute.';
+    const note = document.createElement('p');
+    note.style.cssText = 'font-size:.9em;color:#444';
+    note.textContent = 'You need Google Authenticator or Microsoft Authenticator on your phone.';
+    const message = document.createElement('p');
+    message.setAttribute('role', 'status');
+    const holder = document.createElement('div');
+    const start = document.createElement('button');
+    start.type = 'button';
+    start.textContent = 'Set up now';
+    const out = document.createElement('button');
+    out.type = 'button';
+    out.textContent = 'Sign out';
+    out.style.marginLeft = '8px';
+    out.addEventListener('click', () => { gate.remove(); signOut(auth); });
+    start.addEventListener('click', async () => {
+      start.disabled = true;
+      message.textContent = 'Preparing.';
+      let secret;
+      try {
+        secret = await au.TotpMultiFactorGenerator.generateSecret(await au.multiFactor(user).getSession());
+      } catch (error) {
+        message.textContent = error.code === 'auth/requires-recent-login'
+          ? 'For safety, sign out and sign in again, then try once more.'
+          : error.code === 'auth/unverified-email'
+            ? 'Verify your email first (look for the message in your inbox), then sign in again.'
+            : 'Authenticator apps are not available yet. Contact AZIZ support.';
+        start.disabled = false;
+        return;
+      }
+      message.textContent = '';
+      const canvas = document.createElement('canvas');
+      let drawn = false;
+      try { const { drawQr } = await import('./qr.mjs?v=batch-64'); drawQr(canvas, secret.generateQrCodeUrl(user.email || 'owner', 'AZIZ School'), 200); drawn = true; } catch { drawn = false; }
+      const how = document.createElement('p');
+      how.textContent = 'In your authenticator app tap Add, scan this picture, or type the key by hand. Then type the 6-digit code it shows.';
+      const key = document.createElement('p');
+      key.style.cssText = 'word-break:break-all;font-size:.85em;color:#444';
+      key.textContent = 'Key: ' + secret.secretKey;
+      const code = document.createElement('input');
+      code.setAttribute('inputmode', 'numeric');
+      code.setAttribute('autocomplete', 'one-time-code');
+      code.maxLength = 6;
+      code.placeholder = '6-digit code';
+      const confirmButton = document.createElement('button');
+      confirmButton.type = 'button';
+      confirmButton.textContent = 'Confirm and turn on';
+      confirmButton.addEventListener('click', async () => {
+        confirmButton.disabled = true;
+        try {
+          await au.multiFactor(user).enroll(au.TotpMultiFactorGenerator.assertionForEnrollment(secret, code.value.trim()), 'Authenticator app');
+        } catch {
+          message.textContent = 'That code did not work. Wait for the next code in the app and try again.';
+          confirmButton.disabled = false;
+          return;
+        }
+        ownerMfaOn = true;
+        gate.remove();
+        try { renderChecklist(); } catch { /* the checklist updates on the next load */ }
+      });
+      holder.replaceChildren(how, drawn ? canvas : document.createTextNode(''), key, code, document.createTextNode(' '), confirmButton);
+    });
+    box.append(title, intro, note, message, holder, start, out);
+    gate.append(box);
+    document.body.append(gate);
+  } catch { /* if the sign-in library cannot load, the dashboard stays usable */ }
 }
 
 // One sign-in record per browser session, so the super admin can see an owner's last sign-in.
@@ -9237,6 +9416,9 @@ function renderChecklist() {
     ['Students are added', active.length > 0],
     ['Students are placed in classes this year', Boolean(year) && placed > 0 && placed >= active.length],
     ['Teachers are added', staffRoster.length > 0],
+    ['Every class has a class teacher', examData.classes.length > 0 && examData.classes.every((item) => classTeacherData.some((holder) => holder.id === item.id))],
+    ['Departments and their heads are set', departmentData.length > 0],
+    ['Your account has 2-step sign-in (authenticator app)', ownerMfaOn],
     ['Fees are set for this year', Boolean(year) && feeData.structures.some((item) => item.data().yearId === year.id)],
     ['Timetable is filled', timetableData.length > 0],
     ['Exams are set up', examData.exams.length > 0],
@@ -10538,6 +10720,10 @@ onAuthStateChanged(auth, async (user) => {
   classTeacherForm.reset();
   classTeacherForm.elements.namedItem('classId').replaceChildren();
   classTeacherData = [];
+  memberEmail = new Map();
+  departmentData = [];
+  departmentList.replaceChildren();
+  departmentStatus.textContent = '';
   attReviewSection.hidden = true;
   attReviewStatus.textContent = '';
   attReviewBody.replaceChildren();
@@ -10670,6 +10856,12 @@ onAuthStateChanged(auth, async (user) => {
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     viewerRole = membership.data()?.role ?? '';
     if (request !== schoolRequest) return;
+    // Non-teaching staff (clerk, peon, driver): they have an account and a place on the school's staff list, but no school records to open.
+    if (membership.data()?.active === true && membership.data().role === 'staff') {
+      status.hidden = true;
+      schoolStatus.textContent = 'You are signed in as non-teaching staff. Your attendance is recorded by the school office. Ask the school owner if you need access to anything else.';
+      return;
+    }
     if (membership.data()?.active === true && membership.data().role === 'teacher') {
       teacherEmail.textContent = user.email;
       teacherDashboard.hidden = false;
@@ -10802,7 +10994,10 @@ onAuthStateChanged(auth, async (user) => {
     dashboard.hidden = false;
     status.hidden = true;
     schoolStatus.hidden = true;
-    if (!superView && membership.data()?.active === true && membership.data()?.role === 'owner') showPlatformInbox(schoolRef);
+    if (!superView && membership.data()?.active === true && membership.data()?.role === 'owner') {
+      showPlatformInbox(schoolRef);
+      requireOwnerMfa(user);
+    }
     const staff = collection(schoolRef, 'staff');
     staffDirectory = {
       list: () => getDocsFromServer(staff),

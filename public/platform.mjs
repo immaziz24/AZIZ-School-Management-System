@@ -305,12 +305,17 @@ $('#invite-form').addEventListener('submit', (event) => {
 async function loadMembers() {
   try {
     const found = await getDocs(collection(schoolRef, 'members'));
+    // Members hold only a role; the email lives on the invitation they accepted, so the list can name people instead of showing an ID.
+    let emails = new Map();
+    try { emails = new Map((await getDocs(query(collection(db, 'invites'), where('schoolId', '==', SCHOOL_ID)))).docs.map((i) => [i.id, i.data().email])); } catch { emails = new Map(); }
+    const personName = (d) => (d.id === me.uid ? (me.email || 'You') + ' (you)' : emails.get(d.data().inviteId) || 'Member ' + d.id.slice(0, 6) + '…');
+    const roleName = (role) => (role === 'staff' ? 'non-teaching staff' : role === 'accountant' ? 'fee office' : role);
     let consents = new Map();
     try { consents = new Map((await getDocs(collection(schoolRef, 'consents'))).docs.map((c) => [c.id, c.data()])); } catch { consents = new Map(); }
     const consentText = (uid) => (consents.has(uid)
       ? ' - privacy policy ' + consents.get(uid).policyVersion + (dayText(consents.get(uid).acceptedAt) ? ' accepted ' + dayText(consents.get(uid).acceptedAt) : ' accepted')
       : ' - has not accepted the privacy policy');
-    fillList(plan.members, found.docs.map((d) => ['Member ' + d.id.slice(0, 6) + '… (' + d.data().role + ') - ' + (d.data().active ? 'active' : 'switched off') + consentText(d.id),
+    fillList(plan.members, found.docs.map((d) => [personName(d) + ' (' + roleName(d.data().role) + ') - ' + (d.data().active ? 'active' : 'switched off') + consentText(d.id),
       ...(myRole === 'owner' && d.id !== me.uid ? [button(d.data().active ? 'Switch off' : 'Switch on', () => run(plan.status, async () => {
         await updateDoc(d.ref, { active: !d.data().active });
         await loadMembers();

@@ -485,7 +485,7 @@ service cloud.firestore {
         // An accepted invitation makes the invited person a member with the invited role.
         allow create: if request.auth.uid == uid
           && keysOnly(['role', 'active', 'inviteId'])
-          && request.resource.data.active == true && request.resource.data.role in ['teacher', 'principal', 'owner', 'accountant']
+          && request.resource.data.active == true && request.resource.data.role in ['teacher', 'principal', 'owner', 'accountant', 'staff']
           && request.resource.data.inviteId is string && id30(request.resource.data.inviteId)
           && request.auth.token.email_verified == true
           && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteId)).data.status == 'pending'
@@ -594,6 +594,16 @@ service cloud.firestore {
           && classId.matches('[a-z0-9-]{1,20}') && validClassTeacher(nd())
           && exists(/databases/$(database)/documents/schools/$(schoolId)/classes/$(classId))
           && activeTeacherMember(request.resource.data.teacherUid);
+      }
+
+      // Departments and heads of department (Batch 90). departments/{id}: name and hodUid, the head of department, who must be an
+      // active teacher. The owner sets them; the owner, the principal and the school's teachers read them.
+      match /departments/{deptId} {
+        allow get, list: if isStaffViewer(schoolId) || isActiveTeacher();
+        allow create, update: if ownerAuth(schoolId)
+          && deptId.matches('[a-z0-9-]{1,30}') && validDepartment(nd())
+          && activeTeacherMember(request.resource.data.hodUid);
+        allow delete: if ownerAuth(schoolId);
       }
 
       // Daily attendance. attendance/{date}_{classId}_{studentId}: yearId, classId,
@@ -2324,6 +2334,11 @@ service cloud.firestore {
       return string(t.year()) + '-' + pad2(t.month()) + '-' + pad2(t.day());
     }
 
+    function validDepartment(item) {
+      return item.keys().hasAll(['name', 'hodUid']) && item.size() == 2
+        && namedText(item.name, 60) && textLen(item.hodUid, 1, 128);
+    }
+
     function validClassTeacher(item) {
       return item.keys().hasAll(['teacherUid']) && item.size() == 1
         && textLen(item.teacherUid, 1, 128);
@@ -3064,7 +3079,7 @@ service cloud.firestore {
       return item.keys().hasAll(['schoolId', 'email', 'role', 'status', 'createdBy']) && item.size() == 5
         && item.schoolId is string && item.schoolId.matches('[a-z0-9-]{1,40}')
         && maxText(item.email, 120) && item.email.matches('[^@ A-Z]+@[^@ A-Z]+')
-        && item.role in ['teacher', 'principal', 'owner', 'accountant']
+        && item.role in ['teacher', 'principal', 'owner', 'accountant', 'staff']
         && item.status in ['pending', 'accepted', 'revoked']
         && item.createdBy is string;
     }
