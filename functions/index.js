@@ -23,6 +23,19 @@ const db = getFirestore();
 
 const BACKUP_COLLECTIONS = ["studentHistory", "storageRecords", "staffDocuments", "eBooks", "noticeAcks", "members", "students", "academicYears", "classes", "sections", "subjects", "classSubjects", "enrollments", "rollKeys", "exams", "marks", "attendance", "staffAttendance", "leaveRequests", "feeStructures", "payments", "notices", "timetable", "homework", "calendar", "books", "loans", "behaviour", "visitors", "substitutions", "routes", "transportRiders", "activities", "activityMembers", "inventory", "alumni", "expenses", "certificates", "tickets", "staffDirectory", "vendors", "minutes", "lostFound", "concessions", "achievements", "complaints", "assets", "sales", "syllabus", "trainings", "diary", "healthRecords", "lessonPlans", "ptmSlots", "payroll", "messages", "enquiries", "eventRegistrations", "familyAccess", "classTeachers", "auditLog", "scholarships", "scholarshipApps", "consentForms", "consentResponses", "staffProfiles", "hostelRooms", "hostelStays", "canteenMenu", "canteenPlans", "bookReservations", "workflowRules", "approvalRequests", "questionBank", "onlineTests", "onlineTestKeys", "onlineAttempts", "pickupPeople", "pickupLogs", "settings"];
 const KEEP_BACKUPS = 14;
+// Batch 83: the platform's backup policy (platformConfig/backupPolicy, set on the admin Backups page) decides how long copies are kept
+// (keepDays, 7 to 3650) and how often they run (daily or weekly). With no policy the old behaviour stays: daily, newest 14 files.
+async function readBackupPolicy() {
+  try {
+    const found = await db.doc('platformConfig/backupPolicy').get();
+    const data = found.exists ? found.data() : {};
+    const keepDays = Number.isInteger(data.keepDays) && data.keepDays >= 7 && data.keepDays <= 3650 ? data.keepDays : null;
+    return { keepDays, weekly: data.frequency === 'weekly' };
+  } catch (error) {
+    logger.error('Could not read the backup policy; using the default', error);
+    return { keepDays: null, weekly: false };
+  }
+}
 
 // Timestamps become { __ts: ISO text } so the file is plain JSON.
 const plain = (value) => {
@@ -33,7 +46,7 @@ const plain = (value) => {
 };
 const today = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 
-async function backUpSchool(bucket, schoolId) {
+async function backUpSchool(bucket, schoolId, keepDays) {
   const data = {};
   let docs = 0;
   for (const name of BACKUP_COLLECTIONS) {
@@ -53,13 +66,19 @@ async function backUpSchool(bucket, schoolId) {
   if (!sameCounts) throw new Error('The saved copy does not match the records.');
   // Keep only the newest files.
   const [files] = await bucket.getFiles({ prefix: 'backups/' + schoolId + '/' });
-  const old = files.map((item) => item.name).sort().reverse().slice(KEEP_BACKUPS);
+  const names = files.map((item) => item.name).sort().reverse();
+  // With a policy: remove copies older than keepDays, but never the newest 3. Without one: keep the newest 14 files.
+  const cutoff = keepDays ? new Date(Date.now() + 330 * 60000 - keepDays * 86400000).toISOString().slice(0, 10) : null;
+  const old = cutoff ? names.slice(3).filter((name) => name.split('/').pop().replace('.json', '') < cutoff) : names.slice(KEEP_BACKUPS);
   await Promise.all(old.map((name) => bucket.file(name).delete().catch(() => {})));
   await db.doc('schools/' + schoolId + '/settings/autoBackup').set({ date, docs, bytes: Buffer.byteLength(body), ok: true, path, verified: true });
   return docs;
 }
 
 exports.nightlyBackup = onSchedule({ schedule: '30 2 * * *', timeZone: 'Asia/Kolkata', memory: '1GiB', timeoutSeconds: 540, retryCount: 2 }, async () => {
+  const policy = await readBackupPolicy();
+  // Weekly policy: run only on Sundays (India time).
+  if (policy.weekly && new Date(Date.now() + 330 * 60000).getUTCDay() !== 0) { logger.info('Weekly backup policy: skipped today'); return; }
   const bucket = getStorage().bucket();
   const schools = await db.collection('schools').select().get();
   const failed = [];
@@ -67,7 +86,7 @@ exports.nightlyBackup = onSchedule({ schedule: '30 2 * * *', timeZone: 'Asia/Kol
   for (const school of schools.docs) {
     // One school failing never stops the others.
     try {
-      await backUpSchool(bucket, school.id);
+      await backUpSchool(bucket, school.id, policy.keepDays);
       done += 1;
     } catch (error) {
       failed.push(school.id);

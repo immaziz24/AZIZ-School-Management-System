@@ -104,7 +104,7 @@
 103,13,Backup & Disaster Recovery,Backup scheduling,Built,Built in Batch 79 per build records; live check pending,Mark 4
 104,13,Backup & Disaster Recovery,Completion monitoring,Built,Built in Batch 79 per build records; live check pending,Mark 4
 105,13,Backup & Disaster Recovery,Failure alerts,Built,Built in Batch 79 per build records; live check pending,Mark 4
-106,13,Backup & Disaster Recovery,Retention,Partial,Retention is a written policy; no automatic job,Mark 4
+106,13,Backup & Disaster Recovery,Retention,Built,"Nightly server job reads the backup policy: keeps backups for the chosen days (newest 3 always kept), daily or weekly (Batch 83, needs functions deploy)",Mark 4
 107,13,Backup & Disaster Recovery,Restoration,Built,Built in Batch 79 per build records; live check pending,Mark 4
 108,13,Backup & Disaster Recovery,Recovery testing,Built,Built in Batch 79 per build records; live check pending,Mark 4
 109,14,Customer Support & Tickets,Tickets,Built,Built in Batch 79 per build records; live check pending,Mark 4

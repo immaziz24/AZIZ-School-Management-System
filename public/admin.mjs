@@ -1543,7 +1543,7 @@ async function viewBackups() {
   show(loading('Loading backups.'));
   const b = await readBackups();
   const editPolicy = () => guarded(async () => {
-    const v = await formDialog({ title: 'Backup retention and alerts', note: 'This is the policy the platform follows. The nightly server job makes the backups; removing backups older than this and sending the alert email need the server job to read this policy, which is not wired in yet.', ok: 'Save policy', fields: [
+    const v = await formDialog({ title: 'Backup retention and alerts', note: 'The nightly server job reads this policy: it removes backups older than the days you set (it always keeps the newest 3) and, if you choose weekly, makes them on Sundays only. The alert email is not sent yet; alerts show on this page.', ok: 'Save policy', fields: [
       { key: 'keepDays', label: 'Keep each backup for (days, 7 to 3650)', type: 'number', required: true, value: b.policy.keepDays },
       { key: 'frequency', label: 'How often', type: 'select', options: [['daily', 'Every day'], ['weekly', 'Every week']], value: b.policy.frequency },
       { key: 'alertAfterHours', label: 'Raise an alert when the last backup is older than (hours, 6 to 720)', type: 'number', required: true, value: b.policy.alertAfterHours },
