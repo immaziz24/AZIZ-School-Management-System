@@ -702,3 +702,151 @@ exports.runLoginScanNow = onCall({ memory: '256MiB', timeoutSeconds: 120 }, asyn
   if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
   return scanFailedLogins();
 });
+
+// ---- Batch 87: email (135), ticket classification (147) and failed-payment follow-up (146) ----
+// Keys are never kept in the database or in the code. They live in Google Secret Manager under the names below; the server account needs
+// the "Secret Manager Secret Accessor" role. With no key, email is skipped and ticket classification uses fixed keyword rules.
+async function getSecret(name) {
+  try {
+    const project = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+    const token = (await applicationDefault().getAccessToken()).access_token;
+    const res = await fetch('https://secretmanager.googleapis.com/v1/projects/' + project + '/secrets/' + name + '/versions/latest:access', { headers: { Authorization: 'Bearer ' + token } });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return Buffer.from(body.payload.data, 'base64').toString('utf8').trim() || null;
+  } catch (error) {
+    logger.error('Could not read secret ' + name, error);
+    return null;
+  }
+}
+async function requireAdmin(request) {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const admin = await db.doc('platformAdmins/' + request.auth.uid).get();
+  if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
+}
+
+// Email through Resend. Settings come from platformConfig/email (provider must be "resend", plus a from address on a domain verified in Resend).
+async function sendEmail({ to, subject, text }) {
+  const cfg = ((await db.doc('platformConfig/email').get()).data()) || {};
+  if (cfg.provider !== 'resend') return { ok: false, hint: 'Choose Resend as the mail service in Platform settings > Email.' };
+  if (!cfg.fromAddress) return { ok: false, hint: 'Set the From address in Platform settings > Email.' };
+  const key = await getSecret('RESEND_API_KEY');
+  if (!key) return { ok: false, hint: 'Save the Resend key in Google Secret Manager as RESEND_API_KEY and give the server account the Secret Manager Secret Accessor role.' };
+  const body = { from: cfg.senderName ? cfg.senderName + ' <' + cfg.fromAddress + '>' : cfg.fromAddress, to: [to], subject: String(subject).slice(0, 200),
+    text: String(text).slice(0, 5000) + (cfg.footerNote ? '\n\n' + cfg.footerNote : ''), ...(cfg.replyTo ? { reply_to: cfg.replyTo } : {}) };
+  const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) return { ok: false, error: 'Resend answered ' + res.status + ': ' + (await res.text()).slice(0, 200) };
+  return { ok: true };
+}
+exports.sendTestEmail = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requireAdmin(request);
+  const to = request.auth.token.email;
+  if (!to) return { ok: false, error: 'Your account has no email address.' };
+  const result = await sendEmail({ to, subject: 'AZIZ test email', text: 'This is a test email from the AZIZ Super Admin panel. If you can read it, platform email works.' });
+  return { ...result, to };
+});
+
+// Ticket classification. With an Anthropic key in Secret Manager (ANTHROPIC_API_KEY) a model reads the ticket; otherwise fixed keyword rules decide.
+// Only the subject and message of the ticket are sent, and only when the key exists. Results go to platformJobs/triage (the ticket itself is never changed).
+const TICKET_CATEGORIES = ['billing', 'technical', 'account', 'data', 'feature', 'other'];
+const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
+function triageByRules(subject, body) {
+  const text = (subject + ' ' + body).toLowerCase();
+  const category = /invoice|payment|paid|refund|billing|subscription|charge|plan price/.test(text) ? 'billing'
+    : /password|sign in|sign-in|login|log in|access|staff|invite|owner|account/.test(text) ? 'account'
+    : /error|bug|crash|not working|doesn't work|does not work|slow|blank|stuck|broken/.test(text) ? 'technical'
+    : /correct|wrong|delete|restore|duplicate|import|missing record|data/.test(text) ? 'data'
+    : /feature|suggest|request|would like|please add|improve/.test(text) ? 'feature' : 'other';
+  const priority = /urgent|asap|immediately|today|data loss|all students|cannot sign in|can't sign in|down\b/.test(text) ? 'urgent'
+    : /not working|error|blocked|failed|cannot|can't|wrong amount/.test(text) ? 'high' : category === 'feature' ? 'low' : 'normal';
+  return { category, priority, summary: String(subject).slice(0, 100), by: 'rules' };
+}
+async function triageTicket(ticket) {
+  const key = await getSecret('ANTHROPIC_API_KEY');
+  if (key) {
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 200, messages: [{ role: 'user', content:
+          'Classify this support ticket from a school using a school management system. Answer with JSON only: {"category": one of ' + TICKET_CATEGORIES.join('|') +
+          ', "priority": one of ' + TICKET_PRIORITIES.join('|') + ', "summary": a summary of at most 100 characters}.\n\nSubject: ' + String(ticket.subject).slice(0, 200) + '\nMessage: ' + String(ticket.body).slice(0, 1500) }] }),
+      });
+      if (res.ok) {
+        const out = await res.json();
+        const text = (out.content && out.content[0] && out.content[0].text) || '';
+        const found = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+        if (TICKET_CATEGORIES.includes(found.category) && TICKET_PRIORITIES.includes(found.priority)) return { category: found.category, priority: found.priority, summary: String(found.summary || '').slice(0, 100), by: 'ai' };
+      } else logger.error('Ticket AI answered ' + res.status);
+    } catch (error) { logger.error('Ticket AI failed; using rules', error); }
+  }
+  return triageByRules(ticket.subject, ticket.body);
+}
+async function saveTriage(ticketId, result) {
+  const ref = db.doc('platformJobs/triage');
+  await db.runTransaction(async (tx) => {
+    const items = ((await tx.get(ref)).data() || {}).items || {};
+    items[ticketId] = { ...result, at: Date.now() };
+    const keys = Object.keys(items);
+    if (keys.length > 300) for (const old of keys.sort((a, b) => items[a].at - items[b].at).slice(0, keys.length - 300)) delete items[old];
+    tx.set(ref, { items, at: Timestamp.now() });
+  });
+}
+exports.classifyTicket = onDocumentCreated('supportTickets/{ticketId}', async (event) => {
+  const ticket = event.data && event.data.data();
+  if (!ticket) return;
+  await saveTriage(event.params.ticketId, await triageTicket(ticket));
+});
+exports.triageOpenTickets = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async (request) => {
+  await requireAdmin(request);
+  const known = (((await db.doc('platformJobs/triage').get()).data()) || {}).items || {};
+  const open = await db.collection('supportTickets').where('status', '==', 'open').limit(60).get();
+  let done = 0; let by = '';
+  for (const found of open.docs) {
+    if (known[found.id] || done >= 20) continue;
+    const result = await triageTicket(found.data());
+    await saveTriage(found.id, result);
+    by = result.by; done += 1;
+  }
+  return { done, by };
+});
+
+// Failed-payment follow-up. When the platform records a failed payment attempt on an invoice that is still unpaid, the school gets a payment notice
+// in its dashboard (and an email to its owner when email is set up): the day after the next run, then every 3 days, at most 3 times, and never once
+// the invoice is paid or the failed attempt is more than 14 days old. It never takes a payment. The result is saved to platformJobs/followups.
+async function followUpRun() {
+  const ref = db.doc('platformJobs/followups');
+  const items = ((await ref.get()).data() || {}).items || {};
+  const schools = await db.collection('schools').select().get();
+  let sent = 0; let emailed = 0;
+  for (const school of schools.docs) {
+    try {
+      const unpaid = await db.collection('schools/' + school.id + '/invoices').where('status', 'in', ['due', 'overdue']).get();
+      for (const invoice of unpaid.docs) {
+        const data = invoice.data();
+        const failed = await invoice.ref.collection('payments').where('status', '==', 'failed').get();
+        if (failed.empty) continue;
+        const latest = Math.max(...failed.docs.map((entry) => (entry.data().at && entry.data().at.toMillis ? entry.data().at.toMillis() : 0)));
+        if (!latest || Date.now() - latest > 14 * 86400000) continue;
+        const balance = Math.max(0, (Number(data.amount) || 0) - (Number(data.amountPaid) || 0));
+        const key = school.id + '_' + invoice.id;
+        const seen = items[key] || { n: 0, last: 0 };
+        if (balance <= 0 || seen.n >= 3 || (seen.n > 0 && Date.now() - seen.last < 3 * 86400000)) continue;
+        const title = seen.n >= 2 ? 'Final reminder: payment for invoice ' + invoice.id : 'A payment for invoice ' + invoice.id + ' did not go through';
+        const text = 'A payment attempt for invoice ' + invoice.id + ' did not go through. The balance still due is Rs ' + balance + (data.dueOn ? ' (due ' + data.dueOn + ')' : '') +
+          '. Please pay using the instructions on the invoice, or contact AZIZ support if you already paid.';
+        const id = 'M-AUTO-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+        await db.doc('platformMessages/' + id).set({ kind: 'payment', title, body: text, audience: 'Automatic follow-up', recipients: [school.id], by: 'system', at: Timestamp.now() });
+        await db.doc('schools/' + school.id + '/platformInbox/' + id).set({ kind: 'payment', title, body: text, at: Timestamp.now() });
+        items[key] = { n: seen.n + 1, last: Date.now() };
+        sent += 1;
+        const owners = await db.collection('invites').where('schoolId', '==', school.id).where('role', '==', 'owner').get();
+        const to = owners.docs.map((entry) => entry.data().email).find(Boolean);
+        if (to && (await sendEmail({ to, subject: title, text })).ok) emailed += 1;
+      }
+    } catch (error) { logger.error('Payment follow-up failed for ' + school.id, error); }
+  }
+  await ref.set({ items, at: Timestamp.now(), sent, emailed });
+  return { sent, emailed };
+}
+exports.paymentFollowUp = onSchedule({ schedule: '0 10 * * *', timeZone: 'Asia/Kolkata', memory: '256MiB', timeoutSeconds: 300 }, async () => { await followUpRun(); });
+exports.runFollowUpNow = onCall({ memory: '256MiB', timeoutSeconds: 300 }, async (request) => { await requireAdmin(request); return followUpRun(); });

@@ -10958,6 +10958,27 @@ profileForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Second step of sign-in (Batch 87): an account with an authenticator app enrolled must give its 6-digit code after the password.
+function askAuthenticatorCode() {
+  return new Promise((resolve) => {
+    const box = document.createElement('div');
+    box.id = 'mfa-box';
+    const label = document.createElement('label');
+    label.textContent = 'Authenticator code (6 digits) ';
+    const input = document.createElement('input');
+    input.inputMode = 'numeric'; input.autocomplete = 'one-time-code'; input.maxLength = 6;
+    label.append(input);
+    const ok = document.createElement('button'); ok.type = 'button'; ok.textContent = 'Confirm';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
+    box.append(label, ok, cancel);
+    form.append(box);
+    input.focus();
+    const done = (value) => { box.remove(); resolve(value); };
+    ok.addEventListener('click', () => done(input.value.trim()));
+    cancel.addEventListener('click', () => done(null));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim()); } });
+  });
+}
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   signInButton.disabled = true;
@@ -10967,6 +10988,21 @@ form.addEventListener('submit', async (event) => {
     await signInWithEmailAndPassword(auth, fields.get('email').trim(), fields.get('password'));
     form.reset();
   } catch (error) {
+    if (error.code === 'auth/multi-factor-auth-required') {
+      try {
+        const au = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js');
+        const resolver = au.getMultiFactorResolver(auth, error);
+        const hint = resolver.hints.find((entry) => entry.factorId === au.TotpMultiFactorGenerator.FACTOR_ID);
+        if (!hint) { status.textContent = 'This account has a second factor that this page cannot ask for. Contact your administrator.'; return; }
+        status.textContent = 'Enter the code from your authenticator app.';
+        const code = await askAuthenticatorCode();
+        if (!code) { status.textContent = 'Sign-in cancelled.'; return; }
+        await resolver.resolveSignIn(au.TotpMultiFactorGenerator.assertionForSignIn(hint.uid, code));
+        form.reset();
+        status.textContent = '';
+      } catch { status.textContent = 'That code did not work. Sign in again with a fresh code.'; }
+      return;
+    }
     status.textContent = error.code === 'auth/operation-not-allowed'
       ? 'Email/password sign-in is unavailable. Contact your administrator.'
       : 'Could not sign in. Check your email and password and try again.';

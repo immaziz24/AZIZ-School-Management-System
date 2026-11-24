@@ -1,7 +1,7 @@
 // Super Admin page (Batch 76, Mark 1). Platform administrators only: the database rules decide who may read or write, not this file.
 // Every change writes a permanent entry to platformAudit in the same batch.
 import { app } from './firebase-client.mjs';
-import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail, multiFactor } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail, multiFactor, TotpMultiFactorGenerator } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   getFirestore, collection, doc, getDoc, getDocs, getDocFromServer, getDocsFromServer, setDoc, updateDoc, deleteDoc, deleteField, writeBatch,
   query, where, orderBy, limit, documentId, serverTimestamp, Timestamp,
@@ -24,11 +24,21 @@ function h(tag, attrs = {}, ...kids) {
   for (const kid of kids.flat()) if (kid !== undefined && kid !== null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
   return el;
 }
-const money = (n) => '₹' + (Number(n) || 0).toLocaleString('en-IN');
+// Platform locale (Batch 87): currency, time zone and date style from platformConfig/locale apply to this admin panel. Defaults match the old behaviour.
+let LOCALE = { currency: 'INR', timezone: 'Asia/Kolkata', dateFormat: 'DD/MM/YYYY' };
+const SYMBOLS = { INR: '₹', BDT: '৳', NPR: 'Rs ', AED: 'AED ', USD: '$' };
+const money = (n) => (SYMBOLS[LOCALE.currency] || '₹') + (Number(n) || 0).toLocaleString('en-IN');
 const num = (n) => (Number(n) || 0).toLocaleString('en-IN');
 const newId = (prefix) => prefix + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
-const today = () => new Date().toISOString().slice(0, 10);
-const when = (t) => (t && t.toDate ? t.toDate().toLocaleString('en-IN') : '');
+const today = () => { try { return new Intl.DateTimeFormat('en-CA', { timeZone: LOCALE.timezone }).format(new Date()); } catch { return new Date().toISOString().slice(0, 10); } };
+const when = (t) => {
+  if (!(t && t.toDate)) return '';
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: LOCALE.timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(t.toDate()).map((x) => [x.type, x.value]));
+    const date = LOCALE.dateFormat === 'MM/DD/YYYY' ? p.month + '/' + p.day + '/' + p.year : LOCALE.dateFormat === 'YYYY-MM-DD' ? p.year + '-' + p.month + '-' + p.day : p.day + '/' + p.month + '/' + p.year;
+    return date + ', ' + p.hour + ':' + p.minute;
+  } catch { return t.toDate().toLocaleString('en-IN'); }
+};
 let toastTimer;
 function toast(text) {
   const el = $('toast'); el.textContent = text; el.style.display = 'block';
@@ -608,8 +618,31 @@ async function viewSecurity() {
           fails.byEmail && fails.byEmail.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Email (masked)', 'Failures'].map((t) => h('th', {}, t)))),
             h('tbody', {}, fails.byEmail.map((x) => h('tr', {}, h('td', {}, x.email), h('td', {}, num(x.count))))))) : null],
     isAdmin() ? h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: scanNow }, 'Scan now')) : null);
+  // Authenticator app enrolment (Batch 87). Needs Identity Platform with TOTP switched on. After enrolling, sign-in at /app asks for the 6-digit code.
+  const mfaHolder = h('div', {});
+  const enrolled = multiFactor(auth.currentUser).enrolledFactors.length;
+  const startEnrol = () => guarded(async () => {
+    let secret;
+    try { secret = await TotpMultiFactorGenerator.generateSecret(await multiFactor(auth.currentUser).getSession()); }
+    catch (error) { toast(error.code === 'auth/requires-recent-login' ? 'Sign out and sign in again, then try once more.' : 'Authenticator apps are not switched on yet. In the Firebase console open Authentication, Sign-in method, Multi-factor authentication, and enable it with TOTP.'); return; }
+    const canvas = document.createElement('canvas');
+    let qrOk = false;
+    try { const { drawQr } = await import('./qr.mjs?v=batch-64'); drawQr(canvas, secret.generateQrCodeUrl('admin', 'AZIZ'), 200); qrOk = true; } catch { qrOk = false; }
+    const code = h('input', { inputmode: 'numeric', maxlength: '6', placeholder: '6-digit code' });
+    const confirmBtn = h('button', { class: 'btn gold', onclick: () => guarded(async () => {
+      try { await multiFactor(auth.currentUser).enroll(TotpMultiFactorGenerator.assertionForEnrollment(secret, code.value.trim()), 'Authenticator app'); }
+      catch { toast('That code did not work. Wait for a new code and try again.'); return; }
+      toast('Authenticator app added. Sign-in now asks for its code.'); await viewSecurity();
+    }) }, 'Confirm and turn on');
+    mfaHolder.replaceChildren(h('p', {}, 'Scan this with Google Authenticator, Microsoft Authenticator or similar, or type the key by hand:'), qrOk ? canvas : null,
+      h('p', { class: 'muted', style: 'word-break:break-all' }, 'Key: ' + secret.secretKey), h('div', { class: 'row' }, code, confirmBtn));
+  });
+  const mfaEnrolCard = h('div', { class: 'card' }, h('h3', {}, 'Your authenticator app'),
+    h('p', {}, enrolled ? 'You have ' + enrolled + ' second factor(s). Sign-in at /app asks for the 6-digit code.' : 'No second factor yet. Add one before turning on the MFA requirement.'),
+    h('p', { class: 'muted' }, 'Test sign-in in a private window right after adding it. If you are ever locked out, the project owner can remove the factor through the Firebase Admin tools.'),
+    enrolled ? null : h('button', { class: 'btn', onclick: startEnrol }, 'Set up an authenticator app'), mfaHolder);
   view().replaceChildren(h('h2', {}, 'Security and access'),
-    failCard,
+    failCard, mfaEnrolCard,
     h('div', { class: 'two' },
       h('div', { class: 'card' }, h('h3', {}, 'Active access passes'),
         live.length ? h('table', {}, h('tbody', {}, live.map((g) => h('tr', {}, h('td', {}, h('a', { href: '#/school/' + g.schoolId }, g.schoolId), h('div', { class: 'muted' }, g.tier + ' until ' + when(g.expiresAt))),
@@ -1628,6 +1661,16 @@ async function viewSupport() {
   show(loading('Loading tickets.'));
   const [snap, staffSnap] = await Promise.all([getDocs(collection(db, 'supportTickets')), isAdmin() ? getDocs(collection(db, 'platformStaff')).catch(() => null) : Promise.resolve(null)]);
   await loadSchools().catch(() => {});
+  // Suggestions (Batch 87): platformJobs/triage holds {ticketId: {category, priority, summary, by}} written by the server (an AI model when a key is set, otherwise fixed keyword rules).
+  const triageDoc = await getDoc(doc(db, 'platformJobs', 'triage')).catch(() => null);
+  const triage = triageDoc && triageDoc.exists() && triageDoc.data().items ? triageDoc.data().items : {};
+  const classifyNow = () => guarded(async () => {
+    const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
+    let r;
+    try { r = (await httpsCallable(getFunctions(app, 'asia-south1'), 'triageOpenTickets')()).data; } catch { toast('Could not run it. Check that the server functions are deployed.'); return; }
+    toast(r.done + ' ticket(s) classified' + (r.by ? ' by ' + r.by : '') + '.');
+    await viewSupport();
+  });
   const nameOf = (id) => { const s = S.schools.find((x) => x.id === id); return s ? s.name : id; };
   const people = [[S.user.uid, S.user.email || 'Me']];
   if (staffSnap) for (const d of staffSnap.docs) if (d.data().status === 'active' && d.id !== S.user.uid) people.push([d.id, d.data().email]);
@@ -1657,11 +1700,11 @@ async function viewSupport() {
     await batch.commit(); toast('Ticket saved.'); await viewSupport();
   });
   const tab = (key, label, n) => h('button', { class: 'btn' + (S.supFilter === key ? ' gold' : ''), onclick: () => { S.supFilter = key; viewSupport(); } }, label + ' (' + n + ')');
-  show(h('h2', {}, 'Support tickets'),
+  show(h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Support tickets'), isAdmin() ? h('button', { class: 'btn', onclick: classifyNow }, 'Classify open tickets') : null),
     h('div', { class: 'row' }, tab('open', 'Open', rows.filter(filters.open).length), tab('mine', 'Assigned to me', rows.filter(filters.mine).length), tab('unassigned', 'Unassigned', rows.filter(filters.unassigned).length),
       tab('overdue', 'Overdue', rows.filter(filters.overdue).length), tab('all', 'All', rows.length)),
     shown.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Priority', 'School', 'Subject', 'Deadline', 'Assigned to', 'Status', ''].map((t) => h('th', {}, t)))),
-      h('tbody', {}, shown.map((t) => h('tr', {}, h('td', {}, h('span', { class: 'pill ' + PRIORITY_CLASS[t.priority] }, t.priority)), h('td', {}, nameOf(t.schoolId)), h('td', {}, t.subject, h('div', { class: 'muted' }, t.createdOn)),
+      h('tbody', {}, shown.map((t) => h('tr', {}, h('td', {}, h('span', { class: 'pill ' + PRIORITY_CLASS[t.priority] }, t.priority)), h('td', {}, nameOf(t.schoolId)), h('td', {}, t.subject, h('div', { class: 'muted' }, t.createdOn), triage[t.id] ? h('div', { class: 'muted' }, 'Suggested: ' + triage[t.id].category + ', ' + triage[t.id].priority + ' priority' + (triage[t.id].summary ? ' - ' + triage[t.id].summary : '') + ' (' + (triage[t.id].by === 'ai' ? 'AI' : 'rules') + ')') : null),
         h('td', {}, t.dueOn ? h('span', { class: overdue(t) ? 'pill bad' : '' }, t.dueOn + (overdue(t) ? ' (overdue)' : '')) : '-'), h('td', {}, t.assignedEmail || (t.assignedTo ? 'Someone' : 'Nobody')), h('td', {}, t.status),
         h('td', {}, h('button', { class: 'btn sm', onclick: () => openTicket(t) }, 'Open'))))))) : h('div', { class: 'empty' }, 'No tickets here.'));
 }
@@ -1991,14 +2034,14 @@ const SETTING_GROUPS = [
     { key: 'primaryColor', label: 'Main colour (#rrggbb)', pattern: /^#[0-9a-fA-F]{6}$/, patternText: 'Use a colour like #0b1a3b.' },
     { key: 'accentColor', label: 'Accent colour (#rrggbb)', pattern: /^#[0-9a-fA-F]{6}$/, patternText: 'Use a colour like #c9a227.' },
     { key: 'supportEmail', label: 'Public support email', pattern: MAIL_PAT, patternText: 'Use a real email address.' }]],
-  ['locale', 'Language and time', 'Defaults for new schools. Anyone signed in can read this group.', [
+  ['locale', 'Language and time', 'Language is the default for school apps. Currency, time zone and date style apply to this admin panel (school apps do not use them yet). Anyone signed in can read this group.', [
     { key: 'language', label: 'Default language', type: 'select', options: [['en', 'English'], ['hi', 'Hindi'], ['bn', 'Bengali']] },
     { key: 'timezone', label: 'Time zone', type: 'select', options: [['Asia/Kolkata', 'India (Asia/Kolkata)'], ['Asia/Dhaka', 'Bangladesh (Asia/Dhaka)'], ['Asia/Kathmandu', 'Nepal (Asia/Kathmandu)'], ['Asia/Dubai', 'Gulf (Asia/Dubai)'], ['UTC', 'UTC']] },
     { key: 'dateFormat', label: 'Date style', type: 'select', options: [['DD/MM/YYYY', '31/12/2026'], ['MM/DD/YYYY', '12/31/2026'], ['YYYY-MM-DD', '2026-12-31']] },
     { key: 'currency', label: 'Currency', type: 'select', options: [['INR', 'Rupee (INR)'], ['BDT', 'Taka (BDT)'], ['NPR', 'Nepali rupee (NPR)'], ['AED', 'Dirham (AED)'], ['USD', 'US dollar (USD)']] },
     { key: 'weekStart', label: 'Week starts on', type: 'select', options: [['monday', 'Monday'], ['sunday', 'Sunday']] }]],
-  ['email', 'Email', 'How platform emails should look. Only you can read this. Sending needs the server job; never type a password or key here.', [
-    { key: 'senderName', label: 'Sender name', maxLen: 60 }, { key: 'replyTo', label: 'Reply-to address', pattern: MAIL_PAT, patternText: 'Use a real email address.' },
+  ['email', 'Email', 'How platform emails look. Only you can read this. Never type a password or key here: the Resend key is kept in Google Secret Manager (name RESEND_API_KEY). The from address must be on a domain verified in Resend.', [
+    { key: 'fromAddress', label: 'From address (verified in Resend)', pattern: MAIL_PAT, patternText: 'Use a real email address.' }, { key: 'senderName', label: 'Sender name', maxLen: 60 }, { key: 'replyTo', label: 'Reply-to address', pattern: MAIL_PAT, patternText: 'Use a real email address.' },
     { key: 'supportEmail', label: 'Support address', pattern: MAIL_PAT, patternText: 'Use a real email address.' },
     { key: 'provider', label: 'Mail service (name only)', type: 'select', options: [['none', 'Not chosen yet'], ['resend', 'Resend'], ['sendgrid', 'SendGrid'], ['ses', 'Amazon SES'], ['smtp', 'Own mail server']] },
     { key: 'footerNote', label: 'Footer line on every email', maxLen: 200 }]],
@@ -2051,7 +2094,13 @@ async function viewSettings(tab) {
     audit(batch, 'platform-setting', '', v.reason, JSON.stringify({ group: id, before: current, after: data }));
     await batch.commit(); toast('Settings saved.'); await viewSettings(id);
   });
-  show(h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Platform settings'), h('button', { class: 'btn gold', onclick: edit }, 'Change')),
+  const testEmail = () => guarded(async () => {
+    const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
+    let r;
+    try { r = (await httpsCallable(getFunctions(app, 'asia-south1'), 'sendTestEmail')()).data; } catch { toast('Could not run it. Check that the server functions are deployed.'); return; }
+    toast(r.ok ? 'Test email sent to ' + r.to + '.' : (r.hint || r.error || 'Not sent.'));
+  });
+  show(h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'Platform settings'), id === 'email' ? h('button', { class: 'btn', onclick: testEmail }, 'Send me a test email') : null, h('button', { class: 'btn gold', onclick: edit }, 'Change')),
     h('div', { class: 'row' }, SETTING_GROUPS.map(([k, t]) => h('a', { class: 'btn' + (k === id ? ' gold' : ''), href: '#/settings/' + k }, t))),
     h('div', { class: 'card' }, h('h3', {}, label), h('p', { class: 'muted' }, note),
       h('table', {}, h('tbody', {}, fields.map((f) => h('tr', {}, h('td', { style: 'width:40%' }, f.label), h('td', {}, shown(f)))))),
@@ -2216,6 +2265,7 @@ onAuthStateChanged(auth, async (user) => {
     return;
   }
   S.user = user; S.role = role; S.staff = staffData;
+  try { const lc = await getDocFromServer(doc(db, 'platformConfig', 'locale')); if (lc.exists()) LOCALE = { ...LOCALE, ...Object.fromEntries(['currency', 'timezone', 'dateFormat'].filter((k) => typeof lc.data()[k] === 'string').map((k) => [k, lc.data()[k]])) }; } catch { /* keep the defaults */ }
   $('who').textContent = user.email || user.uid;
   $('gate').hidden = true; $('gate').style.display = 'none'; $('shell').hidden = false;
   applyRoleToPage();

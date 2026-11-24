@@ -94,7 +94,7 @@
 93,11,Firebase & Infrastructure Monitoring,Infrastructure costs,Built,"Daily job reads the Google Cloud billing export in BigQuery; Infrastructure page shows measured month cost and cost by service (Batch 85; needs the billing export switched on, functions deploy and BigQuery roles)",Mark 4
 94,11,Firebase & Infrastructure Monitoring,Error alerts,Built,Built in Batch 79 per build records; live check pending,Mark 4
 95,12,Security & Audit Logs,Admin login history,Built,Built in Batch 79 per build records; live check pending,Mark 4
-96,12,Security & Audit Logs,MFA,Not started,Blocked: needs Firebase Identity Platform upgrade for MFA enrolment,Mark 4
+96,12,Security & Audit Logs,MFA,Built,Authenticator-app (TOTP) enrolment on the Security page; /app sign-in asks for the 6-digit code; MFA requirement for sensitive passes (Batch 87; needs Identity Platform upgrade and TOTP enabled in the Firebase console),Mark 4
 97,12,Security & Audit Logs,Failed-login detection,Built,"Hourly server job reads Identity Platform activity log for failed password sign-ins; Security page shows counts and masked emails with 5+ failures (Batch 86; needs Identity Platform upgrade, activity logging on, Logging Viewer role, functions deploy; log shape not yet seen on real data)",Mark 4
 98,12,Security & Audit Logs,Action logs,Built,Built in Batch 79 per build records; live check pending,Mark 4
 99,12,Security & Audit Logs,School access history,Built,Built in Batch 79 per build records; live check pending,Mark 4
@@ -132,8 +132,8 @@
 131,17,Reports & Data Exports,Support reports,Built,Built in Batch 80 per build records; live check pending,Mark 5
 132,17,Reports & Data Exports,Authorized CSV/PDF exports,Built,Built in Batch 80 per build records; live check pending,Mark 5
 133,18,Platform Settings & Configuration,Branding,Built,"Platform settings: Branding; product name, tagline and support email shown in school apps (Batch 81)",Mark 5
-134,18,Platform Settings & Configuration,Language and timezone,Partial,"Default language now applies in school apps for browsers with no language chosen (Batch 82); time zone, date style and currency are saved only",Mark 5
-135,18,Platform Settings & Configuration,Email configuration,Partial,Saved in Platform settings; sending needs the server job,Mark 5
+134,18,Platform Settings & Configuration,Language and timezone,Built,"Default language applies in school apps; currency, time zone and date style apply in the admin panel (Batch 87); school apps do not use time zone, date style or currency",Mark 5
+135,18,Platform Settings & Configuration,Email configuration,Built,"Emails sent through Resend (test button in Settings > Email; payment follow-ups also email the owner) (Batch 87; needs Resend key in Secret Manager, verified from-address and functions deploy)",Mark 5
 136,18,Platform Settings & Configuration,Payment settings,Built,Platform settings: Payments; printed on invoices (Batch 80),Mark 5
 137,18,Platform Settings & Configuration,Maintenance controls,Built,Platform settings: Maintenance; notice bar in school apps (Batch 80),Mark 5
 138,18,Platform Settings & Configuration,Legal and privacy settings,Built,Platform settings: Legal; terms and privacy links shown in school apps (Batch 81),Mark 5
@@ -144,8 +144,8 @@
 143,19,Staff & Internal Admin Management,Support access,Built,Built in Batch 79 per build records; live check pending,Mark 4
 144,19,Staff & Internal Admin Management,Revocation and auditing,Built,Built in Batch 79 per build records; live check pending,Mark 4
 145,20,Advanced Automation & AI,Renewal automation,Built,Built in Batch 80 per build records; live check pending,Mark 5
-146,20,Advanced Automation & AI,Failed-payment follow-up,Not started,Blocked: needs a payment gateway and keys,Mark 5
-147,20,Advanced Automation & AI,AI ticket classification,Not started,Blocked: needs an AI API key,Mark 5
+146,20,Advanced Automation & AI,Failed-payment follow-up,Built,"Daily job follows up recorded failed payments on unpaid invoices: school notice and owner email, up to 3 times (Batch 87); works from payments recorded by hand, not from a gateway",Mark 5
+147,20,Advanced Automation & AI,AI ticket classification,Built,"New tickets get a category, priority and summary on the Support page: AI model when ANTHROPIC_API_KEY is in Secret Manager, otherwise fixed keyword rules (Batch 87; needs functions deploy)",Mark 5
 148,20,Advanced Automation & AI,Usage anomalies,Built,Built in Batch 80 per build records; live check pending,Mark 5
 149,20,Advanced Automation & AI,Churn indicators,Built,Built in Batch 80 per build records; live check pending,Mark 5
 150,20,Advanced Automation & AI,Health summaries,Built,Built in Batch 80 per build records; live check pending,Mark 5
