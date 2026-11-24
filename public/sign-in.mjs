@@ -51,6 +51,61 @@ const assignmentStatus = document.querySelector('#assignment-status');
 const assignmentSummary = document.querySelector('#teacher-assignment-summary');
 const assignmentButton = assignmentForm.querySelector('button');
 let saveAssignment;
+// Batch 96: a teacher may teach many classes and subjects. slotTools is set once the school loads (owner only).
+let slotTools;
+const assignmentList = document.querySelector('#assignment-list');
+async function renderSlots() {
+  if (!assignmentList) return;
+  const uid = String(assignmentForm.elements.namedItem('uid').value || '');
+  assignmentList.replaceChildren();
+  if (!slotTools || !uid) return;
+  const request = schoolRequest;
+  let rows = [];
+  try {
+    rows = (await slotTools.list(uid)).map((record) => record.data());
+    const first = await slotTools.primary(uid);
+    if (first && !(first.classId && rows.some((row) => row.classId === first.classId && row.subjectId === first.subjectId))) rows.unshift(first);
+  } catch { const li = document.createElement('li'); li.textContent = 'Could not load this teacher\'s list.'; assignmentList.append(li); return; }
+  if (request !== schoolRequest) return;
+  rows.sort((a, b) => String(a.className).localeCompare(String(b.className)) || String(a.subject).localeCompare(String(b.subject)));
+  if (!rows.length) { const li = document.createElement('li'); li.textContent = 'Nothing assigned yet. Choose a class and subject above and press Add.'; assignmentList.append(li); return; }
+  for (const row of rows) {
+    const li = document.createElement('li');
+    li.textContent = row.className + ' - ' + row.subject + ' ';
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.textContent = 'Remove';
+    remove.addEventListener('click', async () => {
+      remove.disabled = true;
+      try { await slotTools.remove(uid, row); assignmentStatus.textContent = 'Removed.'; } catch { assignmentStatus.textContent = 'Could not remove it. Try again.'; }
+      renderSlots();
+    });
+    li.append(remove);
+    assignmentList.append(li);
+  }
+}
+assignmentForm.elements.namedItem('uid').addEventListener('change', renderSlots);
+// Teacher side: every class and subject this teacher teaches, with the one chosen for this session.
+function pickTeachingSlots(primary, slots) {
+  const all = [...slots];
+  if (primary && primary.classId && primary.subjectId && !all.some((s) => s.classId === primary.classId && s.subjectId === primary.subjectId)) all.unshift(primary);
+  all.sort((a, b) => String(a.className).localeCompare(String(b.className)) || String(a.subject).localeCompare(String(b.subject)));
+  let saved = '';
+  try { saved = sessionStorage.getItem('aziz-slot') || ''; } catch { saved = ''; }
+  const chosen = all.find((s) => s.classId + '_' + s.subjectId === saved) ?? all[0];
+  return { all, chosen };
+}
+function showSlotPicker(all, chosen) {
+  document.querySelector('#teacher-slot-pick')?.remove();
+  const label = document.createElement('label');
+  label.id = 'teacher-slot-pick';
+  label.append('Teaching now: ');
+  const select = document.createElement('select');
+  for (const s of all) { const o = document.createElement('option'); o.value = s.classId + '_' + s.subjectId; o.textContent = s.className + ' - ' + s.subject; select.append(o); }
+  select.value = chosen.classId + '_' + chosen.subjectId;
+  select.addEventListener('change', () => { try { sessionStorage.setItem('aziz-slot', select.value); } catch { /* choice is not kept */ } location.reload(); });
+  label.append(select);
+  assignmentSummary.after(label);
+}
 const marksForm = document.querySelector('#marks-entry');
 const marksStatus = document.querySelector('#marks-status');
 const marksButton = marksForm.querySelector('button');
@@ -83,7 +138,7 @@ marksForm.addEventListener('submit', async (event) => {
 
 assignmentForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!saveAssignment || assignmentButton.disabled) return;
+  if (!saveAssignment || !slotTools || assignmentButton.disabled) return;
   const request = schoolRequest;
   const fields = new FormData(assignmentForm);
   const uid = String(fields.get('uid') ?? '').trim();
@@ -106,8 +161,8 @@ assignmentForm.addEventListener('submit', async (event) => {
   assignmentButton.disabled = true;
   assignmentStatus.textContent = 'Saving assignment.';
   try {
-    await saveAssignment(uid, { className, subject, classId, subjectId });
-    if (request === schoolRequest) assignmentStatus.textContent = 'Assignment saved.';
+    await slotTools.add(uid, { className, subject, classId, subjectId });
+    if (request === schoolRequest) { assignmentStatus.textContent = 'Added. Choose the next class and subject for this teacher, or leave it here.'; renderSlots(); }
   } catch (error) {
     if (request === schoolRequest) assignmentStatus.textContent = error.code === 'permission-denied'
       ? 'Check that this person is an active teacher at your school.'
@@ -1551,6 +1606,7 @@ function fillTeacherSelects() {
     }
     if (keep && staffRoster.includes(keep)) select.value = keep;
   }
+  renderSlots();
 }
 
 async function loadTeacherNames(members) {
@@ -10798,6 +10854,9 @@ onAuthStateChanged(auth, async (user) => {
   assignmentForm.elements.namedItem('mappingId').replaceChildren();
   dashboard.hidden = true;
   saveAssignment = undefined;
+  slotTools = undefined;
+  document.querySelector('#teacher-slot-pick')?.remove();
+  if (assignmentList) assignmentList.replaceChildren();
   saveMark = undefined;
   marksForm.hidden = true;
   marksForm.reset();
@@ -10945,11 +11004,13 @@ onAuthStateChanged(auth, async (user) => {
       try {
         const assignment = await getDocFromServer(doc(schoolRef, 'teacherAssignments', user.uid));
         if (request !== schoolRequest) return;
-        assignmentSummary.textContent = assignment.exists()
-          ? assignment.data().className + ' - ' + assignment.data().subject
-          : 'No class or subject assigned yet.';
-        if (assignment.exists()) {
-          const { className, subject, classId, subjectId } = assignment.data();
+        const slotsFound = await getDocsFromServer(query(collection(schoolRef, 'teacherSlots'), where('uid', '==', user.uid))).then((found) => found.docs.map((record) => record.data())).catch(() => []);
+        const mine = pickTeachingSlots(assignment.exists() ? assignment.data() : null, slotsFound);
+        assignmentSummary.textContent = mine.chosen ? mine.chosen.className + ' - ' + mine.chosen.subject
+          : assignment.exists() ? assignment.data().className + ' - ' + assignment.data().subject : 'No class or subject assigned yet.';
+        if (mine.all.length > 1) showSlotPicker(mine.all, mine.chosen);
+        if (assignment.exists() || mine.chosen) {
+          const { className, subject, classId, subjectId } = mine.chosen ?? assignment.data();
           noticeAssignedClass = classId ?? '';
           teacherHomework = classId && subjectId ? { schoolRef, uid: user.uid, classId, subjectId, subject, busy: false } : undefined;
           if (classId && subjectId) {
@@ -11063,6 +11124,34 @@ onAuthStateChanged(auth, async (user) => {
     ownerRole.textContent = feeOffice ? 'Fee office' : superView ? 'Super admin (view only)' : viewOnly ? 'Principal (view, approve leave, post notices)' : 'School Owner';
     saveSchoolProfile = (profile) => updateDoc(schoolRef, profile);
     saveAssignment = (uid, assignment) => setDoc(doc(schoolRef, 'teacherAssignments', uid), assignment);
+    slotTools = {
+      list: (uid) => getDocsFromServer(query(collection(schoolRef, 'teacherSlots'), where('uid', '==', uid))).then((found) => found.docs),
+      primary: (uid) => getDocFromServer(doc(schoolRef, 'teacherAssignments', uid)).then((found) => (found.exists() ? found.data() : null)),
+      add: async (uid, entry) => {
+        const batch = writeBatch(getFirestore(app));
+        batch.set(doc(schoolRef, 'teacherSlots', uid + '_' + entry.classId + '_' + entry.subjectId),
+          { uid, classId: entry.classId, subjectId: entry.subjectId, className: entry.className, subject: entry.subject });
+        batch.set(doc(schoolRef, 'teacherClasses', uid + '_' + entry.classId), { uid, classId: entry.classId });
+        const first = await getDocFromServer(doc(schoolRef, 'teacherAssignments', uid));
+        if (!first.exists() || !first.data().classId) batch.set(doc(schoolRef, 'teacherAssignments', uid), { className: entry.className, subject: entry.subject, classId: entry.classId, subjectId: entry.subjectId });
+        await batch.commit();
+      },
+      remove: async (uid, entry) => {
+        const batch = writeBatch(getFirestore(app));
+        const slots = (await getDocsFromServer(query(collection(schoolRef, 'teacherSlots'), where('uid', '==', uid)))).docs.map((record) => record.data());
+        const left = slots.filter((row) => !(row.classId === entry.classId && row.subjectId === entry.subjectId));
+        if (entry.classId) batch.delete(doc(schoolRef, 'teacherSlots', uid + '_' + entry.classId + '_' + entry.subjectId));
+        if (entry.classId && !left.some((row) => row.classId === entry.classId)) batch.delete(doc(schoolRef, 'teacherClasses', uid + '_' + entry.classId));
+        const first = await getDocFromServer(doc(schoolRef, 'teacherAssignments', uid));
+        const isFirst = first.exists() && first.data().className === entry.className && first.data().subject === entry.subject;
+        if (isFirst) {
+          if (left.length) batch.set(doc(schoolRef, 'teacherAssignments', uid), { className: left[0].className, subject: left[0].subject, classId: left[0].classId, subjectId: left[0].subjectId });
+          else batch.delete(doc(schoolRef, 'teacherAssignments', uid));
+        }
+        await batch.commit();
+      },
+    };
+    renderSlots();
     ownerEmail.textContent = user.email;
     dashboard.hidden = false;
     status.hidden = true;

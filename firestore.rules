@@ -529,6 +529,36 @@ service cloud.firestore {
         allow create, update: if ownerAuth(schoolId)
           && activeTeacher() && validAssignment(nd())
           && idsMatchRecords(nd());
+        allow delete: if ownerAuth(schoolId);
+      }
+
+      // Batch 96: everything a teacher teaches. The owner adds one entry per class and subject, and removes entries.
+      match /teacherSlots/{slotId} {
+        function slotTeacherActive() {
+          let m = get(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.resource.data.uid)).data;
+          return m.active == true && m.role == 'teacher';
+        }
+        allow get, list: if isStaffViewer(schoolId) || (request.auth.uid == resource.data.uid && isActiveTeacher());
+        allow create, update: if ownerAuth(schoolId)
+          && validSlot(nd())
+          && slotId == request.resource.data.uid + '_' + request.resource.data.classId + '_' + request.resource.data.subjectId
+          && slotTeacherActive()
+          && exists(/databases/$(database)/documents/schools/$(schoolId)/classSubjects/$(request.resource.data.classId + '_' + request.resource.data.subjectId))
+          && get(/databases/$(database)/documents/schools/$(schoolId)/classes/$(request.resource.data.classId)).data.name == request.resource.data.className
+          && get(/databases/$(database)/documents/schools/$(schoolId)/subjects/$(request.resource.data.subjectId)).data.name == request.resource.data.subject;
+        allow delete: if ownerAuth(schoolId);
+      }
+
+      match /teacherClasses/{linkId} {
+        allow get, list: if isStaffViewer(schoolId) || (request.auth.uid == resource.data.uid && isActiveTeacher());
+        allow create: if ownerAuth(schoolId)
+          && request.resource.data.keys().hasOnly(['uid', 'classId']) && request.resource.data.size() == 2
+          && request.resource.data.uid is string && request.resource.data.uid.size() > 0 && request.resource.data.uid.size() <= 128
+          && idText(request.resource.data.classId)
+          && linkId == request.resource.data.uid + '_' + request.resource.data.classId
+          && classExists(schoolId, request.resource.data.classId)
+          && get(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.resource.data.uid)).data.role == 'teacher';
+        allow delete: if ownerAuth(schoolId);
       }
 
       match /staff/{staffId} {
@@ -552,11 +582,21 @@ service cloud.firestore {
         let path = /databases/$(database)/documents/schools/$(schoolId)/teacherAssignments/$(request.auth.uid);
         return exists(path) && get(path).data.keys().hasAll(['classId', 'subjectId']) ? get(path).data.subjectId : '';
       }
+      // Batch 96: a teacher may teach many classes and subjects. teacherSlots/{uid}_{classId}_{subjectId} says "this teacher teaches
+      // this subject in this class"; teacherClasses/{uid}_{classId} says "this teacher teaches something in this class". The single
+      // assignment above keeps working as the first entry.
       function teachesClass(classId) {
-        return request.auth != null && isActiveTeacher() && teacherClassId() != '' && teacherClassId() == classId;
+        return request.auth != null && isActiveTeacher()
+          && ((teacherClassId() != '' && teacherClassId() == classId)
+            || exists(/databases/$(database)/documents/schools/$(schoolId)/teacherClasses/$(request.auth.uid + '_' + classId)));
+      }
+      function teachesSubject(classId, subjectId) {
+        return request.auth != null && isActiveTeacher()
+          && ((teacherClassId() == classId && teacherSubjectId() == subjectId)
+            || exists(/databases/$(database)/documents/schools/$(schoolId)/teacherSlots/$(request.auth.uid + '_' + classId + '_' + subjectId)));
       }
       function teachesExam(exam) {
-        return teachesClass(exam.classId) && teacherSubjectId() == exam.subjectId;
+        return teachesSubject(exam.classId, exam.subjectId);
       }
       function markAllowed(mark) {
         let exam = get(/databases/$(database)/documents/schools/$(schoolId)/exams/$(mark.examId)).data;
@@ -751,7 +791,7 @@ service cloud.firestore {
         return assessment.classId == score.classId && assessment.subjectId == score.subjectId
           && assessment.maxMarks == score.maxMarks && assessment.title == score.assessmentTitle
           && assessment.date == score.date && score.score <= assessment.maxMarks
-          && teachesClass(assessment.classId) && teacherSubjectId() == assessment.subjectId
+          && teachesSubject(assessment.classId, assessment.subjectId)
           && exists(enrollmentPath) && get(enrollmentPath).data.classId == assessment.classId;
       }
 
@@ -835,7 +875,7 @@ service cloud.firestore {
           && request.resource.data.dueDate >= request.resource.data.createdAt
           && classExists(schoolId, request.resource.data.classId)
           && (isSchoolOwner(schoolId)
-            || (teachesClass(request.resource.data.classId) && teacherSubjectId() == request.resource.data.subjectId));
+            || (teachesSubject(request.resource.data.classId, request.resource.data.subjectId)));
         allow delete: if (isSchoolOwner(schoolId)
           || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
       }
@@ -1326,7 +1366,7 @@ service cloud.firestore {
           && request.resource.data.createdAt <= latestAttendanceDate()
           && classExists(schoolId, request.resource.data.classId)
           && (isSchoolOwner(schoolId)
-            || (teachesClass(request.resource.data.classId) && teacherSubjectId() == request.resource.data.subjectId));
+            || (teachesSubject(request.resource.data.classId, request.resource.data.subjectId)));
         allow delete: if (isSchoolOwner(schoolId)
           || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
       }
@@ -1432,7 +1472,7 @@ service cloud.firestore {
           && request.resource.data.createdBy == request.auth.uid
           && classExists(schoolId, request.resource.data.classId)
           && (isSchoolOwner(schoolId)
-            || (teachesClass(request.resource.data.classId) && teacherSubjectId() == request.resource.data.subjectId));
+            || (teachesSubject(request.resource.data.classId, request.resource.data.subjectId)));
         allow delete: if (isSchoolOwner(schoolId)
           || (isActiveTeacher() && resource.data.createdBy == request.auth.uid));
       }
@@ -1890,6 +1930,14 @@ service cloud.firestore {
           && validMark(request.resource.data, markId) && matchesAssignment(nd())
           && (resource == null || matchesAssignment(resource.data));
       }
+    }
+
+    function validSlot(item) {
+      return item.keys().hasAll(['uid', 'classId', 'subjectId', 'className', 'subject']) && item.size() == 5
+        && item.uid is string && item.uid.size() > 0 && item.uid.size() <= 128
+        && idText(item.classId)
+        && item.subjectId is string && item.subjectId.matches('[a-z0-9-]{1,30}')
+        && maxText(item.className, 80) && maxText(item.subject, 80);
     }
 
     function validAssignment(assignment) {
