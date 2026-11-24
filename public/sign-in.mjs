@@ -7844,8 +7844,35 @@ async function showMaintenanceBanner() {
     document.body.prepend(bar);
   } catch { /* no notice to show */ }
 }
+// Platform branding and legal (Batch 81): platformConfig/branding and platformConfig/legal are public. The page title uses the product name; a small footer
+// shows the tagline, the public support email and the terms and privacy links. Only https links are used. Nothing here locks anything.
+async function applyPlatformPublicSettings() {
+  try {
+    const { doc, getDocFromServer } = firestoreTools;
+    const fs = academic.schoolRef.firestore;
+    const [b, l] = await Promise.all([getDocFromServer(doc(fs, 'platformConfig', 'branding')).catch(() => null), getDocFromServer(doc(fs, 'platformConfig', 'legal')).catch(() => null)]);
+    const brand = b && b.exists() ? b.data() : {};
+    const legal = l && l.exists() ? l.data() : {};
+    const old = document.getElementById('platform-footer');
+    if (old) old.remove();
+    const ok = (u) => typeof u === 'string' && /^https:\/\/[^\s]+$/.test(u);
+    const bits = [];
+    if (typeof brand.productName === 'string' && brand.productName) { if (!document.title.includes(brand.productName)) document.title = document.title.split(' | ')[0] + ' | ' + brand.productName.slice(0, 60); bits.push(document.createTextNode(brand.productName.slice(0, 60) + (brand.tagline ? ' - ' + String(brand.tagline).slice(0, 120) : ''))); }
+    const link = (text, url) => { const a = document.createElement('a'); a.textContent = text; a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.style.color = 'inherit'; return a; };
+    if (ok(legal.termsUrl)) bits.push(link('Terms' + (legal.termsVersion ? ' v' + String(legal.termsVersion).slice(0, 20) : ''), legal.termsUrl));
+    if (ok(legal.privacyUrl)) bits.push(link('Privacy' + (legal.privacyVersion ? ' v' + String(legal.privacyVersion).slice(0, 20) : ''), legal.privacyUrl));
+    if (typeof brand.supportEmail === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(brand.supportEmail)) bits.push(link('Support', 'mailto:' + brand.supportEmail));
+    if (!bits.length) return;
+    const foot = document.createElement('div');
+    foot.id = 'platform-footer';
+    foot.style.cssText = 'padding:10px 14px;text-align:center;font:12px/1.5 system-ui,sans-serif;opacity:.75';
+    bits.forEach((node, i) => { if (i) foot.append(' | '); foot.append(node); });
+    document.body.append(foot);
+  } catch { /* no public settings to show */ }
+}
 async function readFlags() {
   void showMaintenanceBanner();
+  void applyPlatformPublicSettings();
   let flags = {};
   const { doc, getDocFromServer } = firestoreTools;
   try {

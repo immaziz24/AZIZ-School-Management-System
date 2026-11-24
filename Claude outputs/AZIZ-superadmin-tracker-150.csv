@@ -1,151 +1,151 @@
-﻿No,Module no,Module,Feature,"Status (code reading, not yet tested live)",Evidence or gap,Mark
-1,1,Command Dashboard,Total schools,Built,Revenue panel counts schools by status,Mark 1
-2,1,Command Dashboard,Active schools,Built,Counted in Revenue panel,Mark 1
-3,1,Command Dashboard,Trial schools,Built,Counted in Revenue panel,Mark 1
-4,1,Command Dashboard,Suspended schools,Built,Counted with cancelled; not shown on its own,Mark 1
-5,1,Command Dashboard,Total students,Partial,Per-school usage only; no platform total,Mark 1
-6,1,Command Dashboard,Total teachers,Partial,Per-school staff count only; no platform total,Mark 1
-7,1,Command Dashboard,MRR,Partial,Monthly paid/unpaid chart; no MRR figure,Mark 1
-8,1,Command Dashboard,Collected revenue,Built,Revenue chart by month,Mark 1
-9,1,Command Dashboard,Outstanding payments,Built,Unpaid bars and invoice list,Mark 1
-10,1,Command Dashboard,Alerts,Partial,System Health page only; no unified alert feed,Mark 1
-11,2,School Registration & Management,School registration by super admin,Not started,Schools are created only by owners through self sign-up,Mark 1
-12,2,School Registration & Management,School listing,Built,"Schools list with plan, status, usage",Mark 1
-13,2,School Registration & Management,School searching,Not started,No search or filter on the list,Mark 1
-14,2,School Registration & Management,School editing,Partial,Owner edits profile; super admin edits plan and location only,Mark 1
-15,2,School Registration & Management,Owner assignment,Not started,Owner is set at sign-up only,Mark 1
-16,2,School Registration & Management,Unique school IDs,Built,Slug rule and reserved names in rules,Mark 1
-17,2,School Registration & Management,Subdomains,Partial,"School page by ?school=; custom domain map exists, no subdomain control",Mark 1
-18,2,School Registration & Management,Plan assignment,Built,Save plan on each school,Mark 1
-19,2,School Registration & Management,Activation,Built,Billing status active,Mark 1
-20,2,School Registration & Management,Suspension,Built,Status suspended makes school read-only,Mark 1
-21,2,School Registration & Management,Administrative school access,Partial,"Read-only view added in Batch 75; no banner mode, reason or audit",Mark 1
-22,2,School Registration & Management,Archiving,Not started,No archived state,Mark 1
-23,3,School Owner & Account Management,Owner directory,Not started,Owners are not listed across schools,Mark 1
-24,3,School Owner & Account Management,Invitations,Partial,School owners invite staff; no platform owner invites,Mark 1
-25,3,School Owner & Account Management,Verification,Partial,Email verified check for invites only,Mark 1
-26,3,School Owner & Account Management,Activation,Not started,No owner activate or deactivate,Mark 1
-27,3,School Owner & Account Management,Secure recovery,Not started,Relies on Firebase password reset only,Mark 1
-28,3,School Owner & Account Management,Ownership transfer,Not started,Not built,Mark 1
-29,3,School Owner & Account Management,Login history,Not started,Not recorded,Mark 1
-30,3,School Owner & Account Management,School relationships,Not started,No view of one owner across schools,Mark 1
-31,4,Subscription Plans & Pricing,Plan creation,Not started,Plans are fixed names; no catalogue,Mark 1
-32,4,Subscription Plans & Pricing,Plan editing,Not started,No catalogue,Mark 1
-33,4,Subscription Plans & Pricing,Monthly pricing,Partial,"Price is set per school, not per plan",Mark 1
-34,4,Subscription Plans & Pricing,Yearly pricing,Not started,Not built,Mark 1
-35,4,Subscription Plans & Pricing,Setup fees,Not started,Not built,Mark 1
-36,4,Subscription Plans & Pricing,Student limits,Built,studentLimit in billing; rules enforce,Mark 1
-37,4,Subscription Plans & Pricing,Storage limits,Built,storageMb in billing; rules enforce,Mark 1
-38,4,Subscription Plans & Pricing,Feature entitlements,Partial,Global feature switches only; not per plan,Mark 1
-39,4,Subscription Plans & Pricing,Plan changes,Built,Save plan,Mark 1
-40,4,Subscription Plans & Pricing,Pricing history,Not started,Not kept,Mark 1
-41,5,"Billing, Payments & Invoices",Subscription invoices,Built,Nightly billing creates invoices,Mark 2
-42,5,"Billing, Payments & Invoices",Setup invoices,Not started,No setup fee,Mark 2
-43,5,"Billing, Payments & Invoices",Paid and unpaid tracking,Built,Mark paid; overdue status,Mark 2
-44,5,"Billing, Payments & Invoices",Partial payments,Not started,Not built,Mark 2
-45,5,"Billing, Payments & Invoices",Verified offline payments,Partial,Mark paid; no proof or verifier,Mark 2
-46,5,"Billing, Payments & Invoices",Payment gateway,Not started,Needs Razorpay keys,Mark 2
-47,5,"Billing, Payments & Invoices",Refunds,Not started,Not built,Mark 2
-48,5,"Billing, Payments & Invoices",PDF invoices,Not started,CSV reconciliation only,Mark 2
-49,5,"Billing, Payments & Invoices",Failed payments,Not started,No charging yet,Mark 2
-50,5,"Billing, Payments & Invoices",Billing reconciliation,Built,CSV download (extra),Mark 2
-51,6,Revenue & Business Analytics,MRR,Partial,No explicit figure,Mark 2
-52,6,Revenue & Business Analytics,ARR,Not started,Not built,Mark 2
-53,6,Revenue & Business Analytics,Total revenue,Built,Revenue chart,Mark 2
-54,6,Revenue & Business Analytics,New subscriptions,Not started,Not shown,Mark 2
-55,6,Revenue & Business Analytics,Churn,Built,Churn line in Revenue panel,Mark 2
-56,6,Revenue & Business Analytics,Trial conversion,Not started,Not shown,Mark 2
-57,6,Revenue & Business Analytics,Average revenue per school,Not started,Not shown,Mark 2
-58,6,Revenue & Business Analytics,Plan-wise revenue,Not started,Not shown,Mark 2
-59,7,School Website & Domain Management,Website generation,Built,Public school page,Mark 3
-60,7,School Website & Domain Management,Subdomains,Partial,?school= only,Mark 3
-61,7,School Website & Domain Management,Custom domains,Built,Domain requests and domainMap,Mark 3
-62,7,School Website & Domain Management,Domain verification,Built,Check domain and mark verified,Mark 3
-63,7,School Website & Domain Management,SSL,Not started,Needs hosting provider (feature 100),Mark 3
-64,7,School Website & Domain Management,DNS,Partial,Checks the address; no DNS records shown,Mark 3
-65,7,School Website & Domain Management,Preview,Partial,Public page itself,Mark 3
-66,7,School Website & Domain Management,Publishing controls,Not started,No publish or unpublish switch,Mark 3
-67,8,Theme Marketplace,Theme creation,Built,Publish theme,Mark 3
-68,8,Theme Marketplace,Preview,Partial,Applied on the public page only,Mark 3
-69,8,Theme Marketplace,Assignment,Built,Owner chooses a marketplace theme,Mark 3
-70,8,Theme Marketplace,Premium entitlements,Not started,All themes are free,Mark 3
-71,8,Theme Marketplace,Updates,Not started,No versions,Mark 3
-72,8,Theme Marketplace,Rollback,Not started,No versions,Mark 3
-73,9,Feature Access & Permissions,Feature catalogue,Partial,Switch list,Mark 3
-74,9,Feature Access & Permissions,Plan mapping,Not started,Not built,Mark 3
-75,9,Feature Access & Permissions,School overrides,Not started,Switches are global,Mark 3
-76,9,Feature Access & Permissions,Global switches,Built,Feature switches,Mark 3
-77,9,Feature Access & Permissions,Beta access,Not started,Not built,Mark 3
-78,9,Feature Access & Permissions,Gradual rollout,Not started,Not built,Mark 3
-79,9,Feature Access & Permissions,Role permissions,Not started,Roles are fixed in rules,Mark 3
-80,9,Feature Access & Permissions,Change history,Not started,Not recorded,Mark 3
-81,10,Cloud Storage & Usage,Storage allocation,Built,storageMb,Mark 3
-82,10,Cloud Storage & Usage,Usage monitoring,Built,Usage and storage overview,Mark 3
-83,10,Cloud Storage & Usage,Quotas,Built,Rules enforce,Mark 3
-84,10,Cloud Storage & Usage,Warnings,Partial,Shown to owner; no platform warning list,Mark 3
-85,10,Cloud Storage & Usage,Upload blocking,Built,Rules block over quota,Mark 3
-86,10,Cloud Storage & Usage,Storage upgrades,Built,Add-on requests and approval,Mark 3
-87,10,Cloud Storage & Usage,Usage reconciliation,Partial,Owner recount; no platform job,Mark 3
-88,10,Cloud Storage & Usage,Retention,Not started,No retention policy,Mark 3
-89,11,Firebase & Infrastructure Monitoring,Firestore usage,Not started,Not shown,Mark 4
-90,11,Firebase & Infrastructure Monitoring,Storage usage,Partial,Per school only,Mark 4
-91,11,Firebase & Infrastructure Monitoring,Authentication activity,Not started,Not shown,Mark 4
-92,11,Firebase & Infrastructure Monitoring,Bandwidth,Not started,Not shown,Mark 4
-93,11,Firebase & Infrastructure Monitoring,Infrastructure costs,Not started,Not shown,Mark 4
-94,11,Firebase & Infrastructure Monitoring,Error alerts,Partial,Health check every 6 hours,Mark 4
-95,12,Security & Audit Logs,Admin login history,Not started,Not recorded,Mark 4
-96,12,Security & Audit Logs,MFA,Not started,Needs Firebase Identity Platform,Mark 4
-97,12,Security & Audit Logs,Failed-login detection,Not started,Not built,Mark 4
-98,12,Security & Audit Logs,Action logs,Partial,School audit log exists; no platform audit log,Mark 4
-99,12,Security & Audit Logs,School access history,Not started,Not recorded,Mark 4
-100,12,Security & Audit Logs,Permission changes,Not started,Not recorded,Mark 4
-101,12,Security & Audit Logs,Suspicious activity,Partial,Per-school live security alerts,Mark 4
-102,12,Security & Audit Logs,Incident management,Not started,Not built,Mark 4
-103,13,Backup & Disaster Recovery,Backup scheduling,Built,Nightly backup 02:30,Mark 4
-104,13,Backup & Disaster Recovery,Completion monitoring,Built,Health page,Mark 4
-105,13,Backup & Disaster Recovery,Failure alerts,Partial,Shown on Health page only,Mark 4
-106,13,Backup & Disaster Recovery,Retention,Partial,Fixed; not configurable,Mark 4
-107,13,Backup & Disaster Recovery,Restoration,Built,Owner restore tool with preview,Mark 4
-108,13,Backup & Disaster Recovery,Recovery testing,Built,Drill log,Mark 4
-109,14,Customer Support & Tickets,Tickets,Built,Owners raise; admin reads,Mark 4
-110,14,Customer Support & Tickets,Assignments,Not started,Single admin,Mark 4
-111,14,Customer Support & Tickets,Priorities,Not started,Not built,Mark 4
-112,14,Customer Support & Tickets,Responses,Built,Reply on ticket,Mark 4
-113,14,Customer Support & Tickets,Resolution deadlines,Not started,Not built,Mark 4
-114,14,Customer Support & Tickets,Closure,Built,Status closed,Mark 4
-115,15,Notifications & Announcements,Platform announcements,Not started,Not built,Mark 2
-116,15,Notifications & Announcements,Renewal notices,Not started,Not built,Mark 2
-117,15,Notifications & Announcements,Payment alerts,Partial,"Fee reminders are for parents, not school owners",Mark 2
-118,15,Notifications & Announcements,Maintenance notices,Not started,Not built,Mark 2
-119,15,Notifications & Announcements,Targeted messages,Not started,Not built,Mark 2
-120,15,Notifications & Announcements,Delivery tracking,Not started,Not built,Mark 2
-121,16,School Onboarding & Trials,Trial creation,Built,Trial billing record at sign-up,Mark 2
-122,16,School Onboarding & Trials,Trial duration,Built,30 days,Mark 2
-123,16,School Onboarding & Trials,Trial expiry,Built,Nightly billing handles it,Mark 2
-124,16,School Onboarding & Trials,Onboarding progress,Partial,Owner setup checklist; not visible to platform,Mark 2
-125,16,School Onboarding & Trials,Conversion,Not started,Not shown,Mark 2
-126,16,School Onboarding & Trials,Grace periods,Built,Suspension after grace,Mark 2
-127,17,Reports & Data Exports,School reports,Not started,Not built,Mark 5
-128,17,Reports & Data Exports,Subscription reports,Not started,Not built,Mark 5
-129,17,Reports & Data Exports,Revenue reports,Partial,Billing CSV,Mark 5
-130,17,Reports & Data Exports,Storage reports,Partial,Owner storage report only,Mark 5
-131,17,Reports & Data Exports,Support reports,Not started,Not built,Mark 5
-132,17,Reports & Data Exports,Authorized CSV/PDF exports,Not started,Only billing CSV,Mark 5
-133,18,Platform Settings & Configuration,Branding,Not started,Not built,Mark 5
-134,18,Platform Settings & Configuration,Language and timezone,Not started,Not built,Mark 5
-135,18,Platform Settings & Configuration,Email configuration,Not started,Not built,Mark 5
-136,18,Platform Settings & Configuration,Payment settings,Not started,Not built,Mark 5
-137,18,Platform Settings & Configuration,Maintenance controls,Not started,Not built,Mark 5
-138,18,Platform Settings & Configuration,Legal and privacy settings,Partial,Consent screen for owners,Mark 5
-139,19,Staff & Internal Admin Management,Staff invitations,Not started,One admin only,Mark 4
-140,19,Staff & Internal Admin Management,Internal roles,Not started,Not built,Mark 4
-141,19,Staff & Internal Admin Management,Permissions,Not started,Not built,Mark 4
-142,19,Staff & Internal Admin Management,Finance access,Not started,Not built,Mark 4
-143,19,Staff & Internal Admin Management,Support access,Not started,Not built,Mark 4
-144,19,Staff & Internal Admin Management,Revocation and auditing,Not started,Not built,Mark 4
-145,20,Advanced Automation & AI,Renewal automation,Built,Nightly billing renews,Mark 5
-146,20,Advanced Automation & AI,Failed-payment follow-up,Not started,Needs gateway,Mark 5
-147,20,Advanced Automation & AI,AI ticket classification,Not started,Needs AI key,Mark 5
-148,20,Advanced Automation & AI,Usage anomalies,Not started,Not built,Mark 5
-149,20,Advanced Automation & AI,Churn indicators,Not started,Not built,Mark 5
-150,20,Advanced Automation & AI,Health summaries,Partial,Health page; no AI summary,Mark 5
+﻿No,Module no,Module,Feature,"Status (from build records, Batch 81; live check still pending)",Evidence or gap,Mark
+1,1,Command Dashboard,Total schools,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+2,1,Command Dashboard,Active schools,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+3,1,Command Dashboard,Trial schools,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+4,1,Command Dashboard,Suspended schools,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+5,1,Command Dashboard,Total students,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+6,1,Command Dashboard,Total teachers,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+7,1,Command Dashboard,MRR,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+8,1,Command Dashboard,Collected revenue,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+9,1,Command Dashboard,Outstanding payments,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+10,1,Command Dashboard,Alerts,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+11,2,School Registration & Management,School registration by super admin,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+12,2,School Registration & Management,School listing,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+13,2,School Registration & Management,School searching,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+14,2,School Registration & Management,School editing,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+15,2,School Registration & Management,Owner assignment,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+16,2,School Registration & Management,Unique school IDs,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+17,2,School Registration & Management,Subdomains,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+18,2,School Registration & Management,Plan assignment,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+19,2,School Registration & Management,Activation,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+20,2,School Registration & Management,Suspension,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+21,2,School Registration & Management,Administrative school access,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+22,2,School Registration & Management,Archiving,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+23,3,School Owner & Account Management,Owner directory,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+24,3,School Owner & Account Management,Invitations,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+25,3,School Owner & Account Management,Verification,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+26,3,School Owner & Account Management,Activation,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+27,3,School Owner & Account Management,Secure recovery,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+28,3,School Owner & Account Management,Ownership transfer,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+29,3,School Owner & Account Management,Login history,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+30,3,School Owner & Account Management,School relationships,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+31,4,Subscription Plans & Pricing,Plan creation,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+32,4,Subscription Plans & Pricing,Plan editing,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+33,4,Subscription Plans & Pricing,Monthly pricing,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+34,4,Subscription Plans & Pricing,Yearly pricing,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+35,4,Subscription Plans & Pricing,Setup fees,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+36,4,Subscription Plans & Pricing,Student limits,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+37,4,Subscription Plans & Pricing,Storage limits,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+38,4,Subscription Plans & Pricing,Feature entitlements,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+39,4,Subscription Plans & Pricing,Plan changes,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+40,4,Subscription Plans & Pricing,Pricing history,Built,Built in Batches 74-75 per build records; live check pending,Mark 1
+41,5,"Billing, Payments & Invoices",Subscription invoices,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+42,5,"Billing, Payments & Invoices",Setup invoices,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+43,5,"Billing, Payments & Invoices",Paid and unpaid tracking,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+44,5,"Billing, Payments & Invoices",Partial payments,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+45,5,"Billing, Payments & Invoices",Verified offline payments,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+46,5,"Billing, Payments & Invoices",Payment gateway,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+47,5,"Billing, Payments & Invoices",Refunds,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+48,5,"Billing, Payments & Invoices",PDF invoices,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+49,5,"Billing, Payments & Invoices",Failed payments,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+50,5,"Billing, Payments & Invoices",Billing reconciliation,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+51,6,Revenue & Business Analytics,MRR,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+52,6,Revenue & Business Analytics,ARR,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+53,6,Revenue & Business Analytics,Total revenue,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+54,6,Revenue & Business Analytics,New subscriptions,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+55,6,Revenue & Business Analytics,Churn,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+56,6,Revenue & Business Analytics,Trial conversion,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+57,6,Revenue & Business Analytics,Average revenue per school,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+58,6,Revenue & Business Analytics,Plan-wise revenue,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+59,7,School Website & Domain Management,Website generation,Built,Built in Batch 78 per build records; live check pending,Mark 3
+60,7,School Website & Domain Management,Subdomains,Built,Built in Batch 78 per build records; live check pending,Mark 3
+61,7,School Website & Domain Management,Custom domains,Built,Built in Batch 78 per build records; live check pending,Mark 3
+62,7,School Website & Domain Management,Domain verification,Built,Built in Batch 78 per build records; live check pending,Mark 3
+63,7,School Website & Domain Management,SSL,Built,Built in Batch 78 per build records; live check pending,Mark 3
+64,7,School Website & Domain Management,DNS,Built,Built in Batch 78 per build records; live check pending,Mark 3
+65,7,School Website & Domain Management,Preview,Built,Built in Batch 78 per build records; live check pending,Mark 3
+66,7,School Website & Domain Management,Publishing controls,Built,Built in Batch 78 per build records; live check pending,Mark 3
+67,8,Theme Marketplace,Theme creation,Built,Built in Batch 78 per build records; live check pending,Mark 3
+68,8,Theme Marketplace,Preview,Built,Built in Batch 78 per build records; live check pending,Mark 3
+69,8,Theme Marketplace,Assignment,Built,Built in Batch 78 per build records; live check pending,Mark 3
+70,8,Theme Marketplace,Premium entitlements,Built,Built in Batch 78 per build records; live check pending,Mark 3
+71,8,Theme Marketplace,Updates,Built,Built in Batch 78 per build records; live check pending,Mark 3
+72,8,Theme Marketplace,Rollback,Built,Built in Batch 78 per build records; live check pending,Mark 3
+73,9,Feature Access & Permissions,Feature catalogue,Built,Built in Batch 78 per build records; live check pending,Mark 3
+74,9,Feature Access & Permissions,Plan mapping,Built,Built in Batch 78 per build records; live check pending,Mark 3
+75,9,Feature Access & Permissions,School overrides,Built,Built in Batch 78 per build records; live check pending,Mark 3
+76,9,Feature Access & Permissions,Global switches,Built,Built in Batch 78 per build records; live check pending,Mark 3
+77,9,Feature Access & Permissions,Beta access,Built,Built in Batch 78 per build records; live check pending,Mark 3
+78,9,Feature Access & Permissions,Gradual rollout,Built,Built in Batch 78 per build records; live check pending,Mark 3
+79,9,Feature Access & Permissions,Role permissions,Built,Built in Batch 78 per build records; live check pending,Mark 3
+80,9,Feature Access & Permissions,Change history,Built,Built in Batch 78 per build records; live check pending,Mark 3
+81,10,Cloud Storage & Usage,Storage allocation,Built,Built in Batch 78 per build records; live check pending,Mark 3
+82,10,Cloud Storage & Usage,Usage monitoring,Built,Built in Batch 78 per build records; live check pending,Mark 3
+83,10,Cloud Storage & Usage,Quotas,Built,Built in Batch 78 per build records; live check pending,Mark 3
+84,10,Cloud Storage & Usage,Warnings,Built,Built in Batch 78 per build records; live check pending,Mark 3
+85,10,Cloud Storage & Usage,Upload blocking,Built,Built in Batch 78 per build records; live check pending,Mark 3
+86,10,Cloud Storage & Usage,Storage upgrades,Built,Built in Batch 78 per build records; live check pending,Mark 3
+87,10,Cloud Storage & Usage,Usage reconciliation,Built,Built in Batch 78 per build records; live check pending,Mark 3
+88,10,Cloud Storage & Usage,Retention,Built,Built in Batch 78 per build records; live check pending,Mark 3
+89,11,Firebase & Infrastructure Monitoring,Firestore usage,Partial,Typed-in figures; no live Firestore feed,Mark 4
+90,11,Firebase & Infrastructure Monitoring,Storage usage,Built,Built in Batch 79 per build records; live check pending,Mark 4
+91,11,Firebase & Infrastructure Monitoring,Authentication activity,Built,Built in Batch 79 per build records; live check pending,Mark 4
+92,11,Firebase & Infrastructure Monitoring,Bandwidth,Partial,Typed-in figures; no live feed,Mark 4
+93,11,Firebase & Infrastructure Monitoring,Infrastructure costs,Partial,Typed-in figures; no live feed,Mark 4
+94,11,Firebase & Infrastructure Monitoring,Error alerts,Built,Built in Batch 79 per build records; live check pending,Mark 4
+95,12,Security & Audit Logs,Admin login history,Built,Built in Batch 79 per build records; live check pending,Mark 4
+96,12,Security & Audit Logs,MFA,Not started,Blocked: needs Firebase Identity Platform upgrade for MFA enrolment,Mark 4
+97,12,Security & Audit Logs,Failed-login detection,Partial,Visible failures only; wrong-password attempts cannot be captured from the browser,Mark 4
+98,12,Security & Audit Logs,Action logs,Built,Built in Batch 79 per build records; live check pending,Mark 4
+99,12,Security & Audit Logs,School access history,Built,Built in Batch 79 per build records; live check pending,Mark 4
+100,12,Security & Audit Logs,Permission changes,Built,Built in Batch 79 per build records; live check pending,Mark 4
+101,12,Security & Audit Logs,Suspicious activity,Built,Built in Batch 79 per build records; live check pending,Mark 4
+102,12,Security & Audit Logs,Incident management,Built,Built in Batch 79 per build records; live check pending,Mark 4
+103,13,Backup & Disaster Recovery,Backup scheduling,Built,Built in Batch 79 per build records; live check pending,Mark 4
+104,13,Backup & Disaster Recovery,Completion monitoring,Built,Built in Batch 79 per build records; live check pending,Mark 4
+105,13,Backup & Disaster Recovery,Failure alerts,Built,Built in Batch 79 per build records; live check pending,Mark 4
+106,13,Backup & Disaster Recovery,Retention,Partial,Retention is a written policy; no automatic job,Mark 4
+107,13,Backup & Disaster Recovery,Restoration,Built,Built in Batch 79 per build records; live check pending,Mark 4
+108,13,Backup & Disaster Recovery,Recovery testing,Built,Built in Batch 79 per build records; live check pending,Mark 4
+109,14,Customer Support & Tickets,Tickets,Built,Built in Batch 79 per build records; live check pending,Mark 4
+110,14,Customer Support & Tickets,Assignments,Built,Built in Batch 79 per build records; live check pending,Mark 4
+111,14,Customer Support & Tickets,Priorities,Built,Built in Batch 79 per build records; live check pending,Mark 4
+112,14,Customer Support & Tickets,Responses,Built,Built in Batch 79 per build records; live check pending,Mark 4
+113,14,Customer Support & Tickets,Resolution deadlines,Built,Built in Batch 79 per build records; live check pending,Mark 4
+114,14,Customer Support & Tickets,Closure,Built,Built in Batch 79 per build records; live check pending,Mark 4
+115,15,Notifications & Announcements,Platform announcements,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+116,15,Notifications & Announcements,Renewal notices,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+117,15,Notifications & Announcements,Payment alerts,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+118,15,Notifications & Announcements,Maintenance notices,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+119,15,Notifications & Announcements,Targeted messages,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+120,15,Notifications & Announcements,Delivery tracking,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+121,16,School Onboarding & Trials,Trial creation,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+122,16,School Onboarding & Trials,Trial duration,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+123,16,School Onboarding & Trials,Trial expiry,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+124,16,School Onboarding & Trials,Onboarding progress,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+125,16,School Onboarding & Trials,Conversion,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+126,16,School Onboarding & Trials,Grace periods,Built,Built in Batches 76-77 per build records; live check pending,Mark 2
+127,17,Reports & Data Exports,School reports,Built,Built in Batch 80 per build records; live check pending,Mark 5
+128,17,Reports & Data Exports,Subscription reports,Built,Built in Batch 80 per build records; live check pending,Mark 5
+129,17,Reports & Data Exports,Revenue reports,Built,Built in Batch 80 per build records; live check pending,Mark 5
+130,17,Reports & Data Exports,Storage reports,Built,Built in Batch 80 per build records; live check pending,Mark 5
+131,17,Reports & Data Exports,Support reports,Built,Built in Batch 80 per build records; live check pending,Mark 5
+132,17,Reports & Data Exports,Authorized CSV/PDF exports,Built,Built in Batch 80 per build records; live check pending,Mark 5
+133,18,Platform Settings & Configuration,Branding,Built,"Platform settings: Branding; product name, tagline and support email shown in school apps (Batch 81)",Mark 5
+134,18,Platform Settings & Configuration,Language and timezone,Partial,Saved in Platform settings; no app reads it yet,Mark 5
+135,18,Platform Settings & Configuration,Email configuration,Partial,Saved in Platform settings; sending needs the server job,Mark 5
+136,18,Platform Settings & Configuration,Payment settings,Built,Platform settings: Payments; printed on invoices (Batch 80),Mark 5
+137,18,Platform Settings & Configuration,Maintenance controls,Built,Platform settings: Maintenance; notice bar in school apps (Batch 80),Mark 5
+138,18,Platform Settings & Configuration,Legal and privacy settings,Built,Platform settings: Legal; terms and privacy links shown in school apps (Batch 81),Mark 5
+139,19,Staff & Internal Admin Management,Staff invitations,Built,Built in Batch 79 per build records; live check pending,Mark 4
+140,19,Staff & Internal Admin Management,Internal roles,Built,Built in Batch 79 per build records; live check pending,Mark 4
+141,19,Staff & Internal Admin Management,Permissions,Built,Built in Batch 79 per build records; live check pending,Mark 4
+142,19,Staff & Internal Admin Management,Finance access,Built,Built in Batch 79 per build records; live check pending,Mark 4
+143,19,Staff & Internal Admin Management,Support access,Built,Built in Batch 79 per build records; live check pending,Mark 4
+144,19,Staff & Internal Admin Management,Revocation and auditing,Built,Built in Batch 79 per build records; live check pending,Mark 4
+145,20,Advanced Automation & AI,Renewal automation,Built,Built in Batch 80 per build records; live check pending,Mark 5
+146,20,Advanced Automation & AI,Failed-payment follow-up,Not started,Blocked: needs a payment gateway and keys,Mark 5
+147,20,Advanced Automation & AI,AI ticket classification,Not started,Blocked: needs an AI API key,Mark 5
+148,20,Advanced Automation & AI,Usage anomalies,Built,Built in Batch 80 per build records; live check pending,Mark 5
+149,20,Advanced Automation & AI,Churn indicators,Built,Built in Batch 80 per build records; live check pending,Mark 5
+150,20,Advanced Automation & AI,Health summaries,Built,Built in Batch 80 per build records; live check pending,Mark 5
