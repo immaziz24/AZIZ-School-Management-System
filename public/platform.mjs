@@ -726,7 +726,7 @@ onAuthStateChanged(auth, async (user) => {
     if (member.exists() && member.data().active === true && ['owner', 'principal'].includes(member.data().role)) {
       myRole = member.data().role;
       plan.section.hidden = false;
-      for (const el of document.querySelectorAll('#plan-section .owner-only')) el.hidden = myRole !== 'owner';
+      for (const el of document.querySelectorAll('#plan-section .owner-only, #people .owner-only')) el.hidden = myRole !== 'owner';
       await loadPlan();
     }
   } catch { /* not a member of this school */ }

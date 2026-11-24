@@ -16,7 +16,7 @@ const OWNER_CATS = [
   ['Students and admissions', ['qrcards', 'student-roster', 'roster', 'profile360', 'family-access', 'enquiries', 'bulk-import', 'promotion', 'cards', 'certificates', 'health', 'behaviour', 'achievements', 'alumni', 'hostelrooms', 'hostelstays', 'canteenmenu', 'canteenplans', 'pickuppeople']],
   ['Classes and exams', ['ebooks', 'academic-setup', 'class-teachers', 'exam-setup', 'marks-review', 'report-card', 'grading', 'homework-owner', 'lessons-owner', 'syllabus', 'onlinetests', 'questionbank', 'riskboard', 'library', 'bookreservations', 'diary']],
   ['Fees and accounts', ['fees', 'defaulters', 'feereminders', 'concessions', 'scholarships', 'scholarshipapps', 'expenses', 'ledger', 'finance', 'sales', 'workflowrules', 'reports']],
-  ['Staff', ['staffdir', 'staffdocs', 'staff-profiles', 'teacher assignment', 'staff directory', 'staff-attendance', 'checkins', 'qr-screen', 'disputes', 'hours', 'leave-review', 'payroll', 'bulk-cards', 'payslip', 'appraisals', 'trainings', 'workload']],
+  ['Staff', ['people', 'staffdir', 'staffdocs', 'staff-profiles', 'teacher assignment', 'staff directory', 'staff-attendance', 'checkins', 'qr-screen', 'disputes', 'hours', 'leave-review', 'payroll', 'bulk-cards', 'payslip', 'appraisals', 'trainings', 'workload']],
   ['Transport and campus', ['routes', 'riders', 'vehicles', 'activities', 'members', 'inventory', 'assets', 'tickets', 'vendors', 'lostfound', 'storage']],
   ['Parents and website', ['website', 'siteextras', 'ptm', 'eventregs', 'consents', 'complaints', 'minutes']],
   ['Settings and data', ['school profile', 'prefs', 'principal-access', 'backup', 'audit-log', 'plan-section', 'invite-accept']],
@@ -41,6 +41,7 @@ const teacher = $('#teacher-dashboard');
 const portal = $('#portal-dashboard');
 const platformSection = $('#platform-section');
 if (owner && $('#plan-section')) owner.append($('#plan-section'));
+if (owner && $('#people')) owner.append($('#people'));
 let platform = null;
 if (platformSection) {
   platform = document.createElement('section');
@@ -244,3 +245,12 @@ if (clock) {
   setInterval(tick, 1000);
   document.addEventListener('visibilitychange', tick);
 }
+
+// Shortcut buttons inside a module (data-find="module name"): go back to the launcher and search for that module.
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-find]');
+  if (!button || !owner) return;
+  owner.querySelector('.launcher-bar button')?.click();
+  const box = owner.querySelector('.launcher input');
+  if (box) { box.value = button.dataset.find; box.dispatchEvent(new Event('input', { bubbles: true })); box.focus(); }
+});
