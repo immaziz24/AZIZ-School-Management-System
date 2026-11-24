@@ -10856,6 +10856,20 @@ onAuthStateChanged(auth, async (user) => {
     const membership = await getDocFromServer(doc(schoolRef, 'members', user.uid));
     viewerRole = membership.data()?.role ?? '';
     if (request !== schoolRequest) return;
+    // First sign-in of a login the school created: choose a new password before anything else.
+    if (membership.data()?.active === true && membership.data().mustChange === true) {
+      const changed = await forcePasswordChange(user, doc(schoolRef, 'members', user.uid), updateDoc);
+      if (!changed) { status.hidden = true; schoolStatus.textContent = 'You must choose a new password to continue. Sign in again.'; return; }
+    }
+    // Admission / office staff: the Admission desk only.
+    if (membership.data()?.active === true && membership.data().role === 'office') {
+      status.hidden = true;
+      schoolStatus.textContent = 'Admission desk';
+      let schoolName = 'School';
+      try { schoolName = (await getDocFromServer(schoolRef)).data()?.name ?? schoolName; } catch { /* name is only used on the slip */ }
+      try { (await import('./admission-desk.mjs?v=batch-91')).mountAdmissionDesk({ app, schoolId: SCHOOL_ID, role: 'office', schoolName, root: document.querySelector('#admission-desk') }); } catch { schoolStatus.textContent = 'The admission desk could not be loaded.'; }
+      return;
+    }
     // Non-teaching staff (clerk, peon, driver): they have an account and a place on the school's staff list, but no school records to open.
     if (membership.data()?.active === true && membership.data().role === 'staff') {
       status.hidden = true;
@@ -10997,6 +11011,9 @@ onAuthStateChanged(auth, async (user) => {
     if (!superView && membership.data()?.active === true && membership.data()?.role === 'owner') {
       showPlatformInbox(schoolRef);
       requireOwnerMfa(user);
+    }
+    if (!superView && !feeOffice && ['owner', 'principal'].includes(membership.data()?.role)) {
+      import('./admission-desk.mjs?v=batch-91').then((m) => m.mountAdmissionDesk({ app, schoolId: SCHOOL_ID, role: membership.data().role, schoolName: school.data().name, root: document.querySelector('#admission-desk') })).catch(() => {});
     }
     const staff = collection(schoolRef, 'staff');
     staffDirectory = {
@@ -11174,13 +11191,37 @@ function askAuthenticatorCode() {
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim()); } });
   });
 }
+// Forces a new password for a login the school created. Returns true once the password is changed and the flag cleared.
+async function forcePasswordChange(user, memberRef, update) {
+  const au = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js');
+  const box = document.createElement('dialog');
+  const msg = document.createElement('p'); msg.textContent = 'Welcome. Choose a new password (at least 8 characters). The password on your slip works only once.';
+  const a = document.createElement('input'); a.type = 'password'; a.autocomplete = 'new-password'; a.placeholder = 'New password';
+  const b = document.createElement('input'); b.type = 'password'; b.autocomplete = 'new-password'; b.placeholder = 'Repeat new password';
+  const note = document.createElement('p'); note.setAttribute('role', 'status');
+  const go = document.createElement('button'); go.type = 'button'; go.textContent = 'Save password';
+  box.append(msg, a, document.createElement('br'), b, note, go);
+  document.body.append(box); box.showModal();
+  return new Promise((resolve) => {
+    go.addEventListener('click', async () => {
+      if (a.value.length < 8) { note.textContent = 'Use at least 8 characters.'; return; }
+      if (a.value !== b.value) { note.textContent = 'The two passwords are not the same.'; return; }
+      go.disabled = true; note.textContent = 'Saving.';
+      try { await au.updatePassword(user, a.value); await update(memberRef, { mustChange: false }); box.remove(); resolve(true); }
+      catch { note.textContent = 'Could not change it. Sign out, sign in again and retry.'; go.disabled = false; }
+    });
+  });
+}
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   signInButton.disabled = true;
   status.textContent = 'Signing in.';
   const fields = new FormData(form);
   try {
-    await signInWithEmailAndPassword(auth, fields.get('email').trim(), fields.get('password'));
+    // A student or parent signs in with the login ID on their slip (no @); it maps to the school's private login address.
+    let loginName = fields.get('email').trim();
+    if (!loginName.includes('@')) loginName = loginName.toLowerCase() + '@' + SCHOOL_ID.toLowerCase() + '.login.aziz.school';
+    await signInWithEmailAndPassword(auth, loginName, fields.get('password'));
     form.reset();
   } catch (error) {
     if (error.code === 'auth/multi-factor-auth-required') {

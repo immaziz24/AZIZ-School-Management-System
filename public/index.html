@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="./sign-in.css?v=batch-87">
   <style>html.booting body>main{display:none}#boot{display:none}html.booting #boot{display:grid;place-items:center;min-height:100vh;gap:14px;align-content:center;color:#9ca7c0;font:500 1rem Inter,system-ui,sans-serif}#boot i{width:34px;height:34px;border-radius:50%;border:3px solid #c9a24a44;border-top-color:#c9a24a;animation:bootspin .8s linear infinite}@keyframes bootspin{to{transform:rotate(360deg)}}html{background:#060b17}</style>
   <script>(function(){var h=document.documentElement;window.__bootDone=function(){h.classList.remove('booting')};setTimeout(window.__bootDone,6000)})();</script>
-  <link rel="modulepreload" href="./ui.mjs?v=batch-87"><link rel="modulepreload" href="./i18n.mjs?v=batch-64"><link rel="modulepreload" href="./sign-in.mjs?v=batch-90"><link rel="modulepreload" href="./platform.mjs?v=batch-90"><link rel="modulepreload" href="./firebase-client.mjs">
+  <link rel="modulepreload" href="./ui.mjs?v=batch-87"><link rel="modulepreload" href="./i18n.mjs?v=batch-64"><link rel="modulepreload" href="./sign-in.mjs?v=batch-91"><link rel="modulepreload" href="./platform.mjs?v=batch-90"><link rel="modulepreload" href="./firebase-client.mjs">
 </head>
 <body>
   <div id="boot" role="status" aria-live="polite"><i></i><span>Loading your school.</span></div>
@@ -24,10 +24,11 @@
     <p><label>Language <select id="lang-select"><option value="en">English</option><option value="hi">हिन्दी</option><option value="bn">বাংলা</option></select></label></p>
     <p id="firebase-status" role="status">Loading sign-in.</p>
     <form id="sign-in" hidden>
-      <p><label>Email <input name="email" type="email" autocomplete="username" required></label></p>
+      <p><label>Email or login ID <input name="email" type="text" inputmode="email" autocapitalize="none" autocomplete="username" required></label></p>
       <p><label>Password <span class="pw-wrap"><input name="password" type="password" autocomplete="current-password" required><button type="button" class="pw-eye" aria-label="Show password" title="Show password" aria-pressed="false"><svg class="on" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg><svg class="off" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.6 10.6 0 0 1 12 19C5.5 19 1.5 12 1.5 12a18.5 18.5 0 0 1 4.6-5.4M9.9 5.2A9.9 9.9 0 0 1 12 5c6.5 0 10.5 7 10.5 7a18.6 18.6 0 0 1-2.2 3.2M1 1l22 22"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></span></label></p>
       <button type="submit">Sign in</button>
     </form>
+    <details id="admission-desk" hidden></details>
     <section id="owner-dashboard" aria-labelledby="school-name" hidden>
       <h2 id="school-name"></h2>
       <p id="view-only-note" role="status" hidden><strong>View only.</strong> You can look at everything, download reports and print, approve staff leave and post notices. Everything else is the owner's.</p>
@@ -2018,7 +2019,7 @@
       <h3>People and invitations</h3>
       <form id="invite-form" class="owner-only">
         <p><label>Email <input name="email" type="email" required maxlength="120"></label>
-          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="accountant">Fee office (fees only)</option><option value="staff">Non-teaching staff (clerk, peon, driver)</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
+          <label>Role <select name="role"><option value="teacher">Teacher</option><option value="principal">Principal</option><option value="accountant">Fee office (fees only)</option><option value="office">Admission / office staff (enquiries and admissions only)</option><option value="staff">Non-teaching staff (clerk, peon, driver)</option><option value="owner">Owner (ownership transfer)</option></select></label></p>
         <button type="submit">Send invitation</button>
       </form>
       <p><small>The invited person signs in with that email on this page and accepts. To hand over ownership: invite the new owner, then they switch the old owner off.</small></p>
@@ -2176,7 +2177,7 @@
       console.error(error);
     }
     try {
-      await import('./sign-in.mjs?v=batch-90');
+      await import('./sign-in.mjs?v=batch-91');
       await import('./platform.mjs?v=batch-90');
     } catch (error) {
       status.textContent = 'Sign-in could not load. Refresh to try again.'; window.__bootDone?.();

@@ -309,7 +309,7 @@ async function loadMembers() {
     let emails = new Map();
     try { emails = new Map((await getDocs(query(collection(db, 'invites'), where('schoolId', '==', SCHOOL_ID)))).docs.map((i) => [i.id, i.data().email])); } catch { emails = new Map(); }
     const personName = (d) => (d.id === me.uid ? (me.email || 'You') + ' (you)' : emails.get(d.data().inviteId) || 'Member ' + d.id.slice(0, 6) + '…');
-    const roleName = (role) => (role === 'staff' ? 'non-teaching staff' : role === 'accountant' ? 'fee office' : role);
+    const roleName = (role) => (role === 'staff' ? 'non-teaching staff' : role === 'accountant' ? 'fee office' : role === 'office' ? 'admission staff' : role);
     let consents = new Map();
     try { consents = new Map((await getDocs(collection(schoolRef, 'consents'))).docs.map((c) => [c.id, c.data()])); } catch { consents = new Map(); }
     const consentText = (uid) => (consents.has(uid)

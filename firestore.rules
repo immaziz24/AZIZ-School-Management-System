@@ -92,6 +92,12 @@ service cloud.firestore {
 
     // The fee office login. It reads the students, classes, years and fees and records payments; it cannot
     // void a payment, change fees or students, or read anything else.
+    // Admission / office staff (Batch 91): reads and moves admission enquiries; admits students through the server function.
+    function isOfficeStaff(schoolId) {
+      let m = get(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid)).data;
+      return m.active == true && m.role == 'office' && !schoolSuspended(schoolId);
+    }
+
     function isFeeStaff(schoolId) {
       let m = get(/databases/$(database)/documents/schools/$(schoolId)/members/$(request.auth.uid)).data;
       return m.active == true && m.role == 'accountant' && !schoolSuspended(schoolId);
@@ -485,7 +491,7 @@ service cloud.firestore {
         // An accepted invitation makes the invited person a member with the invited role.
         allow create: if request.auth.uid == uid
           && keysOnly(['role', 'active', 'inviteId'])
-          && request.resource.data.active == true && request.resource.data.role in ['teacher', 'principal', 'owner', 'accountant', 'staff']
+          && request.resource.data.active == true && request.resource.data.role in ['teacher', 'principal', 'owner', 'accountant', 'staff', 'office']
           && request.resource.data.inviteId is string && id30(request.resource.data.inviteId)
           && request.auth.token.email_verified == true
           && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteId)).data.status == 'pending'
@@ -497,6 +503,9 @@ service cloud.firestore {
         allow update: if ownerAuth(schoolId) && request.auth.uid != uid
           && onlyChanges(['active'])
           && request.resource.data.active is bool;
+        // A student or parent login created by the school must change its first password; the person clears the flag themselves.
+        allow update: if request.auth.uid == uid && resource.data.get('mustChange', false) == true
+          && onlyChanges(['mustChange']) && request.resource.data.mustChange == false;
       }
 
       // teacherAssignments/{uid}: className and subject (strings).
@@ -1372,10 +1381,10 @@ service cloud.firestore {
       // status new. Only the owner reads them, moves them through the pipeline (status and note change
       // and nothing else) and removes them.
       match /enquiries/{enquiryId} {
-        allow get, list: if (isOwnerRole(schoolId) || hasAccess(schoolId) || principalAllows(schoolId, 'admissions', true));
+        allow get, list: if (isOwnerRole(schoolId) || hasAccess(schoolId) || principalAllows(schoolId, 'admissions', true) || isOfficeStaff(schoolId));
         allow create: if enquiryId.matches('EQ-[A-Za-z0-9-]{1,30}') && validEnquiry(nd())
           && request.resource.data.status == 'new' && !('note' in request.resource.data);
-        allow update: if ownerAuth(schoolId) && validEnquiry(nd())
+        allow update: if (ownerAuth(schoolId) || isOfficeStaff(schoolId)) && validEnquiry(nd())
           && onlyChanges(['status', 'note']);
       }
 
@@ -3079,7 +3088,7 @@ service cloud.firestore {
       return item.keys().hasAll(['schoolId', 'email', 'role', 'status', 'createdBy']) && item.size() == 5
         && item.schoolId is string && item.schoolId.matches('[a-z0-9-]{1,40}')
         && maxText(item.email, 120) && item.email.matches('[^@ A-Z]+@[^@ A-Z]+')
-        && item.role in ['teacher', 'principal', 'owner', 'accountant', 'staff']
+        && item.role in ['teacher', 'principal', 'owner', 'accountant', 'staff', 'office']
         && item.status in ['pending', 'accepted', 'revoked']
         && item.createdBy is string;
     }

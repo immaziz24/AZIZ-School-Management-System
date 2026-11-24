@@ -850,3 +850,247 @@ async function followUpRun() {
 }
 exports.paymentFollowUp = onSchedule({ schedule: '0 10 * * *', timeZone: 'Asia/Kolkata', memory: '256MiB', timeoutSeconds: 300 }, async () => { await followUpRun(); });
 exports.runFollowUpNow = onCall({ memory: '256MiB', timeoutSeconds: 300 }, async (request) => { await requireAdmin(request); return followUpRun(); });
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Batch 91: admissions desk, student and parent logins, yearly promotion. Everything that creates a login runs here (Admin SDK),
+// never in the browser. The caller must be the owner, an admission/office staff member, or a principal the owner switched on.
+// ---------------------------------------------------------------------------------------------------------------------------------
+const { getAuth } = require('firebase-admin/auth');
+const nodeCrypto = require('crypto');
+
+const LOGIN_DOMAIN = 'login.aziz.school';
+const loginEmail = (schoolId, loginId) => String(loginId).toLowerCase() + '@' + schoolId.toLowerCase() + '.' + LOGIN_DOMAIN;
+const PW_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+function newPassword() {
+  let out = '';
+  for (let i = 0; i < 10; i += 1) out += PW_CHARS[nodeCrypto.randomInt(PW_CHARS.length)];
+  return out;
+}
+const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+
+async function requireDesk(request, { ownerOnly = false } = {}) {
+  const schoolId = request.data?.schoolId;
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  if (typeof schoolId !== 'string' || !SCHOOL_ID_PATTERN.test(schoolId)) throw new HttpsError('invalid-argument', 'Unknown school.');
+  const member = await db.doc('schools/' + schoolId + '/members/' + request.auth.uid).get();
+  const role = member.exists && member.data().active === true ? member.data().role : '';
+  const allowed = ownerOnly ? ['owner'] : ['owner', 'office', 'principal'];
+  if (!allowed.includes(role)) throw new HttpsError('permission-denied', ownerOnly ? 'Only the school owner can do this.' : 'Only the owner, the admission staff or a principal who was given admissions access can do this.');
+  if (role === 'principal') {
+    const access = await db.doc('schools/' + schoolId + '/settings/principalAccess').get();
+    if (access.exists && access.data().admissions === false) throw new HttpsError('permission-denied', 'The owner has not given the principal admissions access.');
+  }
+  const billing = await db.doc('schools/' + schoolId + '/billing/main').get();
+  if (billing.exists && ['suspended', 'cancelled'].includes(billing.data().status)) throw new HttpsError('failed-precondition', 'This school is read-only.');
+  return { schoolId, role, uid: request.auth.uid };
+}
+
+async function deskAudit(schoolId, uid, detail, docId) {
+  await db.collection('schools/' + schoolId + '/auditLog').add({
+    actor: uid, action: 'save', target: 'students', docId: String(docId).slice(0, 100), at: new Date().toISOString(), detail: String(detail).slice(0, 200),
+  });
+}
+
+// Classes, sections, years and the active year, for the admit form and the promotion screen.
+exports.admissionOptions = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { schoolId } = await requireDesk(request);
+  const base = 'schools/' + schoolId;
+  const [classes, sections, years, settings] = await Promise.all([
+    db.collection(base + '/classes').get(), db.collection(base + '/sections').get(),
+    db.collection(base + '/academicYears').get(), db.doc(base + '/settings/academic').get(),
+  ]);
+  return {
+    activeYearId: settings.exists ? settings.data().activeYearId ?? '' : '',
+    classes: classes.docs.map((d) => ({ id: d.id, name: d.data().name, order: d.data().order })).sort((a, b) => a.order - b.order),
+    sections: sections.docs.map((d) => ({ id: d.id, classId: d.data().classId, name: d.data().name })),
+    years: years.docs.map((d) => ({ id: d.id, label: d.data().label, status: d.data().status })),
+  };
+});
+
+// Admit a student: record, class placement, and (if asked) the student and parent logins.
+exports.admitStudent = onCall({ memory: '256MiB', timeoutSeconds: 120 }, async (request) => {
+  const { schoolId, uid, role } = await requireDesk(request);
+  const d = request.data || {};
+  const admissionNo = text(d.admissionNo, 20);
+  if (!/^[A-Za-z0-9-]{1,20}$/.test(admissionNo)) throw new HttpsError('invalid-argument', 'Admission number may use letters, numbers and hyphens only (up to 20).');
+  const name = text(d.name, 120);
+  const guardianName = text(d.guardianName, 120);
+  const guardianPhone = text(d.guardianPhone, 20);
+  if (!name || !guardianName) throw new HttpsError('invalid-argument', 'Enter the student name and the guardian name.');
+  if (!/^[0-9+() -]{0,20}$/.test(guardianPhone)) throw new HttpsError('invalid-argument', 'The phone number may use digits, +, spaces, hyphens and brackets only.');
+  const student = { admissionNo, name, guardianName, guardianPhone, status: 'active' };
+  const dob = text(d.dob, 10);
+  if (dob) { if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) throw new HttpsError('invalid-argument', 'Enter the date of birth as a date.'); student.dob = dob; }
+  const gender = text(d.gender, 10);
+  if (gender) { if (!['male', 'female', 'other'].includes(gender)) throw new HttpsError('invalid-argument', 'Choose a gender from the list.'); student.gender = gender; }
+  for (const [key, max] of [['address', 200], ['motherName', 120], ['previousSchool', 120], ['guardianEmail', 100], ['tcNo', 40]]) {
+    const value = text(d[key], max); if (value) student[key] = value;
+  }
+  const emergency = text(d.emergencyPhone, 20);
+  if (emergency) { if (!/^[0-9+() -]{1,20}$/.test(emergency)) throw new HttpsError('invalid-argument', 'The emergency phone may use digits, +, spaces, hyphens and brackets only.'); student.emergencyPhone = emergency; }
+  const DOCS = ['birth', 'tc', 'marksheet', 'aadhaar', 'photos', 'address', 'medical', 'other'];
+  if (Array.isArray(d.docs)) { const docs = DOCS.filter((k) => d.docs.includes(k)); if (docs.length) student.docsReceived = docs; }
+
+  const base = 'schools/' + schoolId;
+  const studentId = admissionNo.toLowerCase();
+  if ((await db.doc(base + '/students/' + studentId).get()).exists) throw new HttpsError('already-exists', 'Admission number ' + admissionNo + ' is already used.');
+  const billing = await db.doc(base + '/billing/main').get();
+  if (billing.exists && typeof billing.data().studentLimit === 'number') {
+    const count = (await db.collection(base + '/students').count().get()).data().count;
+    if (count >= billing.data().studentLimit) throw new HttpsError('resource-exhausted', 'Your plan allows ' + billing.data().studentLimit + ' students. Ask support to raise the limit.');
+  }
+  const settings = await db.doc(base + '/settings/academic').get();
+  const yearId = settings.exists ? settings.data().activeYearId : '';
+  const year = yearId ? await db.doc(base + '/academicYears/' + yearId).get() : null;
+  if (!year || !year.exists || year.data().status !== 'active') throw new HttpsError('failed-precondition', 'There is no active academic year. Activate one first.');
+  const sectionId = text(d.sectionId, 31);
+  const section = await db.doc(base + '/sections/' + sectionId).get();
+  if (!section.exists) throw new HttpsError('invalid-argument', 'Choose a class and section.');
+  const classId = section.data().classId;
+  const rolls = await db.collection(base + '/enrollments').where('yearId', '==', yearId).where('sectionId', '==', sectionId).get();
+  const rollNo = Math.min(999, Math.max(0, ...rolls.docs.map((r) => r.data().rollNo)) + 1);
+  if (rolls.size >= 999) throw new HttpsError('failed-precondition', 'That section is full.');
+  const enquiryId = text(d.enquiryId, 40);
+  if (enquiryId && !/^EQ-[A-Za-z0-9-]{1,30}$/.test(enquiryId)) throw new HttpsError('invalid-argument', 'Unknown enquiry.');
+
+  // Logins. The student login ID is the admission number; one parent login (parent-<phone>) covers every child of the family.
+  const auth = getAuth();
+  const slips = [];
+  const created = [];
+  const writes = [];
+  const wantStudent = d.studentLogin !== false;
+  const wantParent = d.parentLogin !== false;
+  try {
+    if (wantStudent) {
+      const password = newPassword();
+      const user = await auth.createUser({ email: loginEmail(schoolId, admissionNo), password, displayName: name, emailVerified: true });
+      created.push(user.uid);
+      slips.push({ who: 'Student', loginId: admissionNo.toLowerCase(), password });
+      writes.push([base + '/members/' + user.uid, { role: 'student', active: true, mustChange: true }]);
+      writes.push([base + '/familyAccess/' + user.uid, { studentId, relation: 'student', active: true }]);
+    }
+    if (wantParent) {
+      const digits = guardianPhone.replace(/\D/g, '');
+      const parentId = 'parent-' + (digits.length >= 6 ? digits : admissionNo.toLowerCase());
+      let existing = null;
+      try { existing = await auth.getUserByEmail(loginEmail(schoolId, parentId)); } catch { /* no such login yet */ }
+      if (existing) {
+        const link = await db.doc(base + '/familyAccess/' + existing.uid).get();
+        if (!link.exists || link.data().relation !== 'parent') throw new HttpsError('already-exists', 'The login ' + parentId + ' is already used by someone else.');
+        const extra = [...(link.data().extraStudentIds ?? [])];
+        if (extra.length >= 4) throw new HttpsError('failed-precondition', 'One parent login can show up to 5 children.');
+        extra.push(studentId);
+        writes.push([base + '/familyAccess/' + existing.uid, { ...link.data(), extraStudentIds: extra }]);
+        slips.push({ who: 'Parent', loginId: parentId, password: null, note: 'This family already has a parent login. The new child now shows under it. The password is unchanged.' });
+      } else {
+        const password = newPassword();
+        const user = await auth.createUser({ email: loginEmail(schoolId, parentId), password, displayName: guardianName, emailVerified: true });
+        created.push(user.uid);
+        slips.push({ who: 'Parent', loginId: parentId, password });
+        writes.push([base + '/members/' + user.uid, { role: 'parent', active: true, mustChange: true }]);
+        writes.push([base + '/familyAccess/' + user.uid, { studentId, relation: 'parent', active: true }]);
+      }
+    }
+    const batch = db.batch();
+    batch.set(db.doc(base + '/students/' + studentId), student);
+    batch.set(db.doc(base + '/enrollments/' + yearId + '_' + studentId), { yearId, studentId, classId, sectionId, rollNo });
+    batch.set(db.doc(base + '/rollKeys/' + yearId + '_' + sectionId + '_' + rollNo), { yearId, sectionId, rollNo, studentId });
+    for (const [path, data] of writes) batch.set(db.doc(path), data);
+    if (enquiryId) {
+      const enquiry = await db.doc(base + '/enquiries/' + enquiryId).get();
+      if (enquiry.exists) batch.set(enquiry.ref, { ...enquiry.data(), status: 'admitted', note: ('Admission no ' + admissionNo).slice(0, 300) });
+    }
+    await batch.commit();
+  } catch (error) {
+    await Promise.all(created.map((id) => auth.deleteUser(id).catch(() => {})));
+    if (error instanceof HttpsError) throw error;
+    if (error?.code === 'auth/email-already-exists') throw new HttpsError('already-exists', 'A login for this admission number or parent phone already exists.');
+    logger.error('admitStudent failed', error);
+    throw new HttpsError('internal', 'Could not admit the student. Nothing was saved.');
+  }
+  await deskAudit(schoolId, uid, 'Admitted ' + name + ' (' + admissionNo + ') by ' + role + (slips.length ? '; logins created' : ''), studentId);
+  return { studentId, rollNo, classId, sectionId, slips };
+});
+
+// Give a student or parent login a new password (shown once, changed at first sign-in).
+exports.resetFamilyPassword = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { schoolId, uid, role } = await requireDesk(request);
+  if (role === 'principal') throw new HttpsError('permission-denied', 'Only the owner or the admission staff can reset a password.');
+  const studentId = text(request.data?.studentId, 20).toLowerCase();
+  const relation = request.data?.relation === 'student' ? 'student' : 'parent';
+  if (!studentId) throw new HttpsError('invalid-argument', 'Enter the admission number.');
+  const base = 'schools/' + schoolId;
+  const links = await db.collection(base + '/familyAccess').where('relation', '==', relation).get();
+  const hit = links.docs.find((l) => l.data().studentId === studentId || (l.data().extraStudentIds ?? []).includes(studentId));
+  if (!hit) throw new HttpsError('not-found', 'No ' + relation + ' login is linked to that admission number.');
+  const password = newPassword();
+  await getAuth().updateUser(hit.id, { password });
+  await db.doc(base + '/members/' + hit.id).set({ mustChange: true }, { merge: true });
+  const user = await getAuth().getUser(hit.id);
+  await deskAudit(schoolId, uid, 'Password reset for the ' + relation + ' login of ' + studentId + ' by ' + role, studentId);
+  return { loginId: String(user.email).split('@')[0], password, relation };
+});
+
+// Yearly promotion. Preview first (apply false), then apply. Owner only. Students in the last class are left alone.
+exports.promoteStudents = onCall({ memory: '512MiB', timeoutSeconds: 300 }, async (request) => {
+  const { schoolId, uid } = await requireDesk(request, { ownerOnly: true });
+  const d = request.data || {};
+  const fromYearId = text(d.fromYearId, 20);
+  const toYearId = text(d.toYearId, 20);
+  if (!fromYearId || !toYearId || fromYearId === toYearId) throw new HttpsError('invalid-argument', 'Choose the old year and a different new year.');
+  const base = 'schools/' + schoolId;
+  const [fromYear, toYear] = await Promise.all([db.doc(base + '/academicYears/' + fromYearId).get(), db.doc(base + '/academicYears/' + toYearId).get()]);
+  if (!fromYear.exists || !toYear.exists) throw new HttpsError('not-found', 'That academic year does not exist.');
+  if (!['draft', 'active'].includes(toYear.data().status)) throw new HttpsError('failed-precondition', 'The new year must be open (draft or active).');
+  const hold = new Set(Array.isArray(d.holdBack) ? d.holdBack.map(String) : []);
+  const [classSnap, sectionSnap, enrollSnap, studentSnap, doneSnap] = await Promise.all([
+    db.collection(base + '/classes').get(), db.collection(base + '/sections').get(),
+    db.collection(base + '/enrollments').where('yearId', '==', fromYearId).get(),
+    db.collection(base + '/students').get(), db.collection(base + '/enrollments').where('yearId', '==', toYearId).get(),
+  ]);
+  const classes = classSnap.docs.map((c) => ({ id: c.id, name: c.data().name, order: c.data().order })).sort((a, b) => a.order - b.order);
+  const sections = sectionSnap.docs.map((s) => ({ id: s.id, classId: s.data().classId, name: s.data().name }));
+  const students = new Map(studentSnap.docs.map((s) => [s.id, s.data()]));
+  const already = new Set(doneSnap.docs.map((e) => e.data().studentId));
+  const nextRoll = new Map();
+  for (const e of doneSnap.docs) nextRoll.set(e.data().sectionId, Math.max(nextRoll.get(e.data().sectionId) ?? 0, e.data().rollNo));
+  const className = (id) => classes.find((c) => c.id === id)?.name ?? id;
+  const sectionName = (id) => sections.find((s) => s.id === id)?.name ?? id;
+  const rows = [];
+  const enrollments = enrollSnap.docs.map((e) => e.data()).sort((a, b) => (a.classId + a.sectionId).localeCompare(b.classId + b.sectionId) || a.rollNo - b.rollNo);
+  for (const e of enrollments) {
+    const s = students.get(e.studentId);
+    const row = { studentId: e.studentId, name: s?.name ?? e.studentId, from: className(e.classId) + ' ' + sectionName(e.sectionId) };
+    if (!s || s.status !== 'active') { rows.push({ ...row, action: 'skip', reason: 'Not an active student' }); continue; }
+    if (already.has(e.studentId)) { rows.push({ ...row, action: 'skip', reason: 'Already placed in the new year' }); continue; }
+    let toClassId; let reason = '';
+    if (hold.has(e.studentId)) { toClassId = e.classId; reason = 'Kept in the same class'; }
+    else {
+      const index = classes.findIndex((c) => c.id === e.classId);
+      const next = index >= 0 ? classes[index + 1] : undefined;
+      if (!next) { rows.push({ ...row, action: 'final', reason: 'Last class: not moved' }); continue; }
+      toClassId = next.id;
+    }
+    const wantedName = sectionName(e.sectionId);
+    const options = sections.filter((x) => x.classId === toClassId);
+    const target = options.find((x) => x.name === wantedName) ?? options[0];
+    if (!target) { rows.push({ ...row, action: 'skip', reason: 'No section in ' + className(toClassId) }); continue; }
+    const roll = (nextRoll.get(target.id) ?? 0) + 1;
+    if (roll > 999) { rows.push({ ...row, action: 'skip', reason: 'Section full' }); continue; }
+    nextRoll.set(target.id, roll);
+    rows.push({ ...row, action: hold.has(e.studentId) ? 'hold' : 'promote', reason, to: className(toClassId) + ' ' + target.name, plan: { classId: toClassId, sectionId: target.id, rollNo: roll } });
+  }
+  const moving = rows.filter((r) => r.plan);
+  if (d.apply === true) {
+    for (let i = 0; i < moving.length; i += 200) {
+      const batch = db.batch();
+      for (const r of moving.slice(i, i + 200)) {
+        batch.set(db.doc(base + '/enrollments/' + toYearId + '_' + r.studentId), { yearId: toYearId, studentId: r.studentId, ...r.plan });
+        batch.set(db.doc(base + '/rollKeys/' + toYearId + '_' + r.plan.sectionId + '_' + r.plan.rollNo), { yearId: toYearId, sectionId: r.plan.sectionId, rollNo: r.plan.rollNo, studentId: r.studentId });
+      }
+      await batch.commit();
+    }
+    await db.collection(base + '/auditLog').add({ actor: uid, action: 'bulk', target: 'enrollments', docId: (fromYear.data().label + ' to ' + toYear.data().label).slice(0, 100), at: new Date().toISOString(), detail: ('Promotion: ' + moving.length + ' students moved, ' + (rows.length - moving.length) + ' not moved').slice(0, 200) });
+  }
+  return { applied: d.apply === true, moved: moving.length, rows: rows.slice(0, 1500).map(({ plan, ...rest }) => rest) };
+});
