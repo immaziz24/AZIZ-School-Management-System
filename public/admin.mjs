@@ -236,7 +236,8 @@ async function viewSchools() {
 
 async function registerSchool() {
   await loadPlans();
-  const planOptions = [['trial', 'Free 30-day trial']].concat(S.plans.filter((p) => p.active).map((p) => [p.id, p.name + ' (' + money(p.monthlyPrice) + '/month)']));
+  const TRIAL_DAYS = { trial: 30, trial60: 60, trial90: 90 };
+  const planOptions = [['trial', 'Free 30-day trial'], ['trial60', 'Free 60-day trial'], ['trial90', 'Free 90-day trial']].concat(S.plans.filter((p) => p.active).map((p) => [p.id, p.name + ' (' + money(p.monthlyPrice) + '/month)']));
   const v = await formDialog({
     title: 'Register a school',
     note: 'Creates the school and a pending owner invitation. The owner signs in with this email, verifies it and accepts the invitation.',
@@ -261,10 +262,10 @@ async function registerSchool() {
   batch.set(doc(db, 'schools', v.id), { name: v.name, contactEmail: v.contactEmail || '', phone: v.phone || '', address: v.address || '', createdBy: S.user.uid });
   const billing = plan
     ? { plan: plan.id, status: 'active', startedOn: today(), studentLimit: plan.studentLimit, staffLimit: plan.staffLimit, storageMb: plan.storageMb, monthlyPrice: plan.monthlyPrice }
-    : { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + 30 * 86400000), studentLimit: 50, staffLimit: 10 };
+    : { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + (TRIAL_DAYS[v.plan] || 30) * 86400000), studentLimit: 50, staffLimit: 10 };
   batch.set(doc(db, 'schools', v.id, 'billing', 'main'), billing);
   batch.set(doc(db, 'invites', newId('OW-')), { schoolId: v.id, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: S.user.uid });
-  audit(batch, 'register-school', v.id, v.reason, JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: billing.plan }));
+  audit(batch, 'register-school', v.id, v.reason, JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: billing.plan, trialDays: plan ? undefined : (TRIAL_DAYS[v.plan] || 30) }));
   await batch.commit();
   toast('School registered. Tell the owner to sign in at /app with ' + v.ownerEmail + ' and accept the invitation.');
   await loadSchools(true);
