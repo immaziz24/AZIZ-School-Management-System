@@ -2888,16 +2888,19 @@ async function requireOwnerMfa(user) {
     gate.setAttribute('aria-modal', 'true');
     gate.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(5,10,25,.97);display:flex;align-items:flex-start;justify-content:center;padding:18px;overflow:auto';
     const box = document.createElement('div');
-    box.style.cssText = 'max-width:460px;width:100%;margin:auto;background:#fff;color:#111;border-radius:14px;padding:22px;line-height:1.5';
+    box.style.cssText = 'max-width:480px;width:100%;margin:auto;background:#14243d;color:#eef2fb;border:1px solid #34507a;border-radius:16px;padding:26px;line-height:1.55;box-shadow:0 20px 60px rgba(0,0,0,.5)';
+    const paintButton = (button, primary) => { button.style.cssText = 'cursor:pointer;font:600 15px Inter,Arial,sans-serif;padding:10px 18px;border-radius:10px;margin:6px 8px 0 0;border:1px solid ' + (primary ? '#e0b85c' : '#5b7399') + ';background:' + (primary ? '#e0b85c' : 'transparent') + ';color:' + (primary ? '#14243d' : '#eef2fb'); };
     const title = document.createElement('h3');
+    title.style.cssText = 'margin:0 0 12px;color:#f4d58d;font:600 1.6rem Georgia,serif';
     title.textContent = 'Protect your school account';
     const intro = document.createElement('p');
     intro.textContent = 'You are the school owner, so this account can see every student, fee and staff record. Add a 6-digit code from an authenticator app so nobody can sign in with your password alone. It takes about a minute.';
     const note = document.createElement('p');
-    note.style.cssText = 'font-size:.9em;color:#444';
+    note.style.cssText = 'font-size:.9em;color:#b9c5dd';
     note.textContent = 'You need Google Authenticator or Microsoft Authenticator on your phone.';
     const message = document.createElement('p');
     message.setAttribute('role', 'status');
+    message.style.cssText = 'color:#ffd0a8;font-weight:600';
     const holder = document.createElement('div');
     const start = document.createElement('button');
     start.type = 'button';
@@ -2905,12 +2908,10 @@ async function requireOwnerMfa(user) {
     const out = document.createElement('button');
     out.type = 'button';
     out.textContent = 'Sign out';
-    out.style.marginLeft = '8px';
     out.addEventListener('click', () => { gate.remove(); signOut(auth); });
     const later = document.createElement('button');
     later.type = 'button';
     later.textContent = 'Not now';
-    later.style.marginLeft = '8px';
     later.addEventListener('click', () => gate.remove());
     start.addEventListener('click', async () => {
       start.disabled = true;
@@ -2919,9 +2920,25 @@ async function requireOwnerMfa(user) {
       try {
         secret = await au.TotpMultiFactorGenerator.generateSecret(await au.multiFactor(user).getSession());
       } catch (error) {
-        message.textContent = error.code === 'auth/requires-recent-login'
-          ? 'For safety, sign out and sign in again, then try once more.'
-          : error.code === 'auth/unverified-email'
+        if (error.code === 'auth/requires-recent-login') {
+          // Ask for the password again here instead of sending the owner away to sign out.
+          message.textContent = 'For safety, confirm your password to continue.';
+          const pw = document.createElement('input');
+          pw.type = 'password'; pw.autocomplete = 'current-password'; pw.placeholder = 'Your password';
+          pw.style.cssText = 'width:100%;box-sizing:border-box;padding:11px 12px;border-radius:10px;border:1px solid #5b7399;background:#fff;color:#111;font-size:16px;margin:6px 0';
+          const go = document.createElement('button'); go.type = 'button'; go.textContent = 'Confirm password'; paintButton(go, true);
+          go.addEventListener('click', async () => {
+            go.disabled = true;
+            try {
+              await au.reauthenticateWithCredential(user, au.EmailAuthProvider.credential(user.email, pw.value));
+              holder.replaceChildren(); message.textContent = ''; start.disabled = false; start.click();
+            } catch { message.textContent = 'That password is not correct.'; go.disabled = false; }
+          });
+          holder.replaceChildren(pw, go);
+          start.disabled = false;
+          return;
+        }
+        message.textContent = error.code === 'auth/unverified-email'
             ? 'Verify your email first (look for the message in your inbox), then sign in again.'
             : 'Authenticator apps are not available yet. Contact AZIZ support.';
         start.disabled = false;
@@ -2930,20 +2947,26 @@ async function requireOwnerMfa(user) {
       message.textContent = '';
       const canvas = document.createElement('canvas');
       let drawn = false;
-      try { const { drawQr } = await import('./qr.mjs?v=batch-64'); drawQr(canvas, secret.generateQrCodeUrl(user.email || 'owner', 'AZIZ School'), 200); drawn = true; } catch { drawn = false; }
-      const how = document.createElement('p');
-      how.textContent = 'In your authenticator app tap Add, scan this picture, or type the key by hand. Then type the 6-digit code it shows.';
+      // The QR maker is small (up to 106 bytes), so the code carries only the short label and the key (the standard 6 digits, 30 seconds).
+      try { const { drawQr } = await import('./qr.mjs?v=batch-64'); drawQr(canvas, 'otpauth://totp/AZIZ?secret=' + secret.secretKey + '&issuer=AZIZ', 200); canvas.style.cssText = 'display:block;margin:10px auto;background:#fff;padding:12px;border-radius:12px'; drawn = true; } catch { drawn = false; }
+      const how = document.createElement('ol');
+      how.style.cssText = 'padding-left:20px;margin:10px 0';
+      for (const line of ['Open Google Authenticator or Microsoft Authenticator on your phone.', 'Tap Add (+), then Scan a QR code, and scan the picture below.', 'Cannot scan? Choose "Enter a setup key" and type the key under the picture.', 'Type the 6-digit code the app shows, then press Confirm.']) {
+        const li = document.createElement('li'); li.textContent = line; how.append(li);
+      }
       const key = document.createElement('p');
-      key.style.cssText = 'word-break:break-all;font-size:.85em;color:#444';
-      key.textContent = 'Key: ' + secret.secretKey;
+      key.style.cssText = 'word-break:break-all;font:600 .95em Consolas,monospace;color:#f4d58d;background:#0c1830;border:1px dashed #5b7399;border-radius:8px;padding:8px 10px;text-align:center';
+      key.textContent = secret.secretKey;
       const code = document.createElement('input');
       code.setAttribute('inputmode', 'numeric');
       code.setAttribute('autocomplete', 'one-time-code');
       code.maxLength = 6;
       code.placeholder = '6-digit code';
+      code.style.cssText = 'width:100%;box-sizing:border-box;padding:12px;border-radius:10px;border:1px solid #5b7399;background:#fff;color:#111;font:600 20px Consolas,monospace;letter-spacing:.3em;text-align:center;margin-top:10px';
       const confirmButton = document.createElement('button');
       confirmButton.type = 'button';
       confirmButton.textContent = 'Confirm and turn on';
+      paintButton(confirmButton, true);
       confirmButton.addEventListener('click', async () => {
         confirmButton.disabled = true;
         try {
@@ -2957,8 +2980,9 @@ async function requireOwnerMfa(user) {
         gate.remove();
         try { renderChecklist(); } catch { /* the checklist updates on the next load */ }
       });
-      holder.replaceChildren(how, drawn ? canvas : document.createTextNode(''), key, code, document.createTextNode(' '), confirmButton);
+      holder.replaceChildren(how, drawn ? canvas : document.createTextNode(''), key, code, confirmButton);
     });
+    paintButton(start, true); paintButton(later, false); paintButton(out, false);
     box.append(title, intro, note, message, holder, start, later, out);
     gate.append(box);
     document.body.append(gate);
