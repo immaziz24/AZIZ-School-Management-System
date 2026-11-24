@@ -1447,6 +1447,7 @@ async function viewInfra() {
     can('audit') ? getDocs(query(collection(db, 'loginHistory'), orderBy('at', 'desc'), limit(500))).catch(() => null) : Promise.resolve(null),
   ]);
   if (isAdmin()) await loadSchools().catch(() => {});
+  const measured = await getDoc(doc(db, 'platformJobs', 'usage')).then((d) => (d.exists() ? d.data() : null)).catch(() => null);
   const months = monthsSnap ? monthsSnap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id)) : [];
   const cur = months.find((m) => m.id === month) || null;
   const dayOfMonth = Math.max(1, new Date().getDate());
@@ -1497,6 +1498,23 @@ async function viewInfra() {
     audit(batch, 'infra-limits', '', reason, JSON.stringify(data));
     await batch.commit(); toast('Limits saved.'); await viewInfra();
   });
+  // Measured usage (Batch 83): platformJobs/usage is written by the server job from Google's monitoring numbers.
+  const refreshMeasured = () => guarded(async () => {
+    const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
+    let r;
+    try { r = (await httpsCallable(getFunctions(app, 'asia-south1'), 'runUsageNow')()).data; } catch { toast('Could not run it. Check that the server functions are deployed.'); return; }
+    toast(r.ok ? 'Usage numbers refreshed.' : (r.hint || r.error || 'Google did not return the numbers.'));
+    await viewInfra();
+  });
+  const mdays = measured && Array.isArray(measured.days) ? measured.days : [];
+  const sum30 = (key) => mdays.reduce((t, d) => t + (Number(d[key]) || 0), 0);
+  const measuredCard = h('div', { class: 'card' }, h('h3', {}, 'Measured by Google (last 30 days)'),
+    !measured ? h('p', { class: 'muted' }, 'Not measured yet. The server job runs every morning at 4:10, or press Refresh now.')
+      : !measured.ok ? h('div', { class: 'alert' }, h('span', { class: 'pill bad' }, 'Not available'), h('span', {}, (measured.hint ? measured.hint + ' ' : '') + (measured.error || '')))
+        : [h('p', { class: 'muted' }, 'Last 30 days: ' + num(sum30('reads')) + ' reads, ' + num(sum30('writes')) + ' writes, ' + num(sum30('deletes')) + ' deletes, ' + (sum30('sentBytes') / 1073741824).toFixed(2) + ' GB of file downloads. Measured ' + ago(msOf(measured)) + '.'),
+          mdays.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Day ending', 'Reads', 'Writes', 'Deletes', 'Downloads (MB)', 'Files stored (MB)'].map((t) => h('th', {}, t)))),
+            h('tbody', {}, mdays.slice(0, 14).map((d) => h('tr', {}, h('td', {}, d.date), h('td', { class: d.reads > limits.readsPerDay ? 'bad' : '' }, num(d.reads)), h('td', { class: d.writes > limits.writesPerDay ? 'bad' : '' }, num(d.writes)), h('td', {}, num(d.deletes)), h('td', {}, num(Math.round((d.sentBytes || 0) / 1048576))), h('td', {}, num(Math.round((d.storageBytes || 0) / 1048576)))))))) : h('div', { class: 'empty' }, 'Google returned no numbers yet.')],
+    isAdmin() ? h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: refreshMeasured }, 'Refresh now')) : null);
   const clearErrors = () => guarded(async () => {
     if (!errRows.length || !confirm('Remove the ' + errRows.length + ' error reports shown here? This cannot be undone.')) return;
     const batch = writeBatch(db);
@@ -1524,6 +1542,7 @@ async function viewInfra() {
         activeUsers !== null ? h('p', { class: 'muted' }, activeUsers + ' different people signed in during the last 30 days (counted from the sign-in history, newest 500 sign-ins).') : null),
       h('div', { class: 'card' }, h('h3', {}, 'Bandwidth'),
         cur ? meter(Math.round(cur.bandwidthMb / 1024 * 10) / 10, limits.bandwidthGb, 'Downloads this month (GB)') : h('p', { class: 'muted' }, 'Not recorded yet.'))),
+    measuredCard,
     h('div', { class: 'card' }, h('h3', {}, 'Costs'),
       h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', {}, month + ': ' + money(cost) + ' of a ' + money(limits.budgetInr) + ' budget'),
         h('span', { class: 'pill ' + (costPct >= 100 ? 'bad' : costPct >= limits.alertPct ? 'warn' : 'ok') }, costPct >= 100 ? 'Over budget' : costPct >= limits.alertPct ? 'Close to budget' : 'Within budget')),

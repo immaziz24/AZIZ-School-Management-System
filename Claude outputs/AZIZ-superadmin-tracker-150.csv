@@ -87,11 +87,11 @@
 86,10,Cloud Storage & Usage,Storage upgrades,Built,Built in Batch 78 per build records; live check pending,Mark 3
 87,10,Cloud Storage & Usage,Usage reconciliation,Built,Built in Batch 78 per build records; live check pending,Mark 3
 88,10,Cloud Storage & Usage,Retention,Built,Built in Batch 78 per build records; live check pending,Mark 3
-89,11,Firebase & Infrastructure Monitoring,Firestore usage,Partial,Typed-in figures; no live Firestore feed,Mark 4
+89,11,Firebase & Infrastructure Monitoring,Firestore usage,Built,"Daily server job reads Google Monitoring (reads, writes, deletes, downloads, storage) and the Infrastructure page shows it (Batch 84; needs functions deploy and Monitoring Viewer role)",Mark 4
 90,11,Firebase & Infrastructure Monitoring,Storage usage,Built,Built in Batch 79 per build records; live check pending,Mark 4
 91,11,Firebase & Infrastructure Monitoring,Authentication activity,Built,Built in Batch 79 per build records; live check pending,Mark 4
-92,11,Firebase & Infrastructure Monitoring,Bandwidth,Partial,Typed-in figures; no live feed,Mark 4
-93,11,Firebase & Infrastructure Monitoring,Infrastructure costs,Partial,Typed-in figures; no live feed,Mark 4
+92,11,Firebase & Infrastructure Monitoring,Bandwidth,Built,"Daily server job reads Google Monitoring (reads, writes, deletes, downloads, storage) and the Infrastructure page shows it (Batch 84; needs functions deploy and Monitoring Viewer role)",Mark 4
+93,11,Firebase & Infrastructure Monitoring,Infrastructure costs,Partial,Typed-in cost readings; real cost needs a Cloud Billing export to BigQuery,Mark 4
 94,11,Firebase & Infrastructure Monitoring,Error alerts,Built,Built in Batch 79 per build records; live check pending,Mark 4
 95,12,Security & Audit Logs,Admin login history,Built,Built in Batch 79 per build records; live check pending,Mark 4
 96,12,Security & Audit Logs,MFA,Not started,Blocked: needs Firebase Identity Platform upgrade for MFA enrolment,Mark 4

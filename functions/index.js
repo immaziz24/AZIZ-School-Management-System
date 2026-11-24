@@ -24,16 +24,16 @@ const db = getFirestore();
 const BACKUP_COLLECTIONS = ["studentHistory", "storageRecords", "staffDocuments", "eBooks", "noticeAcks", "members", "students", "academicYears", "classes", "sections", "subjects", "classSubjects", "enrollments", "rollKeys", "exams", "marks", "attendance", "staffAttendance", "leaveRequests", "feeStructures", "payments", "notices", "timetable", "homework", "calendar", "books", "loans", "behaviour", "visitors", "substitutions", "routes", "transportRiders", "activities", "activityMembers", "inventory", "alumni", "expenses", "certificates", "tickets", "staffDirectory", "vendors", "minutes", "lostFound", "concessions", "achievements", "complaints", "assets", "sales", "syllabus", "trainings", "diary", "healthRecords", "lessonPlans", "ptmSlots", "payroll", "messages", "enquiries", "eventRegistrations", "familyAccess", "classTeachers", "auditLog", "scholarships", "scholarshipApps", "consentForms", "consentResponses", "staffProfiles", "hostelRooms", "hostelStays", "canteenMenu", "canteenPlans", "bookReservations", "workflowRules", "approvalRequests", "questionBank", "onlineTests", "onlineTestKeys", "onlineAttempts", "pickupPeople", "pickupLogs", "settings"];
 const KEEP_BACKUPS = 14;
 // Batch 83: the platform's backup policy (platformConfig/backupPolicy, set on the admin Backups page) decides how long copies are kept
-// (keepDays, 7 to 3650) and how often they run (daily or weekly). With no policy the old behaviour stays: daily, newest 14 files.
+// (keepDays, 7 to 3650) and how often they run (daily or weekly). With no policy: daily, kept 30 days (the same default the admin page shows).
 async function readBackupPolicy() {
   try {
     const found = await db.doc('platformConfig/backupPolicy').get();
     const data = found.exists ? found.data() : {};
     const keepDays = Number.isInteger(data.keepDays) && data.keepDays >= 7 && data.keepDays <= 3650 ? data.keepDays : null;
-    return { keepDays, weekly: data.frequency === 'weekly' };
+    return { keepDays: keepDays ?? 30, weekly: data.frequency === 'weekly' };
   } catch (error) {
     logger.error('Could not read the backup policy; using the default', error);
-    return { keepDays: null, weekly: false };
+    return { keepDays: 30, weekly: false };
   }
 }
 
@@ -67,7 +67,7 @@ async function backUpSchool(bucket, schoolId, keepDays) {
   // Keep only the newest files.
   const [files] = await bucket.getFiles({ prefix: 'backups/' + schoolId + '/' });
   const names = files.map((item) => item.name).sort().reverse();
-  // With a policy: remove copies older than keepDays, but never the newest 3. Without one: keep the newest 14 files.
+  // With a policy: remove copies older than keepDays, but never the newest 3. (KEEP_BACKUPS is only a fallback.)
   const cutoff = keepDays ? new Date(Date.now() + 330 * 60000 - keepDays * 86400000).toISOString().slice(0, 10) : null;
   const old = cutoff ? names.slice(3).filter((name) => name.split('/').pop().replace('.json', '') < cutoff) : names.slice(KEEP_BACKUPS);
   await Promise.all(old.map((name) => bucket.file(name).delete().catch(() => {})));
@@ -531,4 +531,62 @@ exports.runBillingNow = onCall({ memory: '512MiB', timeoutSeconds: 300 }, async 
   const admin = await db.doc('platformAdmins/' + request.auth.uid).get();
   if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
   return billingRun();
+});
+
+// ---- Batch 83: measured usage (features 089, 092) ----
+// Once a day, and on demand for the platform administrator, this reads Google's own monitoring numbers for the project (Firestore reads,
+// writes and deletes, and Cloud Storage downloads and size) and saves the last 30 days to platformJobs/usage. It needs the server account to have the
+// "Monitoring Viewer" role (roles/monitoring.viewer). If that role is missing, the saved result says so and nothing else is affected.
+const { applicationDefault } = require('firebase-admin/app');
+async function monitoringSeries(metric, aligner) {
+  const project = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+  const token = (await applicationDefault().getAccessToken()).access_token;
+  const end = new Date();
+  const params = new URLSearchParams({
+    filter: 'metric.type="' + metric + '"',
+    'interval.startTime': new Date(end.getTime() - 30 * 86400000).toISOString(),
+    'interval.endTime': end.toISOString(),
+    'aggregation.alignmentPeriod': '86400s',
+    'aggregation.perSeriesAligner': aligner,
+    'aggregation.crossSeriesReducer': 'REDUCE_SUM',
+  });
+  const res = await fetch('https://monitoring.googleapis.com/v3/projects/' + project + '/timeSeries?' + params.toString(), { headers: { Authorization: 'Bearer ' + token } });
+  if (!res.ok) {
+    const error = new Error('Monitoring answered ' + res.status + ': ' + (await res.text()).slice(0, 200));
+    error.status = res.status;
+    throw error;
+  }
+  const body = await res.json();
+  const points = (body.timeSeries && body.timeSeries[0] && body.timeSeries[0].points) || [];
+  return points.map((point) => ({ date: String(point.interval.endTime).slice(0, 10), value: Number(point.value.int64Value ?? point.value.doubleValue ?? 0) }));
+}
+async function takeUsage() {
+  const result = { at: Timestamp.now(), ok: false, days: [] };
+  try {
+    const [reads, writes, deletes, sent, size] = await Promise.all([
+      monitoringSeries('firestore.googleapis.com/document/read_count', 'ALIGN_SUM'),
+      monitoringSeries('firestore.googleapis.com/document/write_count', 'ALIGN_SUM'),
+      monitoringSeries('firestore.googleapis.com/document/delete_count', 'ALIGN_SUM'),
+      monitoringSeries('storage.googleapis.com/network/sent_bytes_count', 'ALIGN_SUM'),
+      monitoringSeries('storage.googleapis.com/storage/total_bytes', 'ALIGN_MEAN'),
+    ]);
+    const byDate = new Map();
+    const put = (list, key) => { for (const point of list) { const row = byDate.get(point.date) || { date: point.date, reads: 0, writes: 0, deletes: 0, sentBytes: 0, storageBytes: 0 }; row[key] = Math.round(point.value); byDate.set(point.date, row); } };
+    put(reads, 'reads'); put(writes, 'writes'); put(deletes, 'deletes'); put(sent, 'sentBytes'); put(size, 'storageBytes');
+    result.days = [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 31);
+    result.ok = true;
+  } catch (error) {
+    result.error = String(error.message || error).slice(0, 300);
+    if (error.status === 403) result.hint = 'Give the server account the Monitoring Viewer role (roles/monitoring.viewer).';
+    logger.error('Usage snapshot failed', error);
+  }
+  await db.doc('platformJobs/usage').set(result);
+  return { ok: result.ok, days: result.days.length, error: result.error || null, hint: result.hint || null };
+}
+exports.usageSnapshot = onSchedule({ schedule: '10 4 * * *', timeZone: 'Asia/Kolkata', memory: '256MiB', timeoutSeconds: 120 }, async () => { await takeUsage(); });
+exports.runUsageNow = onCall({ memory: '256MiB', timeoutSeconds: 120 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const admin = await db.doc('platformAdmins/' + request.auth.uid).get();
+  if (!admin.exists) throw new HttpsError('permission-denied', 'Only the platform administrator can do this.');
+  return takeUsage();
 });
