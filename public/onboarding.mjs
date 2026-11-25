@@ -9,12 +9,32 @@ const INDIA_STATES = ['Andaman and Nicobar Islands', 'Andhra Pradesh', 'Arunacha
 const opts = (list) => list.map((x) => (Array.isArray(x) ? x : [x, x]));
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const PHONE = /^\+?[0-9][0-9 -]{6,17}$/;
+// Option lists. The server keeps its own copy (functions/index.js); a test checks that the two agree.
+export const CLASS_LADDER = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12'];
+export const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+export const ATTENDANCE_METHODS = ['Manual', 'QR code', 'Selfie', 'Biometric', 'GPS'];
+export const EXAM_SYSTEMS = ['Two terms', 'Three terms', 'Semesters', 'Annual only', 'Unit tests and finals', 'Continuous assessment'];
+export const GRADING_SYSTEMS = ['Marks only', 'Percentage', 'Letter grades', '10-point grade (CGPA)', 'Division'];
+export const PAYMENT_METHODS = ['Cash', 'UPI', 'Bank transfer', 'Cheque', 'Card', 'Online gateway'];
+export const CURRENCIES = ['INR', 'BDT', 'NPR', 'AED', 'USD'];
+const COMMON_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Mathematics', 'Science', 'Social Science', 'History', 'Geography', 'Physics', 'Chemistry', 'Biology',
+  'Computer Science', 'Environmental Studies', 'Art and Craft', 'Physical Education', 'Music'];
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const MONTH_OPTIONS = MONTH_NAMES.map((name, i) => [String(i + 1), name]);
+const CLASS_OPTIONS = CLASS_LADDER.map((c) => [c, c]);
+const splitList = (value) => String(value || '').split(',').map((x) => x.trim()).filter(Boolean);
+// The classes between the lowest and the highest class (empty until both are chosen).
+const rangeOf = (v) => { const a = CLASS_LADDER.indexOf(v.lowestClass); const b = CLASS_LADDER.indexOf(v.highestClass); return a >= 0 && b >= a ? CLASS_LADDER.slice(a, b + 1) : []; };
+const usesGps = (v) => v.studentAttendanceMethod === 'GPS' || splitList(v.teacherAttendanceMethods).includes('GPS');
+const DEFAULT_SESSION = (() => { const y = new Date().getFullYear(); return y + '-' + String(y + 1).slice(2); })();
+// "Class 1=A,B|Class 2=A" <-> a map of class name to section names.
+const parseSections = (value) => Object.fromEntries(String(value || '').split('|').map((p) => [p.slice(0, Math.max(p.indexOf('='), 0)).trim(), splitList(p.slice(p.indexOf('=') + 1))]).filter(([k]) => k));
 
 export const CATEGORIES = [
   { id: 'A', title: 'Basic school information' }, { id: 'B', title: 'Recognition and affiliation' }, { id: 'C', title: 'Address and contact' },
   { id: 'D', title: 'School owner' }, { id: 'E', title: 'Principal and administration' },
-  { id: 'F', title: 'Academic configuration', later: 'Mark 2' }, { id: 'G', title: 'Capacity and staff', later: 'Mark 2' },
-  { id: 'H', title: 'Timing and attendance', later: 'Mark 2' }, { id: 'I', title: 'Fees and finance', later: 'Mark 2' },
+  { id: 'F', title: 'Academic configuration' }, { id: 'G', title: 'Capacity and staff' },
+  { id: 'H', title: 'Timing and attendance' }, { id: 'I', title: 'Fees and finance' },
   { id: 'J', title: 'Website and branding', later: 'Mark 3' }, { id: 'K', title: 'Domain configuration', later: 'Mark 3' },
   { id: 'L', title: 'Facilities', later: 'Mark 3' }, { id: 'M', title: 'Subscription and commercial', later: 'Mark 4' },
   { id: 'N', title: 'Login and security', later: 'Mark 4' }, { id: 'O', title: 'Verification and activation', later: 'Mark 4' },
@@ -67,9 +87,59 @@ export const FIELDS = [
   { id: 'F041', key: 'adminName', cat: 'E', label: 'Administrative contact person', type: 'text', max: 80 },
   { id: 'F042', key: 'adminEmail', cat: 'E', label: 'Administrative contact email', type: 'email' },
   { id: 'F043', key: 'adminPhone', cat: 'E', label: 'Administrative contact phone', type: 'phone' },
+
+  // ----- Mark 2: academic, capacity, timing and fees (F044 to F077) -----
+  { id: 'F044', key: 'sessionLabel', cat: 'F', label: 'Current academic session', type: 'text', req: true, max: 7, def: DEFAULT_SESSION, help: 'For example 2026-27.',
+    validate: (x) => { const m = /^(20[0-9]{2})-([0-9]{2})$/.exec(x); return !m || (Number(m[1]) + 1) % 100 !== Number(m[2]) ? 'Write the session as 2026-27 (the second year is the next one).' : ''; } },
+  { id: 'F045', key: 'sessionStartMonth', cat: 'F', label: 'Session starting month', type: 'select', def: '4', options: MONTH_OPTIONS },
+  { id: 'F046', key: 'sessionEndMonth', cat: 'F', label: 'Session ending month', type: 'select', def: '3', options: MONTH_OPTIONS },
+  { id: 'F047', key: 'lowestClass', cat: 'F', label: 'Lowest class', type: 'select', req: true, redraw: true, options: CLASS_OPTIONS },
+  { id: 'F048', key: 'highestClass', cat: 'F', label: 'Highest class', type: 'select', req: true, redraw: true, options: CLASS_OPTIONS,
+    validate: (x, v) => (v.lowestClass && CLASS_LADDER.indexOf(x) < CLASS_LADDER.indexOf(v.lowestClass) ? 'The highest class cannot be below the lowest class.' : '') },
+  { id: 'F049', key: 'classesOffered', cat: 'F', label: 'Available classes', type: 'multi', wide: true, redraw: true, showIf: (v) => rangeOf(v).length > 0, optionsFn: (v) => rangeOf(v).map((c) => [c, c]),
+    help: 'Leave all unticked to offer every class in the range.' },
+  { id: 'F050', key: 'sectionsByClass', cat: 'F', label: 'Sections for each class', type: 'sections', wide: true, showIf: (v) => rangeOf(v).length > 0, max: 900,
+    help: 'Write the section names separated by commas, for example A, B. A class left empty gets one section, A.' },
+  { id: 'F051', key: 'subjects', cat: 'F', label: 'Subjects offered', type: 'subjects', wide: true, max: 900,
+    help: 'Every offered class gets these subjects. You can change that later in Academic Setup.' },
+  { id: 'F052', key: 'examSystem', cat: 'F', label: 'Examination system', type: 'select', options: opts(EXAM_SYSTEMS) },
+  { id: 'F053', key: 'gradingSystem', cat: 'F', label: 'Grading system', type: 'select', options: opts(GRADING_SYSTEMS) },
+
+  { id: 'F054', key: 'studentCount', cat: 'G', label: 'Current student count', type: 'int', req: true, maxInt: 100000 },
+  { id: 'F055', key: 'maxCapacity', cat: 'G', label: 'Maximum student capacity', type: 'int', maxInt: 100000,
+    validate: (x, v) => (/^[0-9]+$/.test(v.studentCount || '') && Number(x) < Number(v.studentCount) ? 'Capacity cannot be lower than the current student count.' : '') },
+  { id: 'F056', key: 'teacherCount', cat: 'G', label: 'Teacher count', type: 'int', req: true, maxInt: 10000 },
+  { id: 'F057', key: 'nonTeachingCount', cat: 'G', label: 'Non-teaching staff count', type: 'int', maxInt: 10000 },
+  { id: 'F058', key: 'adminStaffCount', cat: 'G', label: 'Administrative staff count', type: 'int', maxInt: 10000 },
+  { id: 'F059', key: 'classroomCount', cat: 'G', label: 'Classroom count', type: 'int', maxInt: 5000 },
+  { id: 'F060', key: 'campusCount', cat: 'G', label: 'Campus or branch count', type: 'int', min: 1, maxInt: 50, def: '1' },
+
+  { id: 'F061', key: 'openTime', cat: 'H', label: 'School opening time', type: 'time' },
+  { id: 'F062', key: 'closeTime', cat: 'H', label: 'School closing time', type: 'time',
+    validate: (x, v) => (v.openTime && x <= v.openTime ? 'Closing time must be after the opening time.' : '') },
+  { id: 'F063', key: 'workingDays', cat: 'H', label: 'Working days', type: 'multi', wide: true, def: 'Mon,Tue,Wed,Thu,Fri,Sat', options: opts(WEEK_DAYS) },
+  { id: 'F064', key: 'weeklyHolidays', cat: 'H', label: 'Weekly holidays', type: 'multi', wide: true, def: 'Sun', options: opts(WEEK_DAYS),
+    validate: (x, v) => (splitList(x).some((d) => splitList(v.workingDays).includes(d)) ? 'A day cannot be both a working day and a weekly holiday.' : '') },
+  { id: 'F065', key: 'teacherReportTime', cat: 'H', label: 'Teacher reporting time', type: 'time', redraw: true,
+    validate: (x, v) => (v.closeTime && x >= v.closeTime ? 'Reporting time must be before the closing time.' : '') },
+  { id: 'F066', key: 'lateGraceMinutes', cat: 'H', label: 'Late grace period (minutes)', type: 'int', maxInt: 180, showIf: (v) => Boolean(v.teacherReportTime) },
+  { id: 'F067', key: 'studentAttendanceMethod', cat: 'H', label: 'Student attendance method', type: 'select', redraw: true, options: opts(ATTENDANCE_METHODS) },
+  { id: 'F068', key: 'teacherAttendanceMethods', cat: 'H', label: 'Teacher attendance methods', type: 'multi', wide: true, redraw: true, options: opts(ATTENDANCE_METHODS),
+    help: 'Choosing a method only records the school\'s wish. QR, selfie and biometric devices are set up separately, and may need a plan that includes them.' },
+  { id: 'F069', key: 'geofenceRadius', cat: 'H', label: 'GPS geofencing radius (metres)', type: 'int', min: 10, maxInt: 5000, showIf: (v) => usesGps(v), reqIf: (v) => usesGps(v),
+    help: 'Needed when GPS attendance is chosen. Location is collected only with the staff member\'s permission.' },
+
+  { id: 'F070', key: 'currency', cat: 'I', label: 'Currency', type: 'select', def: 'INR', options: opts(CURRENCIES) },
+  { id: 'F071', key: 'admissionFee', cat: 'I', label: 'Admission fee', type: 'money' },
+  { id: 'F072', key: 'tuitionFee', cat: 'I', label: 'Monthly tuition fee structure', type: 'textarea', max: 500, wide: true, help: 'For example: Class 1 to 5: 500, Class 6 to 8: 700. You can set exact fees per class after registration.' },
+  { id: 'F073', key: 'annualFee', cat: 'I', label: 'Annual fees', type: 'money' },
+  { id: 'F074', key: 'examFee', cat: 'I', label: 'Examination fees', type: 'money' },
+  { id: 'F075', key: 'feeDueDay', cat: 'I', label: 'Monthly fee due date (day of the month)', type: 'int', min: 1, maxInt: 28 },
+  { id: 'F076', key: 'latePolicy', cat: 'I', label: 'Late payment policy', type: 'textarea', max: 500, wide: true },
+  { id: 'F077', key: 'paymentMethods', cat: 'I', label: 'Accepted payment methods', type: 'multi', wide: true, options: opts(PAYMENT_METHODS) },
 ];
 const UPLOAD_NOTES = { B: 'Recognition and affiliation certificates (F017, F018)', D: 'Owner photograph and authorization document (F035, F036)', E: 'Principal photograph (F040)' };
-const ACTIVE = ['A', 'B', 'C', 'D', 'E'];
+const ACTIVE = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
 
 const typeOf = (field, v) => (field.dynamicType ? field.dynamicType(v) : field.type);
 const visible = (field, v) => !field.showIf || field.showIf(v);
@@ -84,6 +154,27 @@ export function fieldProblem(field, v) {
   if (type === 'email' && !EMAIL.test(x)) return 'Enter a valid email address.';
   if (type === 'phone' && !PHONE.test(x)) return 'Enter a phone number with digits only (a leading + is fine).';
   if (type === 'select' && !field.options.some(([value]) => value === x)) return 'Choose one of the listed options.';
+  if (type === 'multi') { const list = field.optionsFn ? field.optionsFn(v) : field.options; if (splitList(x).some((item) => !list.some(([value]) => value === item))) return 'Choose from the listed options.'; }
+  if (type === 'time' && !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(x)) return 'Enter a time like 08:30.';
+  if (type === 'int') {
+    if (!/^[0-9]{1,6}$/.test(x)) return 'Enter a whole number, zero or more.';
+    if (field.min !== undefined && Number(x) < field.min) return 'Enter ' + field.min + ' or more.';
+    if (field.maxInt !== undefined && Number(x) > field.maxInt) return 'Enter ' + field.maxInt + ' or less.';
+  }
+  if (type === 'money' && !/^[0-9]{1,9}(\.[0-9]{1,2})?$/.test(x)) return 'Enter an amount with at most 2 decimals, for example 1500 or 1500.50.';
+  if (type === 'sections') {
+    const range = rangeOf(v);
+    for (const [name, list] of Object.entries(parseSections(x))) {
+      if (!range.includes(name)) return name + ' is not in the class range.';
+      if (list.length > 8) return name + ' can have at most 8 sections.';
+      if (list.some((n) => !/^[A-Za-z0-9 ]{1,10}$/.test(n))) return 'Section names use letters and numbers, up to 10 characters.';
+    }
+  }
+  if (type === 'subjects') {
+    const names = splitList(x);
+    if (names.length > 40) return 'Add at most 40 subjects.';
+    if (names.some((n) => n.length > 80 || !/[A-Za-z0-9]/.test(n))) return 'A subject name is too long or has no letters.';
+  }
   return field.validate ? field.validate(x, v) : '';
 }
 export const stepProblems = (cat, v) => FIELDS.filter((f) => f.cat === cat).map((f) => ({ field: f, message: fieldProblem(f, v) })).filter((p) => p.message);
@@ -92,7 +183,7 @@ export const stepDone = (cat, v) => {
   const own = FIELDS.filter((f) => f.cat === cat && visible(f, v));
   const mustFill = own.filter((f) => required(f, v));
   if (stepProblems(cat, v).length || !mustFill.every((f) => String(v[f.key] ?? '').trim())) return false;
-  return mustFill.length > 0 || own.some((f) => String(v[f.key] ?? '').trim());
+  return mustFill.length > 0 || own.some((f) => String(v[f.key] ?? '').trim() && String(v[f.key]).trim() !== f.def);
 };
 // Progress counts only the steps that are valid and applicable, not the steps that were merely visited.
 export const progressOf = (v) => ACTIVE.filter((cat) => stepDone(cat, v)).length;
@@ -114,6 +205,13 @@ const STYLE = `
 #onb nav.ob-nav b{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1px solid var(--line);font-size:.8rem;flex:none}
 #onb nav.ob-nav b.done{background:var(--green);border-color:var(--green);color:#06150e}
 #onb nav.ob-nav small{display:block;color:var(--muted)}
+#onb .ob-fs{border:1px solid var(--line);border-radius:12px;margin:12px 0 4px;padding:6px 14px 12px;grid-column:1/-1;min-width:0}
+#onb .ob-fs legend{padding:0 6px;color:var(--muted);font-size:.85rem}
+#onb .ob-checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:2px 14px}
+#onb .ob-checks label,#onb .ob-sections label{display:flex;gap:8px;align-items:center;margin:4px 0}
+#onb .ob-checks input{width:auto}
+#onb .ob-sections{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px 16px}
+#onb .ob-sections label{display:block}
 #onb .ob-pick{display:none}
 #onb .ob-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 18px}
 #onb .ob-grid .wide{grid-column:1/-1}
@@ -175,6 +273,13 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
   }
   const later = () => { dirty = true; clearTimeout(timer); timer = setTimeout(persist, 1200); say('', 'Unsaved changes.'); };
 
+  // Fields with a usual value start with it filled in (a school year from April to March, working days Monday to Saturday, and so on).
+  function applyDefaults() {
+    let changed = false;
+    for (const f of FIELDS) if (f.def !== undefined && !(f.key in S.values)) { S.values[f.key] = f.def; changed = true; }
+    return changed;
+  }
+
   // ----- starting and resuming (C05) -----
   async function landing() {
     S.draftId = ''; S.exists = false;
@@ -182,7 +287,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     let drafts = [];
     try { drafts = (await call('listOnboardingDrafts', {})).drafts || []; } catch { drafts = []; }
     const list = h('div', { class: 'ob-list' }, drafts.length ? drafts.map((d) => h('a', { href: '#/schools/register/' + d.id },
-      h('b', {}, d.values?.name || 'Untitled registration'), h('div', { class: 'muted' }, 'Step ' + ((d.step ?? 0) + 1) + ' of 5 | ' + progressOf(d.values || {}) + ' sections complete | last saved ' + (d.updatedAt ? new Date(d.updatedAt).toLocaleString('en-IN') : 'just now')))) : h('p', { class: 'muted' }, 'No unfinished registrations.'));
+      h('b', {}, d.values?.name || 'Untitled registration'), h('div', { class: 'muted' }, 'Step ' + ((d.step ?? 0) + 1) + ' of ' + (ACTIVE.length + 1) + ' | ' + progressOf(d.values || {}) + ' sections complete | last saved ' + (d.updatedAt ? new Date(d.updatedAt).toLocaleString('en-IN') : 'just now')))) : h('p', { class: 'muted' }, 'No unfinished registrations.'));
     root.replaceChildren(shell(h('div', {},
       h('h2', {}, 'Register a school'),
       h('p', { class: 'muted' }, 'Fill the school\'s details in sections. Your work is saved as you go, so you can leave and come back.'),
@@ -198,6 +303,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       const d = found.draft;
       if (d.status !== 'draft') { toast('That registration is already finished.'); location.hash = '#/schools'; return undefined; }
       S.exists = true; S.revision = d.revision; S.step = Math.min(d.step ?? 0, ACTIVE.length); S.values = { ...d.values }; S.schoolId = d.schoolId || '';
+      if (applyDefaults()) later();
     }
     return draw();
   }
@@ -218,7 +324,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       h('span', {}, c.title, c.later ? h('small', {}, 'Arrives in ' + c.later) : null));
       return b;
     });
-    items.splice(ACTIVE.length, 0, h('button', { type: 'button', class: S.step === ACTIVE.length ? 'on' : '', onclick: () => go(ACTIVE.length) }, h('b', {}, '→'), h('span', {}, 'Review and register', h('small', {}, 'Mark 1 steps'))));
+    items.splice(ACTIVE.length, 0, h('button', { type: 'button', class: S.step === ACTIVE.length ? 'on' : '', onclick: () => go(ACTIVE.length) }, h('b', {}, '→'), h('span', {}, 'Review and register')));
     return h('nav', { class: 'ob-nav', 'aria-label': 'Registration steps' }, items);
   }
   function picker() {
@@ -228,8 +334,46 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     return h('div', { class: 'ob-pick' }, h('label', { class: 'ob-pickl' }, 'Step', sel));
   }
 
+  // Checkbox groups (multi), the sections editor and the subjects picker. The value is kept as text in S.values.
+  function groupInput(field) {
+    const id = 'ob-' + field.key;
+    const err = h('p', { class: 'ob-err', id: id + '-err' });
+    const type = typeOf(field, S.values);
+    const finish = () => { const p = fieldProblem(field, S.values); err.textContent = p; };
+    let body;
+    if (type === 'multi') {
+      const list = field.optionsFn ? field.optionsFn(S.values) : field.options;
+      const chosen = new Set(splitList(S.values[field.key]));
+      const boxes = list.map(([value, text]) => { const box = h('input', { type: 'checkbox', value }); box.checked = chosen.has(value); return box; });
+      const refresh = () => { S.values[field.key] = boxes.filter((b) => b.checked).map((b) => b.value).join(','); finish(); later(); if (field.redraw) draw(); };
+      boxes.forEach((box) => box.addEventListener('change', refresh));
+      body = h('div', { class: 'ob-checks' }, list.map(([value, text], i) => h('label', {}, boxes[i], ' ' + text)));
+    } else if (type === 'sections') {
+      const map = parseSections(S.values[field.key]);
+      const offered = splitList(S.values.classesOffered);
+      const rows = rangeOf(S.values).filter((c) => !offered.length || offered.includes(c));
+      const inputs = rows.map((name) => { const el = h('input', { placeholder: 'A, B', 'aria-label': 'Sections of ' + name, autocomplete: 'off' }); el.value = (map[name] || []).join(', '); return [name, el]; });
+      const refresh = () => { S.values[field.key] = inputs.filter(([, el]) => el.value.trim()).map(([name, el]) => name + '=' + splitList(el.value).join(',')).join('|'); finish(); later(); };
+      inputs.forEach(([, el]) => el.addEventListener('input', refresh));
+      body = h('div', { class: 'ob-sections' }, inputs.map(([name, el]) => h('label', {}, h('span', {}, name), el)));
+    } else {
+      const have = splitList(S.values[field.key]);
+      const boxes = COMMON_SUBJECTS.map((name) => { const box = h('input', { type: 'checkbox', value: name }); box.checked = have.includes(name); return box; });
+      const other = h('input', { id, placeholder: 'Other subjects, separated by commas', autocomplete: 'off', 'aria-label': 'Other subjects' });
+      other.value = have.filter((n) => !COMMON_SUBJECTS.includes(n)).join(', ');
+      const refresh = () => { S.values[field.key] = [...boxes.filter((b) => b.checked).map((b) => b.value), ...splitList(other.value)].join(','); finish(); later(); };
+      boxes.forEach((box) => box.addEventListener('change', refresh));
+      other.addEventListener('input', refresh);
+      body = h('div', {}, h('div', { class: 'ob-checks' }, COMMON_SUBJECTS.map((name, i) => h('label', {}, boxes[i], ' ' + name))), h('div', { style: 'margin-top:8px' }, other));
+    }
+    return h('fieldset', { class: field.wide ? 'wide ob-fs' : 'ob-fs', 'aria-describedby': id + '-err' },
+      h('legend', {}, field.label, required(field, S.values) ? h('span', { class: 'ob-req' }, ' *') : null, h('span', { class: 'ob-id' }, field.id)),
+      body, field.help ? h('p', { class: 'ob-help' }, field.help) : null, err);
+  }
+
   function input(field) {
     const type = typeOf(field, S.values);
+    if (['multi', 'sections', 'subjects'].includes(type)) return groupInput(field);
     const id = 'ob-' + field.key;
     const value = S.values[field.key] ?? '';
     let el;
@@ -237,7 +381,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       el = h('select', { id }, [h('option', { value: '' }, 'Select'), ...field.options.map(([v, t]) => h('option', { value: v }, t))]);
       el.value = value;
     } else if (type === 'textarea') { el = h('textarea', { id, rows: 3 }); el.value = value; } else {
-      el = h('input', { id, type: type === 'phone' ? 'tel' : type === 'number' ? 'text' : type, ...(type === 'number' ? { inputmode: 'numeric' } : {}), autocomplete: 'off' });
+      el = h('input', { id, type: type === 'phone' ? 'tel' : type === 'time' ? 'time' : ['number', 'int', 'money'].includes(type) ? 'text' : type, ...(['number', 'int', 'money'].includes(type) ? { inputmode: type === 'money' ? 'decimal' : 'numeric' } : {}), autocomplete: 'off' });
       el.value = value;
     }
     const err = h('p', { class: 'ob-err', id: id + '-err' });
@@ -246,7 +390,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       let x = el.value;
       if (type === 'email') x = x.toLowerCase();
       S.values[field.key] = x;
-      if (field.key === 'country' || field.key === 'board' || field.key === 'schoolType') { draw(); later(); return; }
+      if (field.redraw || ['country', 'board', 'schoolType'].includes(field.key)) { draw(); later(); return; }
       if (final) { el.value = x.trim(); S.values[field.key] = x.trim(); const p = fieldProblem(field, S.values); err.textContent = p; el.setAttribute('aria-invalid', p ? 'true' : 'false'); }
       later();
     };
@@ -389,7 +533,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
   const warn = (event) => { if (dirty) { event.preventDefault(); event.returnValue = ''; } };
   addEventListener('beforeunload', warn);
 
-  if (draftIdFromRoute === 'new') { S.draftId = ''; draw(); } else if (draftIdFromRoute) await open(draftIdFromRoute); else await landing();
+  if (draftIdFromRoute === 'new') { S.draftId = ''; applyDefaults(); draw(); } else if (draftIdFromRoute) await open(draftIdFromRoute); else await landing();
 }
 
 export function unmountOnboarding() {

@@ -1096,15 +1096,15 @@ exports.promoteStudents = onCall({ memory: '512MiB', timeoutSeconds: 300 }, asyn
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Batch 98 (Registration Mark 1): trusted school registration for the Super Admin onboarding wizard.
+// Batch 98 and 99 (Registration Marks 1 and 2): trusted school registration for the Super Admin onboarding wizard.
 // reserveSchoolId: picks a collision-safe school ID inside a transaction and holds it for one draft.
 // checkSchoolDuplicates: warns about schools that look like the one being registered (a warning, never a block).
-// registerSchool: validates the draft on the server, then creates the school, its billing record, the owner invitation and the audit
-// entry in one transaction. Repeating the call for the same draft returns the same school (idempotent).
+// saveOnboardingDraft / getOnboardingDraft / listOnboardingDrafts / deleteOnboardingDraft: drafts live behind these functions, not browser rules.
+// registerSchool: validates the draft on the server, then creates the school, its billing record, the owner invitation and the audit entry
+// in one transaction, and afterwards builds the academic structure (year, classes, sections, subjects). Repeating the call for the same
+// draft returns the same school (idempotent) and finishes any academic setup that did not complete.
 // ---------------------------------------------------------------------------------------------------------------------
 const RESERVED_SCHOOL_IDS = ['www', 'admin', 'api', 'app', 'platform', 'school', 'aziz', 'public', 'support', 'demo', 'mail', 'ftp'];
-const NEW_SCHOOL_ID = /^[a-z][a-z0-9-]{2,29}$/;
-const DRAFT_ID = /^OB-[A-Za-z0-9]{6,30}$/;
 const TRIAL_DAYS = { trial: 30, trial60: 60, trial90: 90 };
 
 async function requirePlatformAdmin(request) {
@@ -1113,6 +1113,18 @@ async function requirePlatformAdmin(request) {
   if (!admin.exists) throw new HttpsError('permission-denied', 'Only a platform administrator can register schools.');
   return { uid: request.auth.uid, email: String(request.auth.token?.email || '') };
 }
+
+// --- registration rules begin (pure code: no database access, so the unit tests can run it on its own) ---
+const NEW_SCHOOL_ID = /^[a-z][a-z0-9-]{2,29}$/;
+const DRAFT_ID = /^OB-[A-Za-z0-9]{6,30}$/;
+const CLASS_LADDER = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12'];
+const MONTH_NUMBERS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
+const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const ATTENDANCE_METHODS = ['Manual', 'QR code', 'Selfie', 'Biometric', 'GPS'];
+const EXAM_SYSTEMS = ['Two terms', 'Three terms', 'Semesters', 'Annual only', 'Unit tests and finals', 'Continuous assessment'];
+const GRADING_SYSTEMS = ['Marks only', 'Percentage', 'Letter grades', '10-point grade (CGPA)', 'Division'];
+const PAYMENT_METHODS = ['Cash', 'UPI', 'Bank transfer', 'Cheque', 'Card', 'Online gateway'];
+const CURRENCIES = ['INR', 'BDT', 'NPR', 'AED', 'USD'];
 
 // "St. Mary's Public School" -> "st-marys-public-school": lowercase, accents removed, letters and digits only, 3 to 30 characters.
 function slugifySchoolName(name) {
@@ -1124,6 +1136,148 @@ function slugifySchoolName(name) {
   return slug;
 }
 const normalName = (name) => String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\b(school|public|the|high|sr|secondary|jr|senior|junior)\b/g, ' ').replace(/\s+/g, ' ').trim();
+// The same id rule the school app uses for classes, subjects and years.
+const slugId = (value, max) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, max).replace(/-+$/, '');
+const splitList = (value) => String(value || '').split(',').map((x) => x.trim()).filter(Boolean);
+
+const REQUIRED_REGISTRATION = ['name', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'board', 'country', 'state', 'district', 'town', 'street', 'pin',
+  'schoolPhone', 'schoolEmail', 'ownerName', 'ownerDesignation', 'ownerEmail', 'ownerMobile',
+  'sessionLabel', 'lowestClass', 'highestClass', 'studentCount', 'teacherCount'];
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const PHONE_PATTERN = /^\+?[0-9][0-9 -]{6,17}$/;
+const COUNT_FIELDS = { studentCount: 100000, maxCapacity: 100000, teacherCount: 10000, nonTeachingCount: 10000, adminStaffCount: 10000, classroomCount: 5000, campusCount: 50 };
+const MONEY_FIELDS = ['admissionFee', 'annualFee', 'examFee'];
+const TIME_PATTERN = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+const classRange = (v) => { const a = CLASS_LADDER.indexOf(v.lowestClass); const b = CLASS_LADDER.indexOf(v.highestClass); return a >= 0 && b >= a ? CLASS_LADDER.slice(a, b + 1) : []; };
+// Sections are stored as "Class 1=A,B|Class 2=A".
+function parseSections(value) {
+  const out = {};
+  for (const part of String(value || '').split('|')) {
+    const at = part.indexOf('=');
+    if (at < 1) continue;
+    out[part.slice(0, at).trim()] = splitList(part.slice(at + 1));
+  }
+  return out;
+}
+// "1500.50" -> 150050 (paise). Money is kept in minor units so nothing is rounded later.
+function moneyToMinor(value) {
+  const x = String(value || '').trim();
+  if (!x) return 0;
+  const [whole, cents = ''] = x.split('.');
+  return Number(whole) * 100 + Number((cents + '00').slice(0, 2));
+}
+// Every value is stored as text. Returns the list of problems (empty when the draft is good).
+function checkRegistration(v) {
+  const problems = [];
+  for (const key of REQUIRED_REGISTRATION) if (!String(v[key] ?? '').trim()) problems.push(key + ' is required');
+  if (v.name && String(v.name).length > 120) problems.push('name is too long');
+  if (v.schoolEmail && !EMAIL_PATTERN.test(v.schoolEmail)) problems.push('schoolEmail is not valid');
+  if (v.ownerEmail && (!EMAIL_PATTERN.test(v.ownerEmail) || v.ownerEmail !== v.ownerEmail.toLowerCase())) problems.push('ownerEmail must be a lowercase email address');
+  for (const key of ['schoolPhone', 'ownerMobile', 'ownerWhatsapp', 'principalMobile', 'adminPhone']) if (v[key] && !PHONE_PATTERN.test(v[key])) problems.push(key + ' is not a valid phone number');
+  for (const key of ['principalEmail', 'adminEmail']) if (v[key] && !EMAIL_PATTERN.test(v[key])) problems.push(key + ' is not valid');
+  if (v.country === 'India' && v.pin && !/^[1-9][0-9]{5}$/.test(v.pin)) problems.push('pin must be 6 digits for India');
+  if (v.country !== 'India' && v.pin && !/^[A-Za-z0-9 -]{3,10}$/.test(v.pin)) problems.push('pin is not valid');
+  if (v.estYear) { const year = Number(v.estYear); if (!Number.isInteger(year) || year < 1800 || year > new Date().getFullYear()) problems.push('estYear is not a valid year'); }
+  if (v.udise && !/^[0-9]{11}$/.test(String(v.udise).replace(/\s/g, ''))) problems.push('udise must be 11 digits');
+  if (v.board && !['none', 'state'].includes(v.board) && !String(v.affiliationNo || '').trim()) problems.push('affiliationNo is required for this board');
+
+  // Mark 2: academic, capacity, timing and fees.
+  const session = /^(20[0-9]{2})-([0-9]{2})$/.exec(v.sessionLabel || '');
+  if (v.sessionLabel && (!session || (Number(session[1]) + 1) % 100 !== Number(session[2]))) problems.push('sessionLabel must look like 2026-27');
+  for (const key of ['sessionStartMonth', 'sessionEndMonth']) if (v[key] && !MONTH_NUMBERS.includes(v[key])) problems.push(key + ' is not a month');
+  if (v.lowestClass && !CLASS_LADDER.includes(v.lowestClass)) problems.push('lowestClass is not a listed class');
+  if (v.highestClass && !CLASS_LADDER.includes(v.highestClass)) problems.push('highestClass is not a listed class');
+  if (CLASS_LADDER.includes(v.lowestClass) && CLASS_LADDER.includes(v.highestClass) && CLASS_LADDER.indexOf(v.highestClass) < CLASS_LADDER.indexOf(v.lowestClass)) problems.push('highestClass must not be below lowestClass');
+  const range = classRange(v);
+  const offered = splitList(v.classesOffered);
+  if (offered.some((c) => !range.includes(c))) problems.push('classesOffered must be inside the class range');
+  const sections = parseSections(v.sectionsByClass);
+  for (const [className, names] of Object.entries(sections)) {
+    if (!range.includes(className)) problems.push('sections: ' + className.slice(0, 20) + ' is not in the class range');
+    if (names.length > 8) problems.push('sections: ' + className.slice(0, 20) + ' has more than 8 sections');
+    if (names.some((n) => !/^[A-Za-z0-9 ]{1,10}$/.test(n))) problems.push('sections: ' + className.slice(0, 20) + ' has an invalid section name');
+  }
+  const subjectNames = splitList(v.subjects);
+  if (subjectNames.length > 40) problems.push('subjects: at most 40');
+  if (subjectNames.some((n) => n.length > 80 || !slugId(n, 30))) problems.push('subjects: a name is not valid');
+  if (v.examSystem && !EXAM_SYSTEMS.includes(v.examSystem)) problems.push('examSystem is not a listed option');
+  if (v.gradingSystem && !GRADING_SYSTEMS.includes(v.gradingSystem)) problems.push('gradingSystem is not a listed option');
+  for (const [key, max] of Object.entries(COUNT_FIELDS)) {
+    if (v[key] === undefined || v[key] === '') continue;
+    if (!/^[0-9]{1,6}$/.test(v[key]) || Number(v[key]) > max) problems.push(key + ' must be a whole number from 0 to ' + max);
+  }
+  if (v.campusCount && Number(v.campusCount) < 1) problems.push('campusCount must be at least 1');
+  if (v.maxCapacity && v.studentCount && /^[0-9]+$/.test(v.maxCapacity) && /^[0-9]+$/.test(v.studentCount) && Number(v.maxCapacity) < Number(v.studentCount)) problems.push('maxCapacity is below the current student count');
+  for (const key of ['openTime', 'closeTime', 'teacherReportTime']) if (v[key] && !TIME_PATTERN.test(v[key])) problems.push(key + ' must be a time like 08:30');
+  if (v.openTime && v.closeTime && TIME_PATTERN.test(v.openTime) && TIME_PATTERN.test(v.closeTime) && v.closeTime <= v.openTime) problems.push('closeTime must be after openTime');
+  if (v.teacherReportTime && v.closeTime && TIME_PATTERN.test(v.teacherReportTime) && TIME_PATTERN.test(v.closeTime) && v.teacherReportTime >= v.closeTime) problems.push('teacherReportTime must be before closeTime');
+  const working = splitList(v.workingDays); const holidays = splitList(v.weeklyHolidays);
+  if ([...working, ...holidays].some((d) => !WEEK_DAYS.includes(d))) problems.push('workingDays or weeklyHolidays has an unknown day');
+  if (working.some((d) => holidays.includes(d))) problems.push('a day cannot be both a working day and a weekly holiday');
+  if (v.lateGraceMinutes && (!/^[0-9]{1,3}$/.test(v.lateGraceMinutes) || Number(v.lateGraceMinutes) > 180)) problems.push('lateGraceMinutes must be 0 to 180');
+  if (v.studentAttendanceMethod && !ATTENDANCE_METHODS.includes(v.studentAttendanceMethod)) problems.push('studentAttendanceMethod is not a listed option');
+  const teacherMethods = splitList(v.teacherAttendanceMethods);
+  if (teacherMethods.some((m) => !ATTENDANCE_METHODS.includes(m))) problems.push('teacherAttendanceMethods has an unknown option');
+  const usesGps = v.studentAttendanceMethod === 'GPS' || teacherMethods.includes('GPS');
+  if (usesGps && !v.geofenceRadius) problems.push('geofenceRadius is required when GPS attendance is chosen');
+  if (v.geofenceRadius && (!/^[0-9]{2,4}$/.test(v.geofenceRadius) || Number(v.geofenceRadius) < 10 || Number(v.geofenceRadius) > 5000)) problems.push('geofenceRadius must be 10 to 5000 metres');
+  if (v.currency && !CURRENCIES.includes(v.currency)) problems.push('currency is not a listed option');
+  for (const key of MONEY_FIELDS) if (v[key] && !/^[0-9]{1,9}(\.[0-9]{1,2})?$/.test(v[key])) problems.push(key + ' must be an amount with at most 2 decimals');
+  if (v.feeDueDay && (!/^[0-9]{1,2}$/.test(v.feeDueDay) || Number(v.feeDueDay) < 1 || Number(v.feeDueDay) > 28)) problems.push('feeDueDay must be 1 to 28');
+  if (splitList(v.paymentMethods).some((m) => !PAYMENT_METHODS.includes(m))) problems.push('paymentMethods has an unknown option');
+  return problems;
+}
+const DRAFT_KEYS = ['name', 'shortName', 'estYear', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'motto', 'description', 'board', 'affiliationNo', 'udise',
+  'recognitionNo', 'trustName', 'trustRegNo', 'country', 'state', 'district', 'block', 'town', 'street', 'pin', 'schoolPhone', 'schoolEmail', 'mapLocation',
+  'ownerName', 'ownerDesignation', 'ownerEmail', 'ownerMobile', 'ownerWhatsapp', 'ownerAddress', 'principalName', 'principalEmail', 'principalMobile',
+  'adminName', 'adminEmail', 'adminPhone',
+  'sessionLabel', 'sessionStartMonth', 'sessionEndMonth', 'lowestClass', 'highestClass', 'classesOffered', 'sectionsByClass', 'subjects', 'examSystem', 'gradingSystem',
+  'studentCount', 'maxCapacity', 'teacherCount', 'nonTeachingCount', 'adminStaffCount', 'classroomCount', 'campusCount',
+  'openTime', 'closeTime', 'workingDays', 'weeklyHolidays', 'teacherReportTime', 'lateGraceMinutes', 'studentAttendanceMethod', 'teacherAttendanceMethods', 'geofenceRadius',
+  'currency', 'admissionFee', 'tuitionFee', 'annualFee', 'examFee', 'feeDueDay', 'latePolicy', 'paymentMethods'];
+function cleanDraftValues(values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) throw new HttpsError('invalid-argument', 'Draft values are not valid.');
+  const out = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (!DRAFT_KEYS.includes(key)) throw new HttpsError('invalid-argument', 'Unknown field ' + String(key).slice(0, 30) + '.');
+    if (typeof value !== 'string' || value.length > 1000) throw new HttpsError('invalid-argument', 'Field ' + key + ' is not valid.');
+    if (value.trim()) out[key] = value.trim();
+  }
+  return out;
+}
+// What the school app needs, in its own shapes: one academic year, the classes, their sections, the subjects and the class-subject links.
+// Class order follows the ladder; every offered class gets the subjects (the owner can change that later); a class with no sections gets A.
+function buildAcademicPlan(v) {
+  const session = /^(20[0-9]{2})-([0-9]{2})$/.exec(v.sessionLabel || '');
+  const startYear = Number(session[1]);
+  const startMonth = Number(v.sessionStartMonth || '4');
+  const endMonth = Number(v.sessionEndMonth || '3');
+  const endYear = endMonth >= startMonth ? startYear : startYear + 1;
+  const pad = (n) => String(n).padStart(2, '0');
+  const lastDay = new Date(Date.UTC(endYear, endMonth, 0)).getUTCDate();
+  const yearId = slugId(v.sessionLabel, 20);
+  const range = classRange(v);
+  const offered = splitList(v.classesOffered).length ? range.filter((c) => splitList(v.classesOffered).includes(c)) : range;
+  const sections = parseSections(v.sectionsByClass);
+  const classes = offered.map((name) => ({ id: slugId(name, 20), data: { name, order: CLASS_LADDER.indexOf(name) + 1 } }));
+  const sectionDocs = [];
+  for (const klass of classes) {
+    const names = sections[klass.data.name]?.length ? sections[klass.data.name] : ['A'];
+    for (const name of names) { const suffix = slugId(name, 10); if (suffix) sectionDocs.push({ id: klass.id + '-' + suffix, data: { classId: klass.id, name } }); }
+  }
+  const subjects = []; const seen = new Set();
+  for (const name of splitList(v.subjects)) {
+    const id = slugId(name, 30);
+    if (id && !seen.has(id)) { seen.add(id); subjects.push({ id, data: { name, code: name.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase() } }); }
+  }
+  const mappings = [];
+  for (const klass of classes) for (const subject of subjects) mappings.push({ id: klass.id + '_' + subject.id, data: { classId: klass.id, subjectId: subject.id } });
+  return {
+    year: { id: yearId, data: { label: v.sessionLabel, startDate: startYear + '-' + pad(startMonth) + '-01', endDate: endYear + '-' + pad(endMonth) + '-' + pad(lastDay), status: 'active' } },
+    classes, sections: sectionDocs, subjects, mappings,
+  };
+}
+// --- registration rules end ---
 
 exports.reserveSchoolId = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const { uid } = await requirePlatformAdmin(request);
@@ -1180,89 +1334,6 @@ exports.checkSchoolDuplicates = onCall({ memory: '256MiB', timeoutSeconds: 60 },
   return { matches: found.slice(0, 10) };
 });
 
-const REQUIRED_REGISTRATION = ['name', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'board', 'country', 'state', 'district', 'town', 'street', 'pin',
-  'schoolPhone', 'schoolEmail', 'ownerName', 'ownerDesignation', 'ownerEmail', 'ownerMobile'];
-const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const PHONE_PATTERN = /^\+?[0-9][0-9 -]{6,17}$/;
-// Every value is stored as text. Returns the list of problems (empty when the draft is good).
-function checkRegistration(v) {
-  const problems = [];
-  for (const key of REQUIRED_REGISTRATION) if (!String(v[key] ?? '').trim()) problems.push(key + ' is required');
-  if (v.name && String(v.name).length > 120) problems.push('name is too long');
-  if (v.schoolEmail && !EMAIL_PATTERN.test(v.schoolEmail)) problems.push('schoolEmail is not valid');
-  if (v.ownerEmail && (!EMAIL_PATTERN.test(v.ownerEmail) || v.ownerEmail !== v.ownerEmail.toLowerCase())) problems.push('ownerEmail must be a lowercase email address');
-  for (const key of ['schoolPhone', 'ownerMobile', 'ownerWhatsapp', 'principalMobile', 'adminPhone']) if (v[key] && !PHONE_PATTERN.test(v[key])) problems.push(key + ' is not a valid phone number');
-  for (const key of ['principalEmail', 'adminEmail']) if (v[key] && !EMAIL_PATTERN.test(v[key])) problems.push(key + ' is not valid');
-  if (v.country === 'India' && v.pin && !/^[1-9][0-9]{5}$/.test(v.pin)) problems.push('pin must be 6 digits for India');
-  if (v.country !== 'India' && v.pin && !/^[A-Za-z0-9 -]{3,10}$/.test(v.pin)) problems.push('pin is not valid');
-  if (v.estYear) { const year = Number(v.estYear); if (!Number.isInteger(year) || year < 1800 || year > new Date().getFullYear()) problems.push('estYear is not a valid year'); }
-  if (v.udise && !/^[0-9]{11}$/.test(String(v.udise).replace(/\s/g, ''))) problems.push('udise must be 11 digits');
-  if (v.board && !['none', 'state'].includes(v.board) && !String(v.affiliationNo || '').trim()) problems.push('affiliationNo is required for this board');
-  return problems;
-}
-const DRAFT_KEYS = ['name', 'shortName', 'estYear', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'motto', 'description', 'board', 'affiliationNo', 'udise',
-  'recognitionNo', 'trustName', 'trustRegNo', 'country', 'state', 'district', 'block', 'town', 'street', 'pin', 'schoolPhone', 'schoolEmail', 'mapLocation',
-  'ownerName', 'ownerDesignation', 'ownerEmail', 'ownerMobile', 'ownerWhatsapp', 'ownerAddress', 'principalName', 'principalEmail', 'principalMobile',
-  'adminName', 'adminEmail', 'adminPhone'];
-
-exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 120 }, async (request) => {
-  const { uid, email } = await requirePlatformAdmin(request);
-  const d = request.data || {};
-  const draftId = text(d.draftId, 40);
-  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
-  const planId = text(d.plan, 40);
-  const reason = text(d.reason, 300);
-  if (reason.length < 10) throw new HttpsError('invalid-argument', 'Give a reason of at least 10 characters. It is kept in the audit log.');
-  const draftRef = db.doc('onboardingDrafts/' + draftId);
-  const first = await draftRef.get();
-  if (!first.exists) throw new HttpsError('not-found', 'That draft was not found.');
-  if (first.data().status === 'registered') return { schoolId: first.data().schoolId, alreadyRegistered: true };
-  const plan = TRIAL_DAYS[planId] ? null : await db.doc('plans/' + planId).get();
-  if (!TRIAL_DAYS[planId] && !(plan && plan.exists && plan.data().active === true)) throw new HttpsError('invalid-argument', 'Choose a plan that is switched on.');
-  const auditId = 'A-' + Date.now().toString(36).toUpperCase() + require('crypto').randomBytes(3).toString('hex').toUpperCase();
-  const inviteId = 'OW-' + Date.now().toString(36).toUpperCase() + require('crypto').randomBytes(3).toString('hex').toUpperCase();
-  return db.runTransaction(async (tx) => {
-    const draft = await tx.get(draftRef);
-    if (!draft.exists) throw new HttpsError('not-found', 'That draft was not found.');
-    if (draft.data().status === 'registered') return { schoolId: draft.data().schoolId, alreadyRegistered: true };
-    const schoolId = draft.data().schoolId;
-    if (!schoolId || !NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('failed-precondition', 'Reserve the school ID first (it is done when you leave the first step).');
-    const v = {};
-    for (const key of DRAFT_KEYS) v[key] = String((draft.data().values || {})[key] ?? '').trim();
-    const problems = checkRegistration(v);
-    if (problems.length) throw new HttpsError('invalid-argument', 'Fix these first: ' + problems.slice(0, 6).join('; ') + (problems.length > 6 ? '; and ' + (problems.length - 6) + ' more' : '') + '.');
-    const [school, hold] = await Promise.all([tx.get(db.doc('schools/' + schoolId)), tx.get(db.doc('schoolReservations/' + schoolId))]);
-    if (school.exists) throw new HttpsError('already-exists', 'A school with this ID already exists.');
-    if (!hold.exists || hold.data().draftId !== draftId || hold.data().status !== 'reserved') throw new HttpsError('failed-precondition', 'The school ID is no longer held for this draft. Reserve it again.');
-    const now = Timestamp.now();
-    const address = [v.street, v.block, v.town, v.district, v.state, v.pin, v.country].filter(Boolean).join(', ').slice(0, 500);
-    tx.set(db.doc('schools/' + schoolId), { name: v.name, contactEmail: v.schoolEmail, phone: v.schoolPhone, address, createdBy: uid, schemaVersion: 2, registeredVia: 'onboarding' });
-    tx.set(db.doc('schools/' + schoolId + '/registration/main'), { ...v, schemaVersion: 1, draftId, registeredBy: uid, registeredAt: now });
-    const billing = TRIAL_DAYS[planId]
-      ? { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + TRIAL_DAYS[planId] * 86400000), studentLimit: 50, staffLimit: 10 }
-      : { plan: planId, status: 'active', startedOn: now.toDate().toISOString().slice(0, 10), studentLimit: plan.data().studentLimit, staffLimit: plan.data().staffLimit, storageMb: plan.data().storageMb, monthlyPrice: plan.data().monthlyPrice };
-    tx.set(db.doc('schools/' + schoolId + '/billing/main'), billing);
-    tx.set(db.doc('invites/' + inviteId), { schoolId, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: uid });
-    tx.set(db.doc('platformAudit/' + auditId), { actor: uid, actorEmail: email, action: 'register-school', schoolId, reason,
-      detail: JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: billing.plan, draftId, via: 'onboarding' }).slice(0, 1500), at: now });
-    tx.update(db.doc('schoolReservations/' + schoolId), { status: 'used', usedAt: now });
-    tx.update(draftRef, { status: 'registered', registeredAt: now, registeredBy: uid });
-    return { schoolId, alreadyRegistered: false, ownerEmail: v.ownerEmail };
-  });
-});
-
-// Drafts of the onboarding wizard live behind these functions, not behind browser rules. Only a platform administrator may call them,
-// every save must name the revision it started from (so a second tab cannot silently overwrite the first), and only the known field keys are kept.
-function cleanDraftValues(values) {
-  if (!values || typeof values !== 'object' || Array.isArray(values)) throw new HttpsError('invalid-argument', 'Draft values are not valid.');
-  const out = {};
-  for (const [key, value] of Object.entries(values)) {
-    if (!DRAFT_KEYS.includes(key)) throw new HttpsError('invalid-argument', 'Unknown field ' + String(key).slice(0, 30) + '.');
-    if (typeof value !== 'string' || value.length > 1000) throw new HttpsError('invalid-argument', 'Field ' + key + ' is not valid.');
-    if (value.trim()) out[key] = value.trim();
-  }
-  return out;
-}
 const draftView = (id, d) => ({ id, status: d.status, step: d.step, revision: d.revision, values: d.values || {}, schoolId: d.schoolId || '',
   updatedAt: d.updatedAt ? d.updatedAt.toMillis() : 0, createdAt: d.createdAt ? d.createdAt.toMillis() : 0 });
 
@@ -1322,4 +1393,89 @@ exports.deleteOnboardingDraft = onCall({ memory: '256MiB', timeoutSeconds: 60 },
     }
   });
   return { ok: true };
+});
+
+// Writes the academic structure in chunks (a registration can have hundreds of class-subject links). Every write is a plain set,
+// so running it again after a failure is safe. When it is done, registration/main is marked so it is not repeated.
+async function provisionAcademic(schoolId, v) {
+  const plan = buildAcademicPlan(v);
+  const base = 'schools/' + schoolId;
+  const writes = [
+    [base + '/academicYears/' + plan.year.id, plan.year.data],
+    ...plan.classes.map((x) => [base + '/classes/' + x.id, x.data]),
+    ...plan.subjects.map((x) => [base + '/subjects/' + x.id, x.data]),
+    ...plan.sections.map((x) => [base + '/sections/' + x.id, x.data]),
+    ...plan.mappings.map((x) => [base + '/classSubjects/' + x.id, x.data]),
+    [base + '/settings/academic', { activeYearId: plan.year.id }],
+  ];
+  for (let i = 0; i < writes.length; i += 400) {
+    const batch = db.batch();
+    for (const [path, data] of writes.slice(i, i + 400)) batch.set(db.doc(path), data);
+    await batch.commit();
+  }
+  await db.doc(base + '/registration/main').set({ academicProvisioned: true, academicCounts: { classes: plan.classes.length, sections: plan.sections.length, subjects: plan.subjects.length } }, { merge: true });
+  return { classes: plan.classes.length, sections: plan.sections.length, subjects: plan.subjects.length };
+}
+
+exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const draftId = text(d.draftId, 40);
+  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
+  const planId = text(d.plan, 40);
+  const reason = text(d.reason, 300);
+  if (reason.length < 10) throw new HttpsError('invalid-argument', 'Give a reason of at least 10 characters. It is kept in the audit log.');
+  const draftRef = db.doc('onboardingDrafts/' + draftId);
+  const first = await draftRef.get();
+  if (!first.exists) throw new HttpsError('not-found', 'That draft was not found.');
+  // Already registered: return the same school, and finish the academic setup if an earlier attempt stopped part way.
+  const finishAcademic = async (schoolId) => {
+    const reg = await db.doc('schools/' + schoolId + '/registration/main').get();
+    if (!reg.exists || reg.data().academicProvisioned === true) return { provisioned: true };
+    try { await provisionAcademic(schoolId, reg.data()); return { provisioned: true }; } catch (error) { logger.error('provisionAcademic failed', schoolId, error); return { provisioned: false }; }
+  };
+  if (first.data().status === 'registered') return { schoolId: first.data().schoolId, alreadyRegistered: true, ...(await finishAcademic(first.data().schoolId)) };
+  const plan = TRIAL_DAYS[planId] ? null : await db.doc('plans/' + planId).get();
+  if (!TRIAL_DAYS[planId] && !(plan && plan.exists && plan.data().active === true)) throw new HttpsError('invalid-argument', 'Choose a plan that is switched on.');
+  const auditId = 'A-' + Date.now().toString(36).toUpperCase() + require('crypto').randomBytes(3).toString('hex').toUpperCase();
+  const inviteId = 'OW-' + Date.now().toString(36).toUpperCase() + require('crypto').randomBytes(3).toString('hex').toUpperCase();
+  const made = await db.runTransaction(async (tx) => {
+    const draft = await tx.get(draftRef);
+    if (!draft.exists) throw new HttpsError('not-found', 'That draft was not found.');
+    if (draft.data().status === 'registered') return { schoolId: draft.data().schoolId, alreadyRegistered: true };
+    const schoolId = draft.data().schoolId;
+    if (!schoolId || !NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('failed-precondition', 'Reserve the school ID first (it is done when you leave the first step).');
+    const v = {};
+    for (const key of DRAFT_KEYS) v[key] = String((draft.data().values || {})[key] ?? '').trim();
+    const problems = checkRegistration(v);
+    if (problems.length) throw new HttpsError('invalid-argument', 'Fix these first: ' + problems.slice(0, 6).join('; ') + (problems.length > 6 ? '; and ' + (problems.length - 6) + ' more' : '') + '.');
+    const [school, hold] = await Promise.all([tx.get(db.doc('schools/' + schoolId)), tx.get(db.doc('schoolReservations/' + schoolId))]);
+    if (school.exists) throw new HttpsError('already-exists', 'A school with this ID already exists.');
+    if (!hold.exists || hold.data().draftId !== draftId || hold.data().status !== 'reserved') throw new HttpsError('failed-precondition', 'The school ID is no longer held for this draft. Reserve it again.');
+    const now = Timestamp.now();
+    const address = [v.street, v.block, v.town, v.district, v.state, v.pin, v.country].filter(Boolean).join(', ').slice(0, 500);
+    tx.set(db.doc('schools/' + schoolId), { name: v.name, contactEmail: v.schoolEmail, phone: v.schoolPhone, address, createdBy: uid, schemaVersion: 2, registeredVia: 'onboarding' });
+    // The full record. Money is kept in minor units (paise) and the session dates are worked out here, so nothing is trusted from the browser twice.
+    const academic = buildAcademicPlan(v);
+    tx.set(db.doc('schools/' + schoolId + '/registration/main'), {
+      ...v, schemaVersion: 2, draftId, registeredBy: uid, registeredAt: now, academicProvisioned: false,
+      sessionStartDate: academic.year.data.startDate, sessionEndDate: academic.year.data.endDate,
+      feesMinor: { admission: moneyToMinor(v.admissionFee), annual: moneyToMinor(v.annualFee), exam: moneyToMinor(v.examFee) },
+    });
+    const billing = TRIAL_DAYS[planId]
+      ? { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + TRIAL_DAYS[planId] * 86400000), studentLimit: 50, staffLimit: 10 }
+      : { plan: planId, status: 'active', startedOn: now.toDate().toISOString().slice(0, 10), studentLimit: plan.data().studentLimit, staffLimit: plan.data().staffLimit, storageMb: plan.data().storageMb, monthlyPrice: plan.data().monthlyPrice };
+    tx.set(db.doc('schools/' + schoolId + '/billing/main'), billing);
+    tx.set(db.doc('invites/' + inviteId), { schoolId, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: uid });
+    tx.set(db.doc('platformAudit/' + auditId), { actor: uid, actorEmail: email, action: 'register-school', schoolId, reason,
+      detail: JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: billing.plan, draftId, via: 'onboarding' }).slice(0, 1500), at: now });
+    tx.update(db.doc('schoolReservations/' + schoolId), { status: 'used', usedAt: now });
+    tx.update(draftRef, { status: 'registered', registeredAt: now, registeredBy: uid });
+    return { schoolId, alreadyRegistered: false, ownerEmail: v.ownerEmail, v };
+  });
+  // The academic structure is built after the school exists, in chunks. If it fails the school is still registered and a repeat of the call finishes it.
+  let provisioned = false; let counts = null;
+  if (made.alreadyRegistered) return { schoolId: made.schoolId, alreadyRegistered: true, ...(await finishAcademic(made.schoolId)) };
+  try { counts = await provisionAcademic(made.schoolId, made.v); provisioned = true; } catch (error) { logger.error('provisionAcademic failed', made.schoolId, error); }
+  return { schoolId: made.schoolId, alreadyRegistered: false, ownerEmail: made.ownerEmail, provisioned, counts };
 });
