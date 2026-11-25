@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const mod = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
-const { FIELDS, CATEGORIES, fieldProblem, stepProblems, stepDone, progressOf, CLASS_LADDER, WEEK_DAYS, ATTENDANCE_METHODS, EXAM_SYSTEMS, GRADING_SYSTEMS, PAYMENT_METHODS, CURRENCIES, THEME_PALETTES, DOMAIN_PREFERENCES, UPLOAD_LIMITS } = mod;
+const { FIELDS, CATEGORIES, fieldProblem, stepProblems, stepDone, progressOf, CLASS_LADDER, WEEK_DAYS, ATTENDANCE_METHODS, EXAM_SYSTEMS, GRADING_SYSTEMS, PAYMENT_METHODS, CURRENCIES, THEME_PALETTES, DOMAIN_PREFERENCES, UPLOAD_LIMITS, LOGIN_ROLES, INVITATION_METHODS, TWO_FACTOR_POLICIES, RETENTION_OPTIONS, VERIFICATION_STATUSES, BILLING_CYCLES } = mod;
 
 const good = {
   name: 'Green Valley School', schoolType: 'Private unaided', schoolLevel: 'Secondary', genderComposition: 'Co-educational', medium: 'English',
@@ -15,11 +15,11 @@ const good = {
 };
 const field = (key) => FIELDS.find((f) => f.key === key);
 
-test('the registry covers the 99 fields of categories A to L with no duplicates', () => {
-  assert.equal(FIELDS.length, 99);
-  assert.equal(new Set(FIELDS.map((f) => f.key)).size, 99);
-  assert.equal(new Set(FIELDS.map((f) => f.id)).size, 99);
-  assert.deepEqual([...new Set(FIELDS.map((f) => f.cat))], ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L']);
+test('the registry covers the 119 form fields of categories A to O with no duplicates', () => {
+  assert.equal(FIELDS.length, 119);
+  assert.equal(new Set(FIELDS.map((f) => f.key)).size, 119);
+  assert.equal(new Set(FIELDS.map((f) => f.id)).size, 119);
+  assert.deepEqual([...new Set(FIELDS.map((f) => f.cat))], ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O']);
   assert.equal(CATEGORIES.length, 15);
 });
 
@@ -209,4 +209,56 @@ test('Mark 3: theme list, domain options and file limits agree with school.mjs a
   assert.deepEqual(serverPrefs, DOMAIN_PREFERENCES);
   const slots = Object.fromEntries([...server.matchAll(/(\w+): \{ kind: '[a-z-]+', max: (\d+(?: \* \d+)*) \}/g)].map((m) => [m[1], eval(m[2])]));
   assert.deepEqual(slots, UPLOAD_LIMITS);
+});
+
+test('Mark 4: plan, trial and discount fields', () => {
+  assert.match(fieldProblem(field('planId'), {}), /required/);
+  assert.equal(fieldProblem(field('planId'), { planId: 'starter' }), '');
+  assert.equal(field('trialDays').showIf({ trialEnabled: 'No' }), false);
+  assert.equal(field('trialDays').showIf({ trialEnabled: 'Yes' }), true);
+  assert.equal(field('trialDays').showIf({}), true);
+  assert.match(fieldProblem(field('trialDays'), { trialEnabled: 'Yes', trialDays: '45' }), /listed/);
+  assert.equal(fieldProblem(field('trialDays'), { trialEnabled: 'No', trialDays: '45' }), '');
+  assert.match(fieldProblem(field('discountPercent'), { discountPercent: '101' }), /100 or less/);
+  assert.match(fieldProblem(field('discountPercent'), { discountPercent: '-5' }), /whole number/);
+  assert.equal(fieldProblem(field('discountPercent'), { discountPercent: '25' }), '');
+  assert.match(fieldProblem(field('billingCycle'), { billingCycle: 'Weekly' }), /listed/);
+});
+
+test('Mark 4: server-worked rows and consent cannot be typed in or sent', () => {
+  const shown = FIELDS.filter((f) => f.type === 'calc' || f.type === 'consent');
+  assert.deepEqual(shown.map((f) => f.id), ['F105', 'F106', 'F108', 'F109', 'F110', 'F111', 'F117', 'F118', 'F120']);
+  for (const f of shown) assert.equal(fieldProblem(f, {}), '');
+  assert.equal(FIELDS.filter((f) => f.type === 'consent').length, 2);
+});
+
+test('Mark 4: login, retention and verification', () => {
+  assert.match(fieldProblem(field('loginRoles'), { loginRoles: 'teacher,principal' }), /owner/);
+  assert.match(fieldProblem(field('loginRoles'), { loginRoles: 'owner,hacker' }), /listed/);
+  assert.equal(fieldProblem(field('loginRoles'), { loginRoles: LOGIN_ROLES.join(',') }), '');
+  assert.match(fieldProblem(field('twoFactorPolicy'), { twoFactorPolicy: 'Never' }), /listed/);
+  assert.match(fieldProblem(field('verificationStatus'), { verificationStatus: 'Maybe' }), /listed/);
+  assert.match(fieldProblem(field('internalNotes'), { internalNotes: 'x'.repeat(501) }), /too long/);
+  assert.equal(stepDone('N', { invitationMethod: INVITATION_METHODS[0], twoFactorPolicy: 'Optional', loginRoles: LOGIN_ROLES.join(','), dataRetention: RETENTION_OPTIONS[0] }), true);
+  assert.equal(stepDone('N', {}), false);
+  assert.equal(stepDone('O', { verificationStatus: 'Unverified' }), true);
+  assert.equal(stepDone('M', { planId: 'starter' }), true);
+  assert.equal(stepDone('M', {}), false);
+});
+
+test('Mark 4: lists agree with the server', () => {
+  const server = readFileSync(new URL('../functions/index.js', import.meta.url), 'utf8');
+  const list = (name) => [...server.match(new RegExp('const ' + name + ' = \\[([^\\]]*)\\];'))[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  assert.deepEqual(LOGIN_ROLES, list('LOGIN_ROLES'));
+  assert.deepEqual(INVITATION_METHODS, list('INVITATION_METHODS'));
+  assert.deepEqual(TWO_FACTOR_POLICIES, list('TWO_FACTOR_POLICIES'));
+  assert.deepEqual(RETENTION_OPTIONS, list('RETENTION_OPTIONS'));
+  assert.deepEqual(VERIFICATION_STATUSES, list('VERIFICATION_STATUSES'));
+  assert.deepEqual(BILLING_CYCLES, list('BILLING_CYCLES'));
+});
+
+test('every public module the app loads by name is allowed through .htaccess (a missing one made the wizard fail to load)', () => {
+  const htaccess = readFileSync(new URL('../.htaccess', import.meta.url), 'utf8');
+  const allowed = htaccess.match(/RewriteRule \^\(sign-in[^\n]*\)\$ public/)[0];
+  for (const name of ['onboarding.mjs', 'consent.mjs', 'admission-desk.mjs', 'admin.mjs', 'sign-in.mjs', 'platform.mjs', 'school.mjs']) assert.ok(allowed.includes(name.replace('.', '\\.')), name);
 });

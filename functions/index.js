@@ -1105,7 +1105,6 @@ exports.promoteStudents = onCall({ memory: '512MiB', timeoutSeconds: 300 }, asyn
 // draft returns the same school (idempotent) and finishes any academic setup that did not complete.
 // ---------------------------------------------------------------------------------------------------------------------
 const RESERVED_SCHOOL_IDS = ['www', 'admin', 'api', 'app', 'platform', 'school', 'aziz', 'public', 'support', 'demo', 'mail', 'ftp'];
-const TRIAL_DAYS = { trial: 30, trial60: 60, trial90: 90 };
 
 async function requirePlatformAdmin(request) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
@@ -1142,7 +1141,7 @@ const splitList = (value) => String(value || '').split(',').map((x) => x.trim())
 
 const REQUIRED_REGISTRATION = ['name', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'board', 'country', 'state', 'district', 'town', 'street', 'pin',
   'schoolPhone', 'schoolEmail', 'ownerName', 'ownerDesignation', 'ownerEmail', 'ownerMobile',
-  'sessionLabel', 'lowestClass', 'highestClass', 'studentCount', 'teacherCount'];
+  'sessionLabel', 'lowestClass', 'highestClass', 'studentCount', 'teacherCount', 'planId'];
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const PHONE_PATTERN = /^\+?[0-9][0-9 -]{6,17}$/;
 const COUNT_FIELDS = { studentCount: 100000, maxCapacity: 100000, teacherCount: 10000, nonTeachingCount: 10000, adminStaffCount: 10000, classroomCount: 5000, campusCount: 50 };
@@ -1182,6 +1181,39 @@ function normalizeSubdomain(value) {
   return /^[a-z][a-z0-9-]{1,28}[a-z0-9]$/.test(x) && !x.includes('--') ? x : null;
 }
 const socialHost = (url, hosts) => { try { const u = new URL(url); return u.protocol === 'https:' && hosts.includes(u.hostname.replace(/^www\./, '')) && !u.username && !u.password; } catch { return false; } };
+const BILLING_CYCLES = ['Monthly', 'Yearly'];
+const YES_NO = ['Yes', 'No'];
+const TRIAL_CHOICES = ['30', '60', '90'];
+const INVITATION_METHODS = ['Owner signs in at the app with the invited email', 'Email invitation (when email sending is set up)'];
+const TWO_FACTOR_POLICIES = ['Optional', 'Required for owner and principal', 'Required for all staff'];
+const LOGIN_ROLES = ['owner', 'principal', 'teacher', 'accountant', 'staff', 'office', 'parent', 'student'];
+const RETENTION_OPTIONS = ['Standard (platform policy)', 'Extended (7 years)', 'Minimum allowed'];
+const VERIFICATION_STATUSES = ['Unverified', 'Documents received', 'Verified', 'Rejected'];
+// The versions of the legal documents an owner must accept. Change them when the documents change; every school then shows as pending again.
+const LEGAL_VERSIONS = { terms: '2026-11-1', privacy: '2026-11-1' };
+const toMinor = (rupees) => Math.round((Number(rupees) || 0) * 100);
+// The one place prices are worked out. The browser only displays this; it is never trusted for totals. All money is in paise.
+// A discount (percent) is taken off the recurring price only; the setup fee is shown as in the catalog. A trial means nothing is due now.
+function buildQuote(plan, planId, v) {
+  const cycle = v.billingCycle === 'Yearly' ? 'Yearly' : 'Monthly';
+  const pct = /^[0-9]{1,3}$/.test(String(v.discountPercent ?? '0')) ? Number(v.discountPercent ?? 0) : 0;
+  const monthlyMinor = toMinor(plan.monthlyPrice);
+  const yearlyMinor = toMinor(plan.yearlyPrice);
+  const listMinor = cycle === 'Yearly' ? yearlyMinor : monthlyMinor;
+  const discountMinor = Math.round(listMinor * Math.min(Math.max(pct, 0), 100) / 100);
+  const recurringMinor = listMinor - discountMinor;
+  const setupMinor = toMinor(plan.setupFee);
+  const trial = v.trialEnabled !== 'No';
+  const trialDays = trial ? Number(TRIAL_CHOICES.includes(v.trialDays) ? v.trialDays : '30') : 0;
+  return {
+    planId, planName: String(plan.name || planId), planVersion: String(plan.historyId || ''), cycle, discountPercent: pct,
+    monthlyMinor, yearlyMinor, setupMinor, listMinor, discountMinor, recurringMinor,
+    monthlyEquivalentMinor: cycle === 'Yearly' ? Math.round(recurringMinor / 12) : recurringMinor,
+    firstInvoiceMinor: recurringMinor + setupMinor, dueNowMinor: trial ? 0 : recurringMinor + setupMinor,
+    trial, trialDays, studentLimit: Number(plan.studentLimit) || 0, staffLimit: Number(plan.staffLimit) || 0, storageMb: Number(plan.storageMb) || 0,
+    features: Array.isArray(plan.features) ? plan.features.slice(0, 40).map((f) => String(f).slice(0, 80)) : [],
+  };
+}
 const TIME_PATTERN = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const classRange = (v) => { const a = CLASS_LADDER.indexOf(v.lowestClass); const b = CLASS_LADDER.indexOf(v.highestClass); return a >= 0 && b >= a ? CLASS_LADDER.slice(a, b + 1) : []; };
 // Sections are stored as "Class 1=A,B|Class 2=A".
@@ -1272,6 +1304,20 @@ function checkRegistration(v) {
     if (v[key] && (v[key].length > 300 || !socialHost(v[key], hosts))) problems.push(key + ' must be an https link on ' + hosts[0]);
   }
   for (const key of FACILITY_KEYS) if (v[key] && !['yes', 'no'].includes(v[key])) problems.push(key + ' must be yes or no');
+  // Mark 4: commercial, login and security, verification.
+  if (v.planId && !/^[A-Za-z0-9_-]{1,40}$/.test(v.planId)) problems.push('planId is not valid');
+  if (v.trialEnabled && !YES_NO.includes(v.trialEnabled)) problems.push('trialEnabled must be Yes or No');
+  if (v.trialDays && !TRIAL_CHOICES.includes(v.trialDays)) problems.push('trialDays must be 30, 60 or 90');
+  if (v.billingCycle && !BILLING_CYCLES.includes(v.billingCycle)) problems.push('billingCycle is not a listed option');
+  if (v.discountPercent && (!/^[0-9]{1,3}$/.test(v.discountPercent) || Number(v.discountPercent) > 100)) problems.push('discountPercent must be 0 to 100');
+  if (v.invitationMethod && !INVITATION_METHODS.includes(v.invitationMethod)) problems.push('invitationMethod is not a listed option');
+  if (v.twoFactorPolicy && !TWO_FACTOR_POLICIES.includes(v.twoFactorPolicy)) problems.push('twoFactorPolicy is not a listed option');
+  const loginRoles = splitList(v.loginRoles);
+  if (loginRoles.some((r) => !LOGIN_ROLES.includes(r))) problems.push('loginRoles has an unknown role');
+  if (v.loginRoles !== undefined && v.loginRoles !== '' && !loginRoles.includes('owner')) problems.push('loginRoles must include owner');
+  if (v.dataRetention && !RETENTION_OPTIONS.includes(v.dataRetention)) problems.push('dataRetention is not a listed option');
+  if (v.verificationStatus && !VERIFICATION_STATUSES.includes(v.verificationStatus)) problems.push('verificationStatus is not a listed option');
+  if (v.internalNotes && String(v.internalNotes).length > 500) problems.push('internalNotes is too long');
   return problems;
 }
 const DRAFT_KEYS = ['name', 'shortName', 'estYear', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'motto', 'description', 'board', 'affiliationNo', 'udise',
@@ -1284,7 +1330,8 @@ const DRAFT_KEYS = ['name', 'shortName', 'estYear', 'schoolType', 'schoolLevel',
   'currency', 'admissionFee', 'tuitionFee', 'annualFee', 'examFee', 'feeDueDay', 'latePolicy', 'paymentMethods',
   'websiteTheme', 'brandPrimary', 'brandSecondary', 'principalMessage', 'mission', 'vision',
   'preferredSubdomain', 'customDomain', 'domainPreference', 'facebookUrl', 'instagramUrl', 'youtubeUrl',
-  'facilityTransport', 'facilityHostel', 'facilityLibrary', 'facilityLab', 'facilityComputerLab', 'facilityCanteen', 'facilitySports'];
+  'facilityTransport', 'facilityHostel', 'facilityLibrary', 'facilityLab', 'facilityComputerLab', 'facilityCanteen', 'facilitySports',
+  'planId', 'trialEnabled', 'trialDays', 'billingCycle', 'discountPercent', 'invitationMethod', 'twoFactorPolicy', 'loginRoles', 'dataRetention', 'verificationStatus', 'internalNotes'];
 function cleanDraftValues(values) {
   if (!values || typeof values !== 'object' || Array.isArray(values)) throw new HttpsError('invalid-argument', 'Draft values are not valid.');
   const out = {};
@@ -1447,6 +1494,115 @@ exports.deleteOnboardingDraft = onCall({ memory: '256MiB', timeoutSeconds: 60 },
     }
   });
   await deleteDraftFiles(draftId);
+  return { ok: true };
+});
+
+// ----- Mark 4: price quote, owner consent and activation (all checked on the server) -----
+exports.quoteSubscription = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const catalog = await db.collection('plans').get();
+  const plans = catalog.docs.filter((x) => x.data().active === true).map((x) => ({ id: x.id, name: String(x.data().name || x.id), monthlyPrice: Number(x.data().monthlyPrice) || 0 }))
+    .sort((a, b) => a.monthlyPrice - b.monthlyPrice);
+  const planId = text(d.planId, 40);
+  if (!planId) return { plans, quote: null };
+  const plan = catalog.docs.find((x) => x.id === planId);
+  if (!plan || plan.data().active !== true) throw new HttpsError('invalid-argument', 'That plan is not available.');
+  const values = { billingCycle: text(d.billingCycle, 10), discountPercent: text(d.discountPercent, 4), trialEnabled: text(d.trialEnabled, 3), trialDays: text(d.trialDays, 3) };
+  if (values.discountPercent && (!/^[0-9]{1,3}$/.test(values.discountPercent) || Number(values.discountPercent) > 100)) throw new HttpsError('invalid-argument', 'The discount must be 0 to 100 percent.');
+  return { plans, quote: buildQuote(plan.data(), plan.id, values) };
+});
+
+// What the owner sees when signing in: whether the terms and privacy agreement still need their acceptance.
+exports.getConsentStatus = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const schoolId = await requireOwner(request);
+  const reg = await db.doc('schools/' + schoolId + '/registration/main').get();
+  if (!reg.exists || !reg.data().consent) return { applies: false };
+  const done = await db.doc('schools/' + schoolId + '/registration/consent').get();
+  const ok = done.exists && done.data().termsVersion === LEGAL_VERSIONS.terms && done.data().privacyVersion === LEGAL_VERSIONS.privacy;
+  return { applies: true, pending: !ok, termsVersion: LEGAL_VERSIONS.terms, privacyVersion: LEGAL_VERSIONS.privacy, acceptedAt: ok ? done.data().at.toMillis() : 0 };
+});
+
+// Only the school's own owner, signed in with a verified email, can accept. A platform administrator cannot do this for them.
+exports.acceptSchoolConsent = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const schoolId = await requireOwner(request);
+  if (request.auth.token.email_verified !== true) throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  const d = request.data || {};
+  if (d.terms !== true || d.privacy !== true) throw new HttpsError('invalid-argument', 'Tick both boxes to accept.');
+  if (d.termsVersion !== LEGAL_VERSIONS.terms || d.privacyVersion !== LEGAL_VERSIONS.privacy) throw new HttpsError('failed-precondition', 'The documents were updated. Reload and read them again.');
+  const reg = await db.doc('schools/' + schoolId + '/registration/main').get();
+  if (!reg.exists) throw new HttpsError('failed-precondition', 'This school has no registration record.');
+  const now = Timestamp.now();
+  const auditId = 'A-' + Date.now().toString(36).toUpperCase() + nodeCrypto.randomBytes(3).toString('hex').toUpperCase();
+  const batch = db.batch();
+  batch.set(db.doc('schools/' + schoolId + '/registration/consent'), { termsVersion: LEGAL_VERSIONS.terms, privacyVersion: LEGAL_VERSIONS.privacy, acceptedBy: request.auth.uid, acceptedEmail: String(request.auth.token.email || ''), at: now, source: 'owner-app' });
+  batch.set(db.doc('schools/' + schoolId + '/registration/main'), { consent: { status: 'accepted', requiredTermsVersion: LEGAL_VERSIONS.terms, requiredPrivacyVersion: LEGAL_VERSIONS.privacy, acceptedAt: now } }, { merge: true });
+  batch.set(db.doc('platformAudit/' + auditId), { actor: request.auth.uid, actorEmail: String(request.auth.token.email || ''), action: 'owner-consent', schoolId, reason: 'Owner accepted the terms and privacy agreement',
+    detail: JSON.stringify({ terms: LEGAL_VERSIONS.terms, privacy: LEGAL_VERSIONS.privacy }), at: now });
+  await batch.commit();
+  return { ok: true };
+});
+
+// What the admin sees about a registered school's commercial and verification state. These records are never readable from the browser directly.
+exports.getRegistrationStatus = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const schoolId = text((request.data || {}).schoolId, 40);
+  if (!NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('invalid-argument', 'Unknown school.');
+  const [reg, consent] = await Promise.all([db.doc('schools/' + schoolId + '/registration/main').get(), db.doc('schools/' + schoolId + '/registration/consent').get()]);
+  if (!reg.exists || !reg.data().planSnapshot) return { found: false };
+  const r = reg.data();
+  const accepted = consent.exists && consent.data().termsVersion === LEGAL_VERSIONS.terms && consent.data().privacyVersion === LEGAL_VERSIONS.privacy;
+  const snap = r.planSnapshot;
+  return { found: true, verificationStatus: r.verificationStatus || 'Unverified', activationStatus: r.activationStatus || 'Pending activation',
+    consent: accepted ? { status: 'accepted', by: String(consent.data().acceptedEmail || ''), at: consent.data().at.toMillis(), termsVersion: consent.data().termsVersion, privacyVersion: consent.data().privacyVersion } : { status: 'pending' },
+    plan: { name: snap.planName, version: snap.planVersion, cycle: snap.cycle, discountPercent: snap.discountPercent, recurringMinor: snap.recurringMinor, setupMinor: snap.setupMinor, trial: snap.trial, trialDays: snap.trialDays },
+    files: Object.keys(r.files || {}).length, siteWebsitePublished: r.websitePublished === true, domain: r.domainState || null };
+});
+
+// Activation is a recorded status. It needs the owner's consent and a verified school, and it is audited. Only a platform administrator can do it.
+exports.activateSchool = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const schoolId = text(d.schoolId, 40);
+  const reason = text(d.reason, 300);
+  if (!NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('invalid-argument', 'Unknown school.');
+  if (reason.length < 10) throw new HttpsError('invalid-argument', 'Give a reason of at least 10 characters.');
+  const regRef = db.doc('schools/' + schoolId + '/registration/main');
+  const [reg, consent] = await Promise.all([regRef.get(), db.doc('schools/' + schoolId + '/registration/consent').get()]);
+  if (!reg.exists) throw new HttpsError('not-found', 'This school has no registration record.');
+  const problems = [];
+  if (reg.data().verificationStatus !== 'Verified') problems.push('the school is not marked Verified');
+  if (!(consent.exists && consent.data().termsVersion === LEGAL_VERSIONS.terms && consent.data().privacyVersion === LEGAL_VERSIONS.privacy)) problems.push('the owner has not accepted the current terms and privacy agreement');
+  if (problems.length) throw new HttpsError('failed-precondition', 'Cannot activate yet: ' + problems.join('; ') + '.');
+  const now = Timestamp.now();
+  const auditId = 'A-' + Date.now().toString(36).toUpperCase() + nodeCrypto.randomBytes(3).toString('hex').toUpperCase();
+  const batch = db.batch();
+  batch.set(regRef, { activationStatus: 'Active', activatedAt: now, activatedBy: uid }, { merge: true });
+  batch.set(db.doc('platformAudit/' + auditId), { actor: uid, actorEmail: email, action: 'activate-school', schoolId, reason, detail: JSON.stringify({ before: reg.data().activationStatus || '', after: 'Active' }), at: now });
+  await batch.commit();
+  return { ok: true };
+});
+
+// Records the admin-controlled status of a registered school (verification). The change is audited.
+exports.setVerificationStatus = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const schoolId = text(d.schoolId, 40);
+  const status = text(d.status, 30);
+  const reason = text(d.reason, 300);
+  if (!NEW_SCHOOL_ID.test(schoolId) || !VERIFICATION_STATUSES.includes(status)) throw new HttpsError('invalid-argument', 'Unknown school or status.');
+  if (reason.length < 10) throw new HttpsError('invalid-argument', 'Give a reason of at least 10 characters.');
+  const regRef = db.doc('schools/' + schoolId + '/registration/main');
+  const reg = await regRef.get();
+  if (!reg.exists) throw new HttpsError('not-found', 'This school has no registration record.');
+  const now = Timestamp.now();
+  const auditId = 'A-' + Date.now().toString(36).toUpperCase() + nodeCrypto.randomBytes(3).toString('hex').toUpperCase();
+  const batch = db.batch();
+  const patch = { verificationStatus: status };
+  if (status !== 'Verified' && reg.data().activationStatus === 'Active') { patch.activationStatus = 'Pending activation'; }
+  batch.set(regRef, patch, { merge: true });
+  batch.set(db.doc('platformAudit/' + auditId), { actor: uid, actorEmail: email, action: 'verification-status', schoolId, reason, detail: JSON.stringify({ before: reg.data().verificationStatus || '', after: status }), at: now });
+  await batch.commit();
   return { ok: true };
 });
 
@@ -1640,7 +1796,6 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
   const d = request.data || {};
   const draftId = text(d.draftId, 40);
   if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
-  const planId = text(d.plan, 40);
   const reason = text(d.reason, 300);
   if (reason.length < 10) throw new HttpsError('invalid-argument', 'Give a reason of at least 10 characters. It is kept in the audit log.');
   const draftRef = db.doc('onboardingDrafts/' + draftId);
@@ -1654,8 +1809,11 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
     try { await provisionAcademic(schoolId, reg.data()); return { provisioned: true }; } catch (error) { logger.error('provisionAcademic failed', schoolId, error); return { provisioned: false }; }
   };
   if (first.data().status === 'registered') return { schoolId: first.data().schoolId, alreadyRegistered: true, ...(await finishAcademic(first.data().schoolId)) };
-  const plan = TRIAL_DAYS[planId] ? null : await db.doc('plans/' + planId).get();
-  if (!TRIAL_DAYS[planId] && !(plan && plan.exists && plan.data().active === true)) throw new HttpsError('invalid-argument', 'Choose a plan that is switched on.');
+  // The plan comes from the saved draft and the catalog on the server. Nothing about price or limits is taken from the browser.
+  const planId = text((first.data().values || {}).planId, 40);
+  if (!planId) throw new HttpsError('invalid-argument', 'Choose a plan first (step M).');
+  const plan = await db.doc('plans/' + planId).get();
+  if (!(plan.exists && plan.data().active === true)) throw new HttpsError('invalid-argument', 'Choose a plan that is switched on.');
   const auditId = 'A-' + Date.now().toString(36).toUpperCase() + require('crypto').randomBytes(3).toString('hex').toUpperCase();
   const inviteId = 'OW-' + Date.now().toString(36).toUpperCase() + require('crypto').randomBytes(3).toString('hex').toUpperCase();
   const made = await db.runTransaction(async (tx) => {
@@ -1667,7 +1825,9 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
     const v = {};
     for (const key of DRAFT_KEYS) v[key] = String((draft.data().values || {})[key] ?? '').trim();
     const problems = checkRegistration(v);
+    if (v.planId !== planId) throw new HttpsError('aborted', 'The plan was changed while registering. Try again.');
     if (problems.length) throw new HttpsError('invalid-argument', 'Fix these first: ' + problems.slice(0, 6).join('; ') + (problems.length > 6 ? '; and ' + (problems.length - 6) + ' more' : '') + '.');
+    const quote = buildQuote(plan.data(), planId, v);
     const subId = v.preferredSubdomain;
     const [school, hold, subHold] = await Promise.all([tx.get(db.doc('schools/' + schoolId)), tx.get(db.doc('schoolReservations/' + schoolId)), subId ? tx.get(db.doc('subdomainReservations/' + subId)) : Promise.resolve(null)]);
     if (school.exists) throw new HttpsError('already-exists', 'A school with this ID already exists.');
@@ -1685,15 +1845,20 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
       // Nothing here is live. The subdomain is only held, a custom domain stays pending until DNS and HTTPS are checked, and the website content is not published.
       domainState: { subdomain: v.preferredSubdomain || '', subdomainStatus: v.preferredSubdomain ? 'reserved' : 'none', customDomain: v.customDomain || '', customDomainStatus: v.customDomain ? (draft.data().domainStatus === 'verified' ? 'verified' : 'pending') : 'none', ssl: 'not-checked', live: false },
       websitePublished: false,
+      // Commercial snapshot: the plan version and every figure used, worked out here. Consent starts pending: only the school's owner can accept it, never the admin.
+      planSnapshot: { ...quote, quotedAt: now },
+      consent: { status: 'pending', requiredTermsVersion: LEGAL_VERSIONS.terms, requiredPrivacyVersion: LEGAL_VERSIONS.privacy },
+      activationStatus: 'Pending activation', ownerLoginEmail: v.ownerEmail,
     });
     if (subId) tx.update(db.doc('subdomainReservations/' + subId), { status: 'used', usedAt: now, schoolId });
-    const billing = TRIAL_DAYS[planId]
-      ? { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + TRIAL_DAYS[planId] * 86400000), studentLimit: 50, staffLimit: 10 }
-      : { plan: planId, status: 'active', startedOn: now.toDate().toISOString().slice(0, 10), studentLimit: plan.data().studentLimit, staffLimit: plan.data().staffLimit, storageMb: plan.data().storageMb, monthlyPrice: plan.data().monthlyPrice };
+    // A trial is a billing state, not a plan. The record keeps the existing 'trial' plan id (the dashboards rely on it) and remembers the chosen plan as intendedPlan.
+    const billing = quote.trial
+      ? { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + quote.trialDays * 86400000), studentLimit: 50, staffLimit: 10, intendedPlan: planId, billingCycle: quote.cycle }
+      : { plan: planId, status: 'active', startedOn: now.toDate().toISOString().slice(0, 10), studentLimit: quote.studentLimit, staffLimit: quote.staffLimit, storageMb: quote.storageMb, monthlyPrice: quote.monthlyEquivalentMinor / 100, billingCycle: quote.cycle, discountPercent: quote.discountPercent };
     tx.set(db.doc('schools/' + schoolId + '/billing/main'), billing);
     tx.set(db.doc('invites/' + inviteId), { schoolId, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: uid });
     tx.set(db.doc('platformAudit/' + auditId), { actor: uid, actorEmail: email, action: 'register-school', schoolId, reason,
-      detail: JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: billing.plan, draftId, via: 'onboarding' }).slice(0, 1500), at: now });
+      detail: JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: planId, state: billing.status, cycle: quote.cycle, discountPercent: quote.discountPercent, recurringMinor: quote.recurringMinor, planVersion: quote.planVersion, draftId, via: 'onboarding' }).slice(0, 1500), at: now });
     tx.update(db.doc('schoolReservations/' + schoolId), { status: 'used', usedAt: now });
     tx.update(draftRef, { status: 'registered', registeredAt: now, registeredBy: uid });
     return { schoolId, alreadyRegistered: false, ownerEmail: v.ownerEmail, v };

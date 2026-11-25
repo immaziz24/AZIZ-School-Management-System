@@ -69,6 +69,12 @@ export const THEME_PALETTES = {
 const DARK_THEMES = ['obsidian', 'emerald-noir', 'abyss', 'amethyst', 'aurora'];
 const THEME_OPTIONS = Object.keys(THEME_PALETTES).map((key) => [key, key.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase())]);
 const socialOk = (url, hosts) => { try { const u = new URL(url); return u.protocol === 'https:' && hosts.includes(u.hostname.replace(/^www\./, '')) && !u.username && !u.password; } catch { return false; } };
+export const LOGIN_ROLES = ['owner', 'principal', 'teacher', 'accountant', 'staff', 'office', 'parent', 'student'];
+export const INVITATION_METHODS = ['Owner signs in at the app with the invited email', 'Email invitation (when email sending is set up)'];
+export const TWO_FACTOR_POLICIES = ['Optional', 'Required for owner and principal', 'Required for all staff'];
+export const RETENTION_OPTIONS = ['Standard (platform policy)', 'Extended (7 years)', 'Minimum allowed'];
+export const VERIFICATION_STATUSES = ['Unverified', 'Documents received', 'Verified', 'Rejected'];
+export const BILLING_CYCLES = ['Monthly', 'Yearly'];
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MONTH_OPTIONS = MONTH_NAMES.map((name, i) => [String(i + 1), name]);
 const CLASS_OPTIONS = CLASS_LADDER.map((c) => [c, c]);
@@ -86,8 +92,8 @@ export const CATEGORIES = [
   { id: 'F', title: 'Academic configuration' }, { id: 'G', title: 'Capacity and staff' },
   { id: 'H', title: 'Timing and attendance' }, { id: 'I', title: 'Fees and finance' },
   { id: 'J', title: 'Website and branding' }, { id: 'K', title: 'Domain configuration' },
-  { id: 'L', title: 'Facilities' }, { id: 'M', title: 'Subscription and commercial', later: 'Mark 4' },
-  { id: 'N', title: 'Login and security', later: 'Mark 4' }, { id: 'O', title: 'Verification and activation', later: 'Mark 4' },
+  { id: 'L', title: 'Facilities' }, { id: 'M', title: 'Subscription and commercial' },
+  { id: 'N', title: 'Login and security' }, { id: 'O', title: 'Verification and activation' },
 ];
 const noAffiliation = (v) => !v.board || v.board === 'none' || v.board === 'state';
 
@@ -223,9 +229,33 @@ export const FIELDS = [
   { id: 'F098', key: 'facilityComputerLab', cat: 'L', label: 'Computer laboratory', type: 'toggle' },
   { id: 'F099', key: 'facilityCanteen', cat: 'L', label: 'Canteen', type: 'toggle' },
   { id: 'F100', key: 'facilitySports', cat: 'L', label: 'Sports and playground', type: 'toggle' },
+  // ----- Mark 4: commercial, login and security, verification (F101 to F120). Prices come from the server; the form only shows them. -----
+  { id: 'F101', key: 'planId', cat: 'M', label: 'Subscription plan', type: 'plan', req: true, help: 'From the plan catalog. Plan changes are made by a platform administrator only.' },
+  { id: 'F102', key: 'trialEnabled', cat: 'M', label: 'Start with a free trial', type: 'select', def: 'Yes', redraw: true, options: [['Yes', 'Yes'], ['No', 'No']], help: 'A trial is a billing state, not a separate plan.' },
+  { id: 'F103', key: 'trialDays', cat: 'M', label: 'Trial duration', type: 'select', def: '30', showIf: (v) => v.trialEnabled !== 'No', options: [['30', '30 days'], ['60', '60 days'], ['90', '90 days']] },
+  { id: 'F104', key: 'billingCycle', cat: 'M', label: 'Billing cycle', type: 'select', def: 'Monthly', options: opts(BILLING_CYCLES) },
+  { id: 'F105', key: 'setupFee', cat: 'M', label: 'Setup fee', type: 'calc', help: 'Worked out by the server from the plan catalog.' },
+  { id: 'F106', key: 'subscriptionPrice', cat: 'M', label: 'Subscription price', type: 'calc', wide: true },
+  { id: 'F107', key: 'discountPercent', cat: 'M', label: 'Special discount (percent of the recurring price)', type: 'int', def: '0', maxInt: 100, help: 'Taken off the subscription price only. It is recorded in the audit log with the reason you give at the end.' },
+  { id: 'F108', key: 'maxStudents', cat: 'M', label: 'Maximum student allowance', type: 'calc' },
+  { id: 'F109', key: 'storageAllocated', cat: 'M', label: 'Allocated cloud storage', type: 'calc' },
+  { id: 'F110', key: 'entitlements', cat: 'M', label: 'Paid feature entitlements', type: 'calc', wide: true, help: 'The features of the chosen plan, as listed in the catalog.' },
+
+  { id: 'F111', key: 'ownerLoginEmail', cat: 'N', label: 'Owner login email', type: 'calc', help: 'Taken from the owner email in step D. The owner must sign in with this verified email to accept the invitation.' },
+  { id: 'F112', key: 'invitationMethod', cat: 'N', label: 'Invitation method', type: 'select', req: true, def: INVITATION_METHODS[0], options: opts(INVITATION_METHODS), help: 'Email delivery of invitations is set up in Mark 5. Until then the owner signs in at the app.' },
+  { id: 'F113', key: 'twoFactorPolicy', cat: 'N', label: 'Two-factor authentication policy', type: 'select', req: true, def: 'Optional', options: opts(TWO_FACTOR_POLICIES), help: 'Recorded now. Enforcing it at sign-in is switched on in a later release.' },
+  { id: 'F114', key: 'loginRoles', cat: 'N', label: 'Enabled login roles', type: 'multi', wide: true, req: true, def: LOGIN_ROLES.join(','), options: opts(LOGIN_ROLES),
+    validate: (x) => (splitList(x).includes('owner') ? '' : 'The owner role must stay enabled.') },
+  { id: 'F115', key: 'dataRetention', cat: 'N', label: 'Data retention and privacy configuration', type: 'select', req: true, def: RETENTION_OPTIONS[0], options: opts(RETENTION_OPTIONS) },
+
+  { id: 'F116', key: 'verificationStatus', cat: 'O', label: 'School verification status', type: 'select', req: true, def: 'Unverified', options: opts(VERIFICATION_STATUSES), help: 'Change it after you have checked the documents. Activation needs "Verified".' },
+  { id: 'F117', key: 'termsAccepted', cat: 'O', label: 'Terms of service acceptance', type: 'consent', help: 'Only the school owner can accept, after signing in. You cannot accept for them.' },
+  { id: 'F118', key: 'privacyAccepted', cat: 'O', label: 'Privacy and data processing agreement', type: 'consent', help: 'Only the school owner can accept, after signing in.' },
+  { id: 'F119', key: 'internalNotes', cat: 'O', label: 'Registration reason and internal notes', type: 'textarea', max: 500, wide: true, help: 'Private to the platform. The school never sees these.' },
+  { id: 'F120', key: 'activationStatus', cat: 'O', label: 'Activation status', type: 'calc', help: 'Set by the server. Activation needs the owner\'s consent and a Verified school.' },
 ];
 FIELDS.sort((a, b) => a.id.localeCompare(b.id));
-const ACTIVE = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
+const ACTIVE = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'];
 
 const typeOf = (field, v) => (field.dynamicType ? field.dynamicType(v) : field.type);
 const visible = (field, v) => !field.showIf || field.showIf(v);
@@ -342,7 +372,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
   document.body.append(root);
   document.body.style.overflow = 'hidden';
 
-  const S = { draftId: draftIdFromRoute || '', exists: false, revision: 0, step: 0, values: {}, schoolId: '', dupes: [], saveState: '', saveAt: '', busy: false, plan: 'trial', reason: '', registered: null, files: {}, thumbs: {}, subHeld: '', domainInfo: null, domainStatus: '' };
+  const S = { draftId: draftIdFromRoute || '', exists: false, revision: 0, step: 0, values: {}, schoolId: '', dupes: [], saveState: '', saveAt: '', busy: false, reason: '', registered: null, files: {}, thumbs: {}, subHeld: '', domainInfo: null, domainStatus: '', plans: [], quote: null, quoteNote: '', quoteTimer: 0 };
   let timer = 0; let saving = false; let dirty = false;
 
   const call = async (name, data) => {
@@ -606,6 +636,50 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     return h('div', { class: 'card', style: 'margin:12px 0' }, h('h3', { style: 'margin-top:0' }, 'Custom domain status'), out, btn);
   }
 
+  // ----- Mark 4: server-worked prices, calculated rows and consent state -----
+  const rupees = (minor) => 'Rs ' + (Number(minor || 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  function calcText(key) {
+    const q = S.quote;
+    if (key === 'ownerLoginEmail') return S.values.ownerEmail || '(enter the owner email in step D)';
+    if (key === 'activationStatus') return 'Pending activation (needs the owner\'s consent and a Verified school)';
+    if (key === 'termsAccepted' || key === 'privacyAccepted') return 'Pending: the owner accepts after signing in';
+    if (!q) return S.quoteNote || 'Choose a plan to see this.';
+    if (key === 'setupFee') return rupees(q.setupMinor);
+    if (key === 'subscriptionPrice') return rupees(q.recurringMinor) + ' per ' + (q.cycle === 'Yearly' ? 'year' : 'month') + (q.discountMinor ? ' after ' + q.discountPercent + '% off (list ' + rupees(q.listMinor) + ')' : '') + (q.trial ? '. Nothing is due for the first ' + q.trialDays + ' days.' : '. Due now: ' + rupees(q.dueNowMinor) + ' including the setup fee.');
+    if (key === 'maxStudents') return q.studentLimit + ' students, ' + q.staffLimit + ' staff' + (q.trial ? ' (a trial starts with 50 students and 10 staff)' : '');
+    if (key === 'storageAllocated') return q.storageMb >= 1024 ? (q.storageMb / 1024).toFixed(1).replace(/\.0$/, '') + ' GB' : q.storageMb + ' MB';
+    if (key === 'entitlements') return q.features.length ? q.features.join(', ') : 'No features are listed for this plan.';
+    return '';
+  }
+  function paintQuote() {
+    const select = root.querySelector('#ob-planId');
+    if (select) { select.replaceChildren(h('option', { value: '' }, 'Select a plan'), ...S.plans.map((p) => h('option', { value: p.id }, p.name + ' (' + rupees(p.monthlyPrice * 100) + ' per month)'))); select.value = S.values.planId || ''; }
+    for (const el of root.querySelectorAll('[data-calc]')) el.value = calcText(el.dataset.calc);
+  }
+  function refreshQuote() {
+    clearTimeout(S.quoteTimer);
+    S.quoteTimer = setTimeout(async () => {
+      try {
+        const r = await call('quoteSubscription', { planId: S.values.planId || '', billingCycle: S.values.billingCycle || 'Monthly', discountPercent: S.values.discountPercent || '0', trialEnabled: S.values.trialEnabled || 'Yes', trialDays: S.values.trialDays || '30' });
+        const first = !S.quote; S.plans = r.plans; S.quote = r.quote; S.quoteNote = '';
+        if (first && r.quote && S.step >= ACTIVE.length) { draw(); return; }
+      } catch (error) { S.quote = null; S.quoteNote = error?.message || 'The price could not be worked out.'; }
+      paintQuote();
+    }, 200);
+  }
+  function calcInput(field) {
+    const el = h('input', { id: 'ob-' + field.key, readonly: true, 'aria-readonly': 'true', 'data-calc': field.key }); el.value = calcText(field.key);
+    return h('div', { class: field.wide ? 'wide' : '' }, h('label', { for: 'ob-' + field.key }, field.label, h('span', { class: 'ob-id' }, field.id)), el, field.help ? h('p', { class: 'ob-help' }, field.help) : null);
+  }
+  function planInput(field) {
+    const id = 'ob-' + field.key;
+    const select = h('select', { id, 'aria-describedby': id + '-err' }, h('option', { value: '' }, 'Loading plans.'));
+    const err = h('p', { class: 'ob-err', id: id + '-err' });
+    select.addEventListener('change', () => { S.values[field.key] = select.value; err.textContent = fieldProblem(field, S.values); later(); refreshQuote(); });
+    setTimeout(refreshQuote, 0);
+    return h('div', {}, h('label', { for: id }, field.label, h('span', { class: 'ob-req' }, ' *'), h('span', { class: 'ob-id' }, field.id)), select, field.help ? h('p', { class: 'ob-help' }, field.help) : null, err);
+  }
+
   function input(field) {
     const type = typeOf(field, S.values);
     if (['multi', 'sections', 'subjects'].includes(type)) return groupInput(field);
@@ -613,6 +687,8 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     if (type === 'toggle') return toggleInput(field);
     if (type === 'colour') return colourInput(field);
     if (type === 'subdomain') return subdomainInput(field);
+    if (type === 'plan') return planInput(field);
+    if (type === 'calc' || type === 'consent') return calcInput(field);
     const id = 'ob-' + field.key;
     const value = S.values[field.key] ?? '';
     let el;
@@ -630,6 +706,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       if (type === 'email') x = x.toLowerCase();
       S.values[field.key] = x;
       refreshPreview();
+      if (field.cat === 'M') refreshQuote();
       if (field.redraw || ['country', 'board', 'schoolType'].includes(field.key)) { draw(); later(); return; }
       if (final) { el.value = x.trim(); S.values[field.key] = x.trim(); const p = fieldProblem(field, S.values); err.textContent = p; el.setAttribute('aria-invalid', p ? 'true' : 'false'); }
       later();
@@ -680,13 +757,14 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     if (f.type === 'upload') return S.files[f.key] ? S.files[f.key].name : '';
     if (f.type === 'gallery') { const n = [1, 2, 3, 4, 5, 6].filter((i) => S.files['gallery' + i]).length; return n ? n + ' image(s)' : ''; }
     if (f.type === 'toggle') return S.values[f.key] === 'yes' ? 'Yes' : '';
+    if (f.type === 'plan') return S.quote && S.quote.planId === S.values.planId ? S.quote.planName : S.values.planId;
+    if (['calc', 'consent'].includes(f.type)) return calcText(f.key);
     return S.values[f.key];
   }
   function review() {
     const missing = ACTIVE.flatMap((cat) => stepProblems(cat, S.values).map((p) => ({ cat, ...p })).concat(
       FIELDS.filter((f) => f.cat === cat && required(f, S.values) && !String(S.values[f.key] ?? '').trim() && !fieldProblem(f, S.values)).map((f) => ({ cat, field: f, message: f.label + ' is required.' }))));
-    const planBox = h('select', { id: 'ob-plan', onchange: () => { S.plan = planBox.value; } });
-    ctx.plans().then((list) => { planBox.replaceChildren(...list.map(([v, t]) => h('option', { value: v }, t))); planBox.value = S.plan; });
+    if (!S.quote && S.values.planId) refreshQuote();
     const reason = h('textarea', { id: 'ob-reason', rows: 3, placeholder: 'Why are you registering this school? At least 10 characters.', oninput: () => { S.reason = reason.value; } });
     reason.value = S.reason;
     const go1 = h('button', { type: 'button', class: 'btn gold', disabled: S.busy || missing.length > 0, onclick: () => submit(go1) }, S.busy ? 'Registering.' : 'Register school');
@@ -698,8 +776,9 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       ACTIVE.map((cat, i) => h('div', { class: 'card', style: 'margin:12px 0' }, h('div', { class: 'row' }, h('h3', { style: 'flex:1;margin:0' }, cat + '. ' + CATEGORIES[i].title), h('a', { href: '#', onclick: (e) => { e.preventDefault(); go(i); } }, 'Edit')),
         h('table', { class: 'ob-rev' }, h('tbody', {}, FIELDS.filter((f) => f.cat === cat && visible(f, S.values)).map((f) => h('tr', {}, h('td', {}, f.label), h('td', {}, shownValue(f) || h('span', { class: 'muted' }, '-')))))))),
       h('div', { class: 'card', style: 'margin:12px 0' }, h('h3', {}, 'Plan and reason'),
-        h('p', { class: 'ob-help' }, 'Billing and activation settings arrive in Mark 4. For now choose the plan, as before. The price and limits are taken from the plan list on the server.'),
-        h('label', { for: 'ob-plan' }, 'Plan'), planBox, h('label', { for: 'ob-reason' }, 'Reason (kept in the audit log)'), reason),
+        h('div', { class: 'ob-help' }, h('b', {}, 'Plan: '), S.quote ? S.quote.planName + ' | ' + calcText('subscriptionPrice') : (S.values.planId ? 'Working out the price.' : 'No plan chosen.')),
+        h('div', { class: 'ob-help' }, h('b', {}, 'Owner consent: '), 'Pending. The owner accepts the terms and privacy agreement after signing in. ', h('b', {}, 'Activation: '), 'Pending activation. It needs the owner\'s consent and a Verified school.'),
+        h('label', { for: 'ob-reason' }, 'Reason (kept in the audit log)'), reason),
       h('div', { class: 'card' }, h('p', {}, 'Registering creates the school, its billing record and a pending owner invitation for ', h('b', {}, S.values.ownerEmail || 'the owner email'), '. The owner signs in at /app with that email, verifies it and accepts the invitation.'), go1));
   }
 
@@ -746,7 +825,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     clearTimeout(timer);
     try {
       if (dirty && !(await persist())) throw new Error('The draft could not be saved first.');
-      const result = await call('registerSchool', { draftId: S.draftId, plan: S.plan, reason: S.reason.trim() });
+      const result = await call('registerSchool', { draftId: S.draftId, reason: S.reason.trim() });
       toast('School registered. Tell the owner to sign in at /app with ' + (result.ownerEmail || S.values.ownerEmail) + ' and accept the invitation.');
       unmountOnboarding();
       ctx.goSchool(result.schoolId);

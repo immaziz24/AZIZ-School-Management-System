@@ -9,13 +9,13 @@ const grab = (re) => { const m = src.match(re); assert.ok(m, 'missing ' + re); r
 const block = src.match(/\/\/ --- registration rules begin[\s\S]*?\/\/ --- registration rules end ---/);
 assert.ok(block, 'registration rules block is missing');
 const code = "class HttpsError extends Error { constructor(code, message) { super(message); this.code = code; } }\n" + block[0];
-const lib = new Function(code + '\n; return { slugifySchoolName, normalName, checkRegistration, cleanDraftValues, buildAcademicPlan, moneyToMinor, parseSections, sniffFile, slotAccepts, normalizeSubdomain, UPLOAD_SLOTS, THEME_KEYS, RESERVED_SUBDOMAINS, FACILITY_KEYS, NEW_SCHOOL_ID, DRAFT_ID, HttpsError, DRAFT_KEYS, REQUIRED_REGISTRATION };')();
+const lib = new Function(code + '\n; return { slugifySchoolName, normalName, checkRegistration, cleanDraftValues, buildAcademicPlan, moneyToMinor, parseSections, sniffFile, slotAccepts, normalizeSubdomain, buildQuote, LEGAL_VERSIONS, VERIFICATION_STATUSES, LOGIN_ROLES, toMinor, UPLOAD_SLOTS, THEME_KEYS, RESERVED_SUBDOMAINS, FACILITY_KEYS, NEW_SCHOOL_ID, DRAFT_ID, HttpsError, DRAFT_KEYS, REQUIRED_REGISTRATION };')();
 
 const good = {
   name: 'Green Valley School', schoolType: 'Private unaided', schoolLevel: 'Secondary', genderComposition: 'Co-educational', medium: 'English',
   board: 'CBSE', affiliationNo: '2430123', country: 'India', state: 'West Bengal', district: 'Howrah', town: 'Howrah', street: '12 Main Road', pin: '711101',
   schoolPhone: '9830012345', schoolEmail: 'office@gv.in', ownerName: 'A Owner', ownerDesignation: 'Chairman', ownerEmail: 'owner@gv.in', ownerMobile: '9830012345',
-  sessionLabel: '2026-27', lowestClass: 'Class 1', highestClass: 'Class 3', studentCount: '420', teacherCount: '24',
+  sessionLabel: '2026-27', lowestClass: 'Class 1', highestClass: 'Class 3', studentCount: '420', teacherCount: '24', planId: 'starter',
 };
 
 test('school IDs are built from the name and always valid', () => {
@@ -96,13 +96,19 @@ test('Mark 2: the server repeats the academic, capacity, timing and fee checks',
 test('the server and the form agree on which fields exist and which are required', () => {
   const ui = readFileSync(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
   const keys = [...ui.matchAll(/\{ id: 'F\d{3}', key: '([A-Za-z]+)'/g)].map((m) => m[1]);
-  assert.equal(keys.length, 99);
-  // Uploads are files, not text values, so they are the only form fields the draft does not store as text.
-  const fileKeys = keys.filter((k) => !lib.DRAFT_KEYS.includes(k)).sort();
-  assert.deepEqual(fileKeys, ['affiliationCert', 'favicon', 'gallery', 'heroImage', 'logo', 'ownerPhoto', 'ownershipDoc', 'principalPhoto', 'recognitionCert']);
-  assert.equal(lib.DRAFT_KEYS.length, 90);
-  assert.equal(new Set(lib.DRAFT_KEYS).size, 90);
-  assert.ok(Object.keys(lib.UPLOAD_SLOTS).includes('gallery6') && fileKeys.every((k) => k === 'gallery' || lib.UPLOAD_SLOTS[k]));
+  assert.equal(keys.length, 119);
+  // Uploads are files, and the calculated and consent rows are read-only, so the draft stores none of them as text.
+  const notStored = keys.filter((k) => !lib.DRAFT_KEYS.includes(k)).sort();
+  const files = ['affiliationCert', 'favicon', 'gallery', 'heroImage', 'logo', 'ownerPhoto', 'ownershipDoc', 'principalPhoto', 'recognitionCert'];
+  const shown = ['activationStatus', 'entitlements', 'maxStudents', 'ownerLoginEmail', 'privacyAccepted', 'setupFee', 'storageAllocated', 'subscriptionPrice', 'termsAccepted'];
+  assert.deepEqual(notStored, [...files, ...shown].sort());
+  assert.equal(lib.DRAFT_KEYS.length, 101);
+  assert.equal(new Set(lib.DRAFT_KEYS).size, 101);
+  assert.ok(Object.keys(lib.UPLOAD_SLOTS).includes('gallery6') && files.every((k) => k === 'gallery' || lib.UPLOAD_SLOTS[k]));
+  // Consent can never be sent in a draft: the server refuses unknown fields.
+  assert.throws(() => lib.cleanDraftValues({ termsAccepted: 'yes' }), /Unknown field/);
+  assert.throws(() => lib.cleanDraftValues({ activationStatus: 'Active' }), /Unknown field/);
+  assert.throws(() => lib.cleanDraftValues({ setupFee: '0' }), /Unknown field/);
 });
 
 test('money is converted to the smallest unit without rounding errors', () => {
@@ -199,4 +205,49 @@ test('Mark 3: subdomain names are normalised and unsafe ones refused', () => {
   assert.ok(lib.RESERVED_SUBDOMAINS.includes('www') && lib.RESERVED_SUBDOMAINS.includes('admin'));
   assert.equal(lib.UPLOAD_SLOTS.favicon.max, 256 * 1024);
   assert.ok(Object.values(lib.UPLOAD_SLOTS).every((r) => r.max <= 5 * 1024 * 1024));
+});
+
+test('Mark 4: the server repeats the commercial, login and verification checks', () => {
+  const bad = (patch, re) => assert.ok(lib.checkRegistration({ ...good, ...patch }).some((p) => re.test(p)), JSON.stringify(patch));
+  bad({ planId: '' }, /planId is required/);
+  bad({ planId: '../plans/x' }, /planId/);
+  bad({ trialEnabled: 'Maybe' }, /trialEnabled/);
+  bad({ trialDays: '45' }, /trialDays/);
+  bad({ billingCycle: 'Weekly' }, /billingCycle/);
+  bad({ discountPercent: '101' }, /discountPercent/);
+  bad({ discountPercent: '-1' }, /discountPercent/);
+  bad({ invitationMethod: 'Pigeon' }, /invitationMethod/);
+  bad({ twoFactorPolicy: 'Never' }, /twoFactorPolicy/);
+  bad({ loginRoles: 'owner,hacker' }, /loginRoles/);
+  bad({ loginRoles: 'teacher' }, /must include owner/);
+  bad({ dataRetention: 'Forever' }, /dataRetention/);
+  bad({ verificationStatus: 'Maybe' }, /verificationStatus/);
+  bad({ internalNotes: 'x'.repeat(501) }, /internalNotes/);
+  assert.deepEqual(lib.checkRegistration({ ...good, trialEnabled: 'Yes', trialDays: '60', billingCycle: 'Yearly', discountPercent: '10', loginRoles: lib.LOGIN_ROLES.join(','), twoFactorPolicy: 'Optional', verificationStatus: 'Verified' }), []);
+});
+
+const plan = { name: 'Growth', monthlyPrice: 999, yearlyPrice: 9990, setupFee: 1500, studentLimit: 500, staffLimit: 40, storageMb: 5120, features: ['Fees', 'Reports'], historyId: 'H-1' };
+test('Mark 4: prices are worked out from the catalog, in paise', () => {
+  const m = lib.buildQuote(plan, 'growth', { billingCycle: 'Monthly', discountPercent: '0', trialEnabled: 'No' });
+  assert.equal(m.recurringMinor, 99900); assert.equal(m.setupMinor, 150000); assert.equal(m.firstInvoiceMinor, 249900); assert.equal(m.dueNowMinor, 249900);
+  assert.equal(m.studentLimit, 500); assert.equal(m.storageMb, 5120); assert.equal(m.planVersion, 'H-1'); assert.deepEqual(m.features, ['Fees', 'Reports']);
+  const y = lib.buildQuote(plan, 'growth', { billingCycle: 'Yearly', discountPercent: '20', trialEnabled: 'No' });
+  assert.equal(y.listMinor, 999000); assert.equal(y.discountMinor, 199800); assert.equal(y.recurringMinor, 799200); assert.equal(y.monthlyEquivalentMinor, 66600);
+  const t = lib.buildQuote(plan, 'growth', { trialEnabled: 'Yes', trialDays: '60' });
+  assert.equal(t.trial, true); assert.equal(t.trialDays, 60); assert.equal(t.dueNowMinor, 0); assert.equal(t.cycle, 'Monthly');
+  const odd = lib.buildQuote(plan, 'growth', { trialEnabled: 'Yes', trialDays: '999', discountPercent: 'abc', billingCycle: 'Nonsense' });
+  assert.equal(odd.trialDays, 30); assert.equal(odd.discountPercent, 0); assert.equal(odd.cycle, 'Monthly');
+  const full = lib.buildQuote(plan, 'growth', { discountPercent: '100' });
+  assert.equal(full.recurringMinor, 0);
+  const over = lib.buildQuote(plan, 'growth', { discountPercent: '500' });
+  assert.ok(over.recurringMinor >= 0);
+  assert.equal(lib.toMinor(19.99), 1999); assert.equal(lib.toMinor(0.07), 7); assert.equal(lib.toMinor(undefined), 0);
+  const bare = lib.buildQuote({}, 'x', {});
+  assert.equal(bare.recurringMinor, 0); assert.deepEqual(bare.features, []);
+});
+
+test('Mark 4: legal versions and statuses exist', () => {
+  assert.match(lib.LEGAL_VERSIONS.terms, /^20[0-9]{2}-/);
+  assert.match(lib.LEGAL_VERSIONS.privacy, /^20[0-9]{2}-/);
+  assert.ok(lib.VERIFICATION_STATUSES.includes('Verified') && lib.VERIFICATION_STATUSES[0] === 'Unverified');
 });

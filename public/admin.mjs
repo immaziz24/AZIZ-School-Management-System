@@ -246,7 +246,7 @@ function closeOnboarding() {
 }
 async function openRegister(draftId) {
   if (!isAdmin()) { toast('Only a platform administrator can register schools.'); location.hash = '#/schools'; return; }
-  const mod = await import('./onboarding.mjs?v=batch-100');
+  const mod = await import('./onboarding.mjs?v=batch-101');
   await mod.mountOnboarding({
     db, app, user: S.user, h, toast, friendly,
     plans: async () => {
@@ -286,6 +286,36 @@ async function viewSchool(id) {
       h('a', { class: 'btn sm', href: '/school?school=' + encodeURIComponent(school.id), target: '_blank', rel: 'noopener' }, 'Preview public site'),
       h('button', { class: 'btn sm ' + (school.siteHold ? '' : 'red'), onclick: () => guarded(async () => { if (await setSiteHold(school, !school.siteHold)) await refresh(); }) }, school.siteHold ? 'Put website online' : 'Take website offline')));
 
+  // Registration record (Mark 4): verification, the owner's consent and activation. Loaded from the server because the record is not readable in the browser.
+  const regBody = h('div', {}, h('span', { class: 'spin' }), ' Loading.');
+  const regCard = h('div', { class: 'card' }, h('h3', {}, 'Registration, consent and activation'), regBody);
+  (async () => {
+    try {
+      const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
+      const fn = (name, data) => httpsCallable(getFunctions(app, 'asia-south1'), name)(data).then((r) => r.data);
+      const r = await fn('getRegistrationStatus', { schoolId: school.id });
+      if (!r.found) { regBody.replaceChildren(h('p', { class: 'muted' }, 'This school was not registered through the registration wizard, so there is no registration record.')); return; }
+      const paise = (n) => money(Number(n || 0) / 100);
+      regBody.replaceChildren(
+        h('p', {}, 'Plan: ', h('b', {}, r.plan.name), ' (' + r.plan.cycle + ', ' + paise(r.plan.recurringMinor) + (r.plan.discountPercent ? ' after ' + r.plan.discountPercent + '% off' : '') + ', setup ' + paise(r.plan.setupMinor) + (r.plan.trial ? ', free trial ' + r.plan.trialDays + ' days' : '') + ')'),
+        h('p', {}, 'Verification: ', h('span', { class: 'pill ' + (r.verificationStatus === 'Verified' ? 'ok' : r.verificationStatus === 'Rejected' ? 'bad' : 'warn') }, r.verificationStatus)),
+        h('p', {}, 'Owner consent: ', r.consent.status === 'accepted' ? h('span', { class: 'pill ok' }, 'Accepted by ' + r.consent.by + ' on ' + new Date(r.consent.at).toLocaleDateString('en-IN')) : h('span', { class: 'pill warn' }, 'Pending the owner')),
+        h('p', {}, 'Activation: ', h('span', { class: 'pill ' + (r.activationStatus === 'Active' ? 'ok' : 'warn') }, r.activationStatus)),
+        h('p', { class: 'muted' }, 'Website published: ' + (r.siteWebsitePublished ? 'yes' : 'no') + (r.domain ? ' | custom domain: ' + (r.domain.customDomain ? r.domain.customDomainStatus + ' (HTTPS ' + r.domain.ssl + ')' : 'none') : '') + ' | ' + r.files + ' file(s) uploaded'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', onclick: () => guarded(async () => {
+            const v = await formDialog({ title: 'Verification status for ' + school.name, ok: 'Save', fields: [{ key: 'status', label: 'Status', type: 'select', options: ['Unverified', 'Documents received', 'Verified', 'Rejected'].map((x) => [x, x]), value: r.verificationStatus }, REASON] });
+            if (!v) return;
+            await fn('setVerificationStatus', { schoolId: school.id, status: v.status, reason: v.reason }); toast('Verification status saved.'); await refresh();
+          }) }, 'Set verification'),
+          r.activationStatus === 'Active' ? null : h('button', { class: 'btn gold', onclick: () => guarded(async () => {
+            const v = await formDialog({ title: 'Activate ' + school.name, note: 'Needs the school marked Verified and the owner\'s acceptance of the current terms and privacy agreement.', ok: 'Activate', fields: [REASON] });
+            if (!v) return;
+            await fn('activateSchool', { schoolId: school.id, reason: v.reason }); toast('School activated.'); await refresh();
+          }) }, 'Activate registration')));
+    } catch (error) { regBody.replaceChildren(h('p', { class: 'muted' }, 'Could not load the registration record. ' + (error?.message || ''))); }
+  })();
+
   const usage = school.usage || {};
   const usageCard = h('div', { class: 'card' }, h('h3', {}, 'Usage'),
     h('p', {}, num(usage.students) + ' students | ' + num(usage.staff) + ' staff | ' + num(usage.storageMb) + ' MB stored'),
@@ -310,7 +340,7 @@ async function viewSchool(id) {
   const invoicesCard = h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { style: 'flex:1' }, 'Invoices'),
     h('button', { class: 'btn sm', onclick: () => guarded(async () => { if (await createInvoice(school)) await refresh(); }) }, 'Create invoice')),
     invoiceTable(mine, false, refresh));
-  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), ownersCard, h('div', { style: 'height:14px' }), invoicesCard, h('div', { style: 'height:14px' }), await schoolLocationCard(school, refresh), h('div', { style: 'height:14px' }), await schoolFeaturesCard(school));
+  view().replaceChildren(h('h2', {}, school.name), h('div', { class: 'two' }, profile, planCard, usageCard), h('div', { style: 'height:14px' }), regCard, h('div', { style: 'height:14px' }), ownersCard, h('div', { style: 'height:14px' }), invoicesCard, h('div', { style: 'height:14px' }), await schoolLocationCard(school, refresh), h('div', { style: 'height:14px' }), await schoolFeaturesCard(school));
 }
 
 async function lastLogin(uid) {

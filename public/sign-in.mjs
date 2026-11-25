@@ -11357,6 +11357,7 @@ onAuthStateChanged(auth, async (user) => {
     if (!superView && membership.data()?.active === true && membership.data()?.role === 'owner') {
       showPlatformInbox(schoolRef);
       showMfaRow(user);
+      import('./consent.mjs?v=batch-101').then((m) => m.mountConsent({ app, schoolId: SCHOOL_ID })).catch(() => {});
     }
     if (!superView && !feeOffice && ['owner', 'principal'].includes(membership.data()?.role)) {
       import('./admission-desk.mjs?v=batch-91').then((m) => m.mountAdmissionDesk({ app, schoolId: SCHOOL_ID, role: membership.data().role, schoolName: school.data().name, root: document.querySelector('#admission-desk') })).catch(() => {});
