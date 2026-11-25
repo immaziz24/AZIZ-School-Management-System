@@ -377,6 +377,19 @@ service cloud.firestore {
 
     // invites/{id}: schoolId, email, role, status pending/accepted/revoked, createdBy. The owner invites a
     // person by email; that person, signed in with a verified address, accepts it and becomes a member.
+    // Registration Mark 1 (Batch 98): drafts of the Super Admin onboarding wizard. Platform administrators only. Every save raises revision by one,
+    // so a second tab cannot silently overwrite the first. The school ID and the registered state are set by the server, never by the browser.
+    match /onboardingDrafts/{draftId} {
+      allow get, list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && draftId.matches('OB-[A-Za-z0-9]{6,30}') && validDraft(nd())
+        && nd().revision == 1 && nd().createdBy == request.auth.uid && nd().status == 'draft' && !('schoolId' in nd())
+        && nd().createdAt == request.time && nd().updatedAt == request.time;
+      allow update: if isPlatformAdmin() && resource.data.status == 'draft' && validDraft(nd())
+        && nd().revision == resource.data.revision + 1 && nd().createdBy == resource.data.createdBy && nd().status == 'draft'
+        && nd().get('schoolId', '') == resource.data.get('schoolId', '') && nd().updatedAt == request.time;
+      allow delete: if isPlatformAdmin() && resource.data.status == 'draft';
+    }
+
     match /invites/{inviteId} {
       allow get, list: if isSchoolViewer(resource.data.schoolId);
       allow get, list: if isPlatformAdmin() && resource.data.role == 'owner';
@@ -472,6 +485,11 @@ service cloud.firestore {
         && (!('siteHold' in request.resource.data) || request.resource.data.siteHold is bool)
         && (!('archived' in request.resource.data) || request.resource.data.archived is bool)
         && optText(request.resource.data, 'archivedOn', 10);
+
+      // Registration record written by the server when the school is registered (Batch 98). Platform administrators read it; nobody writes it from a browser.
+      match /registration/{docId} {
+        allow get, list: if isPlatformAdmin();
+      }
 
       // Staff profiles contain contact and job details only.
       match /members/{uid} {
@@ -3447,6 +3465,15 @@ service cloud.firestore {
         && staff.position.matches('.*[^[:space:]].*')
         && maxText(staff.email, 254)
         && (staff.email == '' || staff.email.matches('[^@[:space:]]+@[^@[:space:]]+'));
+    }
+
+    function validDraft(d) {
+      return d.keys().hasOnly(['schemaVersion', 'createdBy', 'createdAt', 'updatedAt', 'revision', 'status', 'step', 'values', 'schoolId', 'registeredAt', 'registeredBy'])
+        && d.keys().hasAll(['schemaVersion', 'createdBy', 'createdAt', 'updatedAt', 'revision', 'status', 'step', 'values'])
+        && d.schemaVersion == 1 && d.createdBy is string && d.revision is int && d.status in ['draft', 'registered']
+        && d.step is int && d.step >= 0 && d.step < 20
+        && d.values is map && d.values.size() <= 60
+        && d.values.keys().hasOnly(['name', 'shortName', 'estYear', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'motto', 'description', 'board', 'affiliationNo', 'udise', 'recognitionNo', 'trustName', 'trustRegNo', 'country', 'state', 'district', 'block', 'town', 'street', 'pin', 'schoolPhone', 'schoolEmail', 'mapLocation', 'ownerName', 'ownerDesignation', 'ownerEmail', 'ownerMobile', 'ownerWhatsapp', 'ownerAddress', 'principalName', 'principalEmail', 'principalMobile', 'adminName', 'adminEmail', 'adminPhone']);
     }
 
     function validProfile(profile) {

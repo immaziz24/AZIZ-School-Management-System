@@ -24,6 +24,11 @@ function h(tag, attrs = {}, ...kids) {
   for (const kid of kids.flat()) if (kid !== undefined && kid !== null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
   return el;
 }
+// replaceChildren turns a null child into the text "null" (it showed under the school list). Drop empty children before it runs.
+const nativeReplaceChildren = Element.prototype.replaceChildren;
+Element.prototype.replaceChildren = function replaceChildrenWithoutNull(...kids) {
+  return nativeReplaceChildren.apply(this, kids.filter((kid) => kid !== null && kid !== undefined && kid !== false));
+};
 // Platform locale (Batch 87): currency, time zone and date style from platformConfig/locale apply to this admin panel. Defaults match the old behaviour.
 let LOCALE = { currency: 'INR', timezone: 'Asia/Kolkata', dateFormat: 'DD/MM/YYYY' };
 const SYMBOLS = { INR: '₹', BDT: '৳', NPR: 'Rs ', AED: 'AED ', USD: '$' };
@@ -227,49 +232,29 @@ async function viewSchools() {
   };
   searchBox.addEventListener('input', draw); filter.addEventListener('change', draw);
   view().replaceChildren(
-    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'All schools (' + S.schools.length + ')'), h('button', { class: 'btn gold', onclick: () => guarded(registerSchool) }, 'Register a school')),
+    h('div', { class: 'row' }, h('h2', { style: 'flex:1' }, 'All schools (' + S.schools.length + ')'), h('button', { class: 'btn gold', onclick: () => { location.hash = '#/schools/register'; } }, 'Register a school')),
     h('div', { class: 'row' }, searchBox, filter),
     h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['School', 'Plan', 'Status', 'Students', 'Staff', 'Contact'].map((t) => h('th', {}, t)))), body)),
     S.schools.length > 300 ? h('p', { class: 'muted' }, 'Showing the first 300 matches. Use the search to narrow it.') : null);
   draw();
 }
 
-async function registerSchool() {
-  await loadPlans();
-  const TRIAL_DAYS = { trial: 30, trial60: 60, trial90: 90 };
-  const planOptions = [['trial', 'Free 30-day trial'], ['trial60', 'Free 60-day trial'], ['trial90', 'Free 90-day trial']].concat(S.plans.filter((p) => p.active).map((p) => [p.id, p.name + ' (' + money(p.monthlyPrice) + '/month)']));
-  const v = await formDialog({
-    title: 'Register a school',
-    note: 'Creates the school and a pending owner invitation. The owner signs in with this email, verifies it and accepts the invitation.',
-    ok: 'Register school',
-    fields: [
-      { key: 'id', label: 'School ID (lowercase letters, numbers, dashes; 3 to 30)', required: true, pattern: /^[a-z][a-z0-9-]{2,29}$/, patternText: 'Use 3 to 30 lowercase letters, numbers or dashes, starting with a letter.' },
-      { key: 'name', label: 'School name', required: true },
-      { key: 'ownerEmail', label: 'Owner email', type: 'email', required: true, pattern: /^[^@\sA-Z]+@[^@\sA-Z]+$/, patternText: 'Use a lowercase email address.' },
-      { key: 'contactEmail', label: 'School contact email (optional)', type: 'email' },
-      { key: 'phone', label: 'Phone (optional)' },
-      { key: 'address', label: 'Address (optional)' },
-      { key: 'plan', label: 'Plan', type: 'select', options: planOptions },
-      REASON,
-    ],
-  });
-  if (!v) return;
-  if (['www', 'admin', 'api', 'app', 'platform', 'school', 'aziz', 'public', 'support', 'demo'].includes(v.id)) { toast('That school ID is reserved.'); return; }
-  const taken = await getDocFromServer(doc(db, 'schools', v.id)).then((d) => d.exists());
-  if (taken) { toast('That school ID is already used.'); return; }
-  const plan = S.plans.find((p) => p.id === v.plan);
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'schools', v.id), { name: v.name, contactEmail: v.contactEmail || '', phone: v.phone || '', address: v.address || '', createdBy: S.user.uid });
-  const billing = plan
-    ? { plan: plan.id, status: 'active', startedOn: today(), studentLimit: plan.studentLimit, staffLimit: plan.staffLimit, storageMb: plan.storageMb, monthlyPrice: plan.monthlyPrice }
-    : { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + (TRIAL_DAYS[v.plan] || 30) * 86400000), studentLimit: 50, staffLimit: 10 };
-  batch.set(doc(db, 'schools', v.id, 'billing', 'main'), billing);
-  batch.set(doc(db, 'invites', newId('OW-')), { schoolId: v.id, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: S.user.uid });
-  audit(batch, 'register-school', v.id, v.reason, JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: billing.plan, trialDays: plan ? undefined : (TRIAL_DAYS[v.plan] || 30) }));
-  await batch.commit();
-  toast('School registered. Tell the owner to sign in at /app with ' + v.ownerEmail + ' and accept the invitation.');
-  await loadSchools(true);
-  location.hash = '#/school/' + v.id;
+// Registration wizard (Batch 98, Mark 1): a full-screen page at #/schools/register[/draftId], in its own file.
+function closeOnboarding() {
+  const open = document.getElementById('onb');
+  if (open) { if (open._cleanup) open._cleanup(); open.remove(); document.body.style.overflow = ''; }
+}
+async function openRegister(draftId) {
+  if (!isAdmin()) { toast('Only a platform administrator can register schools.'); location.hash = '#/schools'; return; }
+  const mod = await import('./onboarding.mjs?v=batch-98');
+  await mod.mountOnboarding({
+    db, app, user: S.user, h, toast, friendly,
+    plans: async () => {
+      await loadPlans();
+      return [['trial', 'Free 30-day trial'], ['trial60', 'Free 60-day trial'], ['trial90', 'Free 90-day trial']].concat(S.plans.filter((p) => p.active).map((p) => [p.id, p.name + ' (' + money(p.monthlyPrice) + '/month)']));
+    },
+    goSchool: async (id) => { await loadSchools(true); location.hash = '#/school/' + id; },
+  }, draftId);
 }
 
 async function viewSchool(id) {
@@ -2234,9 +2219,11 @@ async function route() {
     if (first === 'denied') { show(h('div', { class: 'empty' }, 'Your staff role has no pages yet. Ask the super admin to give you a permission.')); return; }
     if (name !== first) { location.hash = '#/' + first; return; }
   }
+  if (!(name === 'schools' && parts[1] === 'register')) closeOnboarding();
   for (const a of document.querySelectorAll('nav.side a.item[data-r]')) a.classList.toggle('on', a.dataset.r === (name === 'school' ? 'schools' : name));
   await guarded(async () => {
-    if (name === 'schools') await viewSchools();
+    if (name === 'schools' && parts[1] === 'register') await openRegister(decodeURIComponent(parts[2] || ''));
+    else if (name === 'schools') await viewSchools();
     else if (name === 'school') await viewSchool(decodeURIComponent(parts[1] || ''));
     else if (name === 'owners') await viewOwners();
     else if (name === 'plans') await viewPlans();

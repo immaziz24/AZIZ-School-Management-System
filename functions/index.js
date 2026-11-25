@@ -1094,3 +1094,159 @@ exports.promoteStudents = onCall({ memory: '512MiB', timeoutSeconds: 300 }, asyn
   }
   return { applied: d.apply === true, moved: moving.length, rows: rows.slice(0, 1500).map(({ plan, ...rest }) => rest) };
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Batch 98 (Registration Mark 1): trusted school registration for the Super Admin onboarding wizard.
+// reserveSchoolId: picks a collision-safe school ID inside a transaction and holds it for one draft.
+// checkSchoolDuplicates: warns about schools that look like the one being registered (a warning, never a block).
+// registerSchool: validates the draft on the server, then creates the school, its billing record, the owner invitation and the audit
+// entry in one transaction. Repeating the call for the same draft returns the same school (idempotent).
+// ---------------------------------------------------------------------------------------------------------------------
+const RESERVED_SCHOOL_IDS = ['www', 'admin', 'api', 'app', 'platform', 'school', 'aziz', 'public', 'support', 'demo', 'mail', 'ftp'];
+const NEW_SCHOOL_ID = /^[a-z][a-z0-9-]{2,29}$/;
+const DRAFT_ID = /^OB-[A-Za-z0-9]{6,30}$/;
+const TRIAL_DAYS = { trial: 30, trial60: 60, trial90: 90 };
+
+async function requirePlatformAdmin(request) {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const admin = await db.doc('platformAdmins/' + request.auth.uid).get();
+  if (!admin.exists) throw new HttpsError('permission-denied', 'Only a platform administrator can register schools.');
+  return { uid: request.auth.uid, email: String(request.auth.token?.email || '') };
+}
+
+// "St. Mary's Public School" -> "st-marys-public-school": lowercase, accents removed, letters and digits only, 3 to 30 characters.
+function slugifySchoolName(name) {
+  let slug = String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    .replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!/^[a-z]/.test(slug)) slug = 'school-' + slug;
+  slug = slug.slice(0, 30).replace(/-+$/g, '');
+  if (slug.length < 3) slug = (slug + '-school').slice(0, 30);
+  return slug;
+}
+const normalName = (name) => String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\b(school|public|the|high|sr|secondary|jr|senior|junior)\b/g, ' ').replace(/\s+/g, ' ').trim();
+
+exports.reserveSchoolId = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid } = await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const draftId = text(d.draftId, 40);
+  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
+  const name = text(d.name, 120);
+  const wanted = text(d.wanted, 30).toLowerCase();
+  if (!name && !wanted) throw new HttpsError('invalid-argument', 'Enter the school name first.');
+  if (wanted && !NEW_SCHOOL_ID.test(wanted)) throw new HttpsError('invalid-argument', 'Use 3 to 30 lowercase letters, numbers or dashes, starting with a letter.');
+  const draftRef = db.doc('onboardingDrafts/' + draftId);
+  const base = wanted || slugifySchoolName(name);
+  const candidates = wanted ? [wanted] : [base, ...Array.from({ length: 98 }, (_, i) => (base.slice(0, 30 - String(i + 2).length - 1) + '-' + (i + 2)))];
+  return db.runTransaction(async (tx) => {
+    const draft = await tx.get(draftRef);
+    if (!draft.exists || draft.data().status !== 'draft') throw new HttpsError('failed-precondition', 'This draft is not open.');
+    const mine = draft.data().schoolId;
+    // The ID is stable once held. It changes only when the admin asks for a different one (wanted).
+    if (mine && !wanted) return { schoolId: mine, reused: true };
+    for (const id of candidates) {
+      if (RESERVED_SCHOOL_IDS.includes(id)) { if (wanted) throw new HttpsError('already-exists', 'That school ID is reserved.'); continue; }
+      const [school, hold] = await Promise.all([tx.get(db.doc('schools/' + id)), tx.get(db.doc('schoolReservations/' + id))]);
+      const heldByOther = hold.exists && hold.data().draftId !== draftId && hold.data().status !== 'released';
+      if (school.exists || heldByOther) { if (wanted) throw new HttpsError('already-exists', 'That school ID is already used.'); continue; }
+      if (mine && mine !== id) tx.set(db.doc('schoolReservations/' + mine), { status: 'released', releasedAt: Timestamp.now() }, { merge: true });
+      tx.set(db.doc('schoolReservations/' + id), { draftId, by: uid, name, status: 'reserved', at: Timestamp.now() });
+      tx.update(draftRef, { schoolId: id });
+      return { schoolId: id, reused: false };
+    }
+    throw new HttpsError('already-exists', 'Could not find a free school ID. Type one yourself.');
+  });
+});
+
+exports.checkSchoolDuplicates = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const name = normalName(text(d.name, 120));
+  const town = text(d.town, 80).toLowerCase();
+  const udise = text(d.udise, 20).replace(/\s/g, '');
+  const affiliation = text(d.affiliation, 40).toLowerCase();
+  const found = [];
+  const schools = await db.collection('schools').limit(1000).get();
+  for (const s of schools.docs) {
+    const x = s.data();
+    const reg = (await db.doc('schools/' + s.id + '/registration/main').get()).data() || {};
+    const otherName = normalName(x.name);
+    const why = [];
+    if (udise && reg.udise && String(reg.udise).replace(/\s/g, '') === udise) why.push('same UDISE+ code');
+    if (affiliation && reg.affiliationNo && String(reg.affiliationNo).toLowerCase() === affiliation) why.push('same affiliation number');
+    if (name && otherName && name === otherName) why.push('same name');
+    else if (name && otherName && town && (name.includes(otherName) || otherName.includes(name)) && (String(x.address || '').toLowerCase().includes(town) || String(reg.town || '').toLowerCase() === town)) why.push('similar name in the same place');
+    if (why.length) found.push({ id: s.id, name: x.name, reason: why.join(', ') });
+  }
+  return { matches: found.slice(0, 10) };
+});
+
+const REQUIRED_REGISTRATION = ['name', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'board', 'country', 'state', 'district', 'town', 'street', 'pin',
+  'schoolPhone', 'schoolEmail', 'ownerName', 'ownerDesignation', 'ownerEmail', 'ownerMobile'];
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const PHONE_PATTERN = /^\+?[0-9][0-9 -]{6,17}$/;
+// Every value is stored as text. Returns the list of problems (empty when the draft is good).
+function checkRegistration(v) {
+  const problems = [];
+  for (const key of REQUIRED_REGISTRATION) if (!String(v[key] ?? '').trim()) problems.push(key + ' is required');
+  if (v.name && String(v.name).length > 120) problems.push('name is too long');
+  if (v.schoolEmail && !EMAIL_PATTERN.test(v.schoolEmail)) problems.push('schoolEmail is not valid');
+  if (v.ownerEmail && (!EMAIL_PATTERN.test(v.ownerEmail) || v.ownerEmail !== v.ownerEmail.toLowerCase())) problems.push('ownerEmail must be a lowercase email address');
+  for (const key of ['schoolPhone', 'ownerMobile', 'ownerWhatsapp', 'principalMobile', 'adminPhone']) if (v[key] && !PHONE_PATTERN.test(v[key])) problems.push(key + ' is not a valid phone number');
+  for (const key of ['principalEmail', 'adminEmail']) if (v[key] && !EMAIL_PATTERN.test(v[key])) problems.push(key + ' is not valid');
+  if (v.country === 'India' && v.pin && !/^[1-9][0-9]{5}$/.test(v.pin)) problems.push('pin must be 6 digits for India');
+  if (v.country !== 'India' && v.pin && !/^[A-Za-z0-9 -]{3,10}$/.test(v.pin)) problems.push('pin is not valid');
+  if (v.estYear) { const year = Number(v.estYear); if (!Number.isInteger(year) || year < 1800 || year > new Date().getFullYear()) problems.push('estYear is not a valid year'); }
+  if (v.udise && !/^[0-9]{11}$/.test(String(v.udise).replace(/\s/g, ''))) problems.push('udise must be 11 digits');
+  if (v.board && !['none', 'state'].includes(v.board) && !String(v.affiliationNo || '').trim()) problems.push('affiliationNo is required for this board');
+  return problems;
+}
+const DRAFT_KEYS = ['name', 'shortName', 'estYear', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'motto', 'description', 'board', 'affiliationNo', 'udise',
+  'recognitionNo', 'trustName', 'trustRegNo', 'country', 'state', 'district', 'block', 'town', 'street', 'pin', 'schoolPhone', 'schoolEmail', 'mapLocation',
+  'ownerName', 'ownerDesignation', 'ownerEmail', 'ownerMobile', 'ownerWhatsapp', 'ownerAddress', 'principalName', 'principalEmail', 'principalMobile',
+  'adminName', 'adminEmail', 'adminPhone'];
+
+exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 120 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const draftId = text(d.draftId, 40);
+  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
+  const planId = text(d.plan, 40);
+  const reason = text(d.reason, 300);
+  if (reason.length < 10) throw new HttpsError('invalid-argument', 'Give a reason of at least 10 characters. It is kept in the audit log.');
+  const draftRef = db.doc('onboardingDrafts/' + draftId);
+  const first = await draftRef.get();
+  if (!first.exists) throw new HttpsError('not-found', 'That draft was not found.');
+  if (first.data().status === 'registered') return { schoolId: first.data().schoolId, alreadyRegistered: true };
+  const plan = TRIAL_DAYS[planId] ? null : await db.doc('plans/' + planId).get();
+  if (!TRIAL_DAYS[planId] && !(plan && plan.exists && plan.data().active === true)) throw new HttpsError('invalid-argument', 'Choose a plan that is switched on.');
+  const auditId = 'A-' + Date.now().toString(36).toUpperCase() + require('crypto').randomBytes(3).toString('hex').toUpperCase();
+  const inviteId = 'OW-' + Date.now().toString(36).toUpperCase() + require('crypto').randomBytes(3).toString('hex').toUpperCase();
+  return db.runTransaction(async (tx) => {
+    const draft = await tx.get(draftRef);
+    if (!draft.exists) throw new HttpsError('not-found', 'That draft was not found.');
+    if (draft.data().status === 'registered') return { schoolId: draft.data().schoolId, alreadyRegistered: true };
+    const schoolId = draft.data().schoolId;
+    if (!schoolId || !NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('failed-precondition', 'Reserve the school ID first (it is done when you leave the first step).');
+    const v = {};
+    for (const key of DRAFT_KEYS) v[key] = String((draft.data().values || {})[key] ?? '').trim();
+    const problems = checkRegistration(v);
+    if (problems.length) throw new HttpsError('invalid-argument', 'Fix these first: ' + problems.slice(0, 6).join('; ') + (problems.length > 6 ? '; and ' + (problems.length - 6) + ' more' : '') + '.');
+    const [school, hold] = await Promise.all([tx.get(db.doc('schools/' + schoolId)), tx.get(db.doc('schoolReservations/' + schoolId))]);
+    if (school.exists) throw new HttpsError('already-exists', 'A school with this ID already exists.');
+    if (!hold.exists || hold.data().draftId !== draftId || hold.data().status !== 'reserved') throw new HttpsError('failed-precondition', 'The school ID is no longer held for this draft. Reserve it again.');
+    const now = Timestamp.now();
+    const address = [v.street, v.block, v.town, v.district, v.state, v.pin, v.country].filter(Boolean).join(', ').slice(0, 500);
+    tx.set(db.doc('schools/' + schoolId), { name: v.name, contactEmail: v.schoolEmail, phone: v.schoolPhone, address, createdBy: uid, schemaVersion: 2, registeredVia: 'onboarding' });
+    tx.set(db.doc('schools/' + schoolId + '/registration/main'), { ...v, schemaVersion: 1, draftId, registeredBy: uid, registeredAt: now });
+    const billing = TRIAL_DAYS[planId]
+      ? { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + TRIAL_DAYS[planId] * 86400000), studentLimit: 50, staffLimit: 10 }
+      : { plan: planId, status: 'active', startedOn: now.toDate().toISOString().slice(0, 10), studentLimit: plan.data().studentLimit, staffLimit: plan.data().staffLimit, storageMb: plan.data().storageMb, monthlyPrice: plan.data().monthlyPrice };
+    tx.set(db.doc('schools/' + schoolId + '/billing/main'), billing);
+    tx.set(db.doc('invites/' + inviteId), { schoolId, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: uid });
+    tx.set(db.doc('platformAudit/' + auditId), { actor: uid, actorEmail: email, action: 'register-school', schoolId, reason,
+      detail: JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: billing.plan, draftId, via: 'onboarding' }).slice(0, 1500), at: now });
+    tx.update(db.doc('schoolReservations/' + schoolId), { status: 'used', usedAt: now });
+    tx.update(draftRef, { status: 'registered', registeredAt: now, registeredBy: uid });
+    return { schoolId, alreadyRegistered: false, ownerEmail: v.ownerEmail };
+  });
+});
