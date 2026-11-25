@@ -756,7 +756,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     return h('form', { id: 'ob-form', novalidate: true, onsubmit: (e) => { e.preventDefault(); next(); } },
       h('h2', {}, CATEGORIES[S.step].id + '. ' + CATEGORIES[S.step].title),
       dupePanel(),
-      h('div', { class: 'ob-grid' }, cat === 'A' ? [fields.slice(0, 1).map(input), idBlock(), fields.slice(1).map(input)] : fields.map(input)),
+      h('div', { class: 'ob-grid' }, (cat === 'A' ? [...fields.slice(0, 1).map(input), idBlock(), ...fields.slice(1).map(input)] : fields.map(input))),
       cat === 'J' ? themePreview() : null,
       cat === 'K' ? domainPanel() : null,
       h('button', { type: 'submit', hidden: true }));

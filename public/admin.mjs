@@ -246,7 +246,7 @@ function closeOnboarding() {
 }
 async function openRegister(draftId) {
   if (!isAdmin()) { toast('Only a platform administrator can register schools.'); location.hash = '#/schools'; return; }
-  const mod = await import('./onboarding.mjs?v=batch-102');
+  const mod = await import('./onboarding.mjs?v=batch-103');
   await mod.mountOnboarding({
     db, app, user: S.user, h, toast, friendly,
     plans: async () => {
