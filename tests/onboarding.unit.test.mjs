@@ -262,3 +262,13 @@ test('every public module the app loads by name is allowed through .htaccess (a 
   const allowed = htaccess.match(/RewriteRule \^\(sign-in[^\n]*\)\$ public/)[0];
   for (const name of ['onboarding.mjs', 'consent.mjs', 'admission-desk.mjs', 'admin.mjs', 'sign-in.mjs', 'platform.mjs', 'school.mjs']) assert.ok(allowed.includes(name.replace('.', '\\.')), name);
 });
+
+test('Regression: every field F001 to F120 exists exactly once (F003, the school ID, is the automatic ID box)', () => {
+  const ids = FIELDS.map((f) => f.id);
+  for (let n = 1; n <= 120; n += 1) {
+    const id = 'F' + String(n).padStart(3, '0');
+    assert.equal(ids.filter((x) => x === id).length, id === 'F003' ? 0 : 1, id);
+  }
+  assert.equal(CATEGORIES.length, 15);
+  assert.equal(new Set(FIELDS.map((f) => f.cat)).size, 15);
+});

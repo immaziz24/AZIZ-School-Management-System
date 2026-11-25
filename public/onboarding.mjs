@@ -419,8 +419,17 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     try { drafts = (await call('listOnboardingDrafts', {})).drafts || []; } catch { drafts = []; }
     const list = h('div', { class: 'ob-list' }, drafts.length ? drafts.map((d) => h('a', { href: '#/schools/register/' + d.id },
       h('b', {}, d.values?.name || 'Untitled registration'), h('div', { class: 'muted' }, 'Step ' + ((d.step ?? 0) + 1) + ' of ' + (ACTIVE.length + 1) + ' | ' + progressOf(d.values || {}) + ' sections complete | last saved ' + (d.updatedAt ? new Date(d.updatedAt).toLocaleString('en-IN') : 'just now')))) : h('p', { class: 'muted' }, 'No unfinished registrations.'));
+    let enabled = true;
+    try { enabled = (await call('getOnboardingFlag', {})).enabled; } catch { /* shown as on */ }
+    const flagBtn = h('button', { type: 'button', class: 'btn sm', onclick: async () => {
+      if (enabled && !confirm('Switch off new registrations? Drafts stay saved and finished schools are not affected.')) return;
+      try { enabled = (await call('setOnboardingFlag', { enabled: !enabled })).enabled; flagText.textContent = flagLine(); flagBtn.textContent = enabled ? 'Switch off' : 'Switch on'; } catch (e) { toast(e?.message || friendly(e)); }
+    } }, enabled ? 'Switch off' : 'Switch on');
+    const flagLine = () => 'New registrations are ' + (enabled ? 'ON' : 'OFF') + '.';
+    const flagText = h('span', {}, flagLine());
     root.replaceChildren(shell(h('div', {},
       h('h2', {}, 'Register a school'),
+      h('p', { class: 'ob-help' }, flagText, ' ', flagBtn),
       h('p', { class: 'muted' }, 'Fill the school\'s details in sections. Your work is saved as you go, so you can leave and come back.'),
       h('p', {}, h('a', { class: 'btn gold', href: '#/schools/register/new', style: 'text-decoration:none;display:inline-block' }, 'Start a new registration')),
       h('h3', { style: 'margin-top:22px' }, 'Unfinished registrations'), list), true));
@@ -826,7 +835,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     try {
       if (dirty && !(await persist())) throw new Error('The draft could not be saved first.');
       const result = await call('registerSchool', { draftId: S.draftId, reason: S.reason.trim() });
-      toast('School registered. Tell the owner to sign in at /app with ' + (result.ownerEmail || S.values.ownerEmail) + ' and accept the invitation.');
+      toast('School registered' + (result.job === 'needs-retry' ? ', but some setup needs a retry (open the school and press Retry setup)' : '') + '. ' + (result.welcomeEmail === 'sent' ? 'The welcome email was sent. ' : result.welcomeEmail === 'not-requested' ? '' : 'The welcome email was not sent (' + result.welcomeEmail + '). ') + 'The owner signs in at /app with ' + (result.ownerEmail || S.values.ownerEmail) + ' and accepts the invitation.');
       unmountOnboarding();
       ctx.goSchool(result.schoolId);
     } catch (error) {

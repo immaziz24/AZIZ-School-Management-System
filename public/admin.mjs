@@ -246,7 +246,7 @@ function closeOnboarding() {
 }
 async function openRegister(draftId) {
   if (!isAdmin()) { toast('Only a platform administrator can register schools.'); location.hash = '#/schools'; return; }
-  const mod = await import('./onboarding.mjs?v=batch-101');
+  const mod = await import('./onboarding.mjs?v=batch-102');
   await mod.mountOnboarding({
     db, app, user: S.user, h, toast, friendly,
     plans: async () => {
@@ -288,11 +288,23 @@ async function viewSchool(id) {
 
   // Registration record (Mark 4): verification, the owner's consent and activation. Loaded from the server because the record is not readable in the browser.
   const regBody = h('div', {}, h('span', { class: 'spin' }), ' Loading.');
+  const auditBox = h('div', { class: 'muted' }, 'Open to load.');
+  const auditDetails = h('details', {}, h('summary', {}, 'Audit history'), auditBox);
   const regCard = h('div', { class: 'card' }, h('h3', {}, 'Registration, consent and activation'), regBody);
   (async () => {
     try {
       const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js');
       const fn = (name, data) => httpsCallable(getFunctions(app, 'asia-south1'), name)(data).then((r) => r.data);
+      let auditLoaded = false;
+      auditDetails.addEventListener('toggle', async () => {
+        if (!auditDetails.open || auditLoaded) return;
+        auditBox.textContent = 'Loading.';
+        try {
+          const a = await fn('listRegistrationAudit', { schoolId: school.id });
+          auditLoaded = true;
+          auditBox.replaceChildren(a.rows.length ? h('table', { class: 'tbl' }, h('tbody', {}, a.rows.map((e) => h('tr', {}, h('td', {}, e.at ? new Date(e.at).toLocaleString('en-IN') : '-'), h('td', {}, e.action), h('td', {}, e.actor), h('td', { class: 'muted' }, e.reason + (e.correlationId ? ' [' + e.correlationId + ']' : '')))))) : 'No entries.');
+        } catch (error) { auditBox.textContent = 'Could not load. ' + (error?.message || ''); }
+      });
       const r = await fn('getRegistrationStatus', { schoolId: school.id });
       if (!r.found) { regBody.replaceChildren(h('p', { class: 'muted' }, 'This school was not registered through the registration wizard, so there is no registration record.')); return; }
       const paise = (n) => money(Number(n || 0) / 100);
@@ -301,6 +313,11 @@ async function viewSchool(id) {
         h('p', {}, 'Verification: ', h('span', { class: 'pill ' + (r.verificationStatus === 'Verified' ? 'ok' : r.verificationStatus === 'Rejected' ? 'bad' : 'warn') }, r.verificationStatus)),
         h('p', {}, 'Owner consent: ', r.consent.status === 'accepted' ? h('span', { class: 'pill ok' }, 'Accepted by ' + r.consent.by + ' on ' + new Date(r.consent.at).toLocaleDateString('en-IN')) : h('span', { class: 'pill warn' }, 'Pending the owner')),
         h('p', {}, 'Activation: ', h('span', { class: 'pill ' + (r.activationStatus === 'Active' ? 'ok' : 'warn') }, r.activationStatus)),
+        h('p', {}, 'Setup: ', r.job ? h('span', { class: 'pill ' + (r.job.state === 'provisioned' ? 'ok' : 'warn') }, r.job.state === 'provisioned' ? 'Complete' : r.job.state === 'needs-retry' ? 'Needs retry' : 'In progress') : h('span', { class: 'muted' }, 'no job record'),
+          r.job ? h('span', { class: 'muted' }, ' files ' + (r.job.steps.files || '-') + ', academic ' + (r.job.steps.academic || '-') + ', email ' + (r.job.steps.welcomeEmail || '-')) : null),
+        h('p', {}, 'Owner invitation: ', r.invitation ? h('span', { class: 'pill ' + (r.invitation.status === 'accepted' ? 'ok' : r.invitation.status === 'pending' ? 'warn' : 'bad') }, r.invitation.status) : h('span', { class: 'muted' }, 'none'),
+          r.invitation && r.invitation.status === 'pending' && r.invitation.expiresAt ? h('span', { class: 'muted' }, ' expires ' + new Date(r.invitation.expiresAt).toLocaleDateString('en-IN')) : null),
+        h('p', {}, 'Welcome email: ', h('span', { class: 'pill ' + (r.welcomeEmail.status === 'sent' ? 'ok' : r.welcomeEmail.status === 'not-requested' ? '' : 'warn') }, r.welcomeEmail.status), r.welcomeEmail.note ? h('span', { class: 'muted' }, ' ' + r.welcomeEmail.note) : null),
         h('p', { class: 'muted' }, 'Website published: ' + (r.siteWebsitePublished ? 'yes' : 'no') + (r.domain ? ' | custom domain: ' + (r.domain.customDomain ? r.domain.customDomainStatus + ' (HTTPS ' + r.domain.ssl + ')' : 'none') : '') + ' | ' + r.files + ' file(s) uploaded'),
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: () => guarded(async () => {
@@ -308,11 +325,24 @@ async function viewSchool(id) {
             if (!v) return;
             await fn('setVerificationStatus', { schoolId: school.id, status: v.status, reason: v.reason }); toast('Verification status saved.'); await refresh();
           }) }, 'Set verification'),
+          h('button', { class: 'btn', onclick: () => guarded(async () => {
+            const f = await fn('getConfirmationPdf', { schoolId: school.id });
+            const bytes = Uint8Array.from(atob(f.data), (c) => c.charCodeAt(0));
+            const link = h('a', { href: URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })), download: f.fileName }); document.body.append(link); link.click(); link.remove();
+          }) }, 'Download confirmation PDF'),
+          h('button', { class: 'btn', onclick: () => guarded(async () => { const x = await fn('sendWelcomeEmail', { schoolId: school.id }); toast(x.status === 'sent' ? 'Welcome email sent.' : 'Not sent (' + x.status + '). ' + (x.note || '')); await refresh(); }) }, 'Send welcome email'),
+          r.invitation && r.invitation.status === 'accepted' ? null : h('button', { class: 'btn', onclick: () => guarded(async () => {
+            const v = await formDialog({ title: 'Resend the owner invitation', note: 'Gives the invitation a new 14-day expiry. It does not send an email; use Send welcome email for that.', ok: 'Resend', fields: [REASON] });
+            if (!v) return;
+            await fn('resendOwnerInvitation', { schoolId: school.id, reason: v.reason }); toast('Invitation is pending again.'); await refresh();
+          }) }, 'Resend invitation'),
+          r.job && r.job.state === 'provisioned' ? null : h('button', { class: 'btn', onclick: () => guarded(async () => { const x = await fn('retryProvisioning', { schoolId: school.id }); toast('Setup is ' + x.state + '.'); await refresh(); }) }, 'Retry setup'),
           r.activationStatus === 'Active' ? null : h('button', { class: 'btn gold', onclick: () => guarded(async () => {
             const v = await formDialog({ title: 'Activate ' + school.name, note: 'Needs the school marked Verified and the owner\'s acceptance of the current terms and privacy agreement.', ok: 'Activate', fields: [REASON] });
             if (!v) return;
             await fn('activateSchool', { schoolId: school.id, reason: v.reason }); toast('School activated.'); await refresh();
-          }) }, 'Activate registration')));
+          }) }, 'Activate registration')),
+        auditDetails);
     } catch (error) { regBody.replaceChildren(h('p', { class: 'muted' }, 'Could not load the registration record. ' + (error?.message || ''))); }
   })();
 

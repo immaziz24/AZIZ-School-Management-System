@@ -9,7 +9,7 @@ const grab = (re) => { const m = src.match(re); assert.ok(m, 'missing ' + re); r
 const block = src.match(/\/\/ --- registration rules begin[\s\S]*?\/\/ --- registration rules end ---/);
 assert.ok(block, 'registration rules block is missing');
 const code = "class HttpsError extends Error { constructor(code, message) { super(message); this.code = code; } }\n" + block[0];
-const lib = new Function(code + '\n; return { slugifySchoolName, normalName, checkRegistration, cleanDraftValues, buildAcademicPlan, moneyToMinor, parseSections, sniffFile, slotAccepts, normalizeSubdomain, buildQuote, LEGAL_VERSIONS, VERIFICATION_STATUSES, LOGIN_ROLES, toMinor, UPLOAD_SLOTS, THEME_KEYS, RESERVED_SUBDOMAINS, FACILITY_KEYS, NEW_SCHOOL_ID, DRAFT_ID, HttpsError, DRAFT_KEYS, REQUIRED_REGISTRATION };')();
+const lib = new Function(code + '\n; return { slugifySchoolName, normalName, checkRegistration, cleanDraftValues, buildAcademicPlan, moneyToMinor, parseSections, sniffFile, slotAccepts, normalizeSubdomain, buildQuote, buildPdf, confirmationLines, welcomeEmailText, redactPersonal, INVITE_DAYS, LEGAL_VERSIONS, VERIFICATION_STATUSES, LOGIN_ROLES, toMinor, UPLOAD_SLOTS, THEME_KEYS, RESERVED_SUBDOMAINS, FACILITY_KEYS, NEW_SCHOOL_ID, DRAFT_ID, HttpsError, DRAFT_KEYS, REQUIRED_REGISTRATION };')();
 
 const good = {
   name: 'Green Valley School', schoolType: 'Private unaided', schoolLevel: 'Secondary', genderComposition: 'Co-educational', medium: 'English',
@@ -250,4 +250,64 @@ test('Mark 4: legal versions and statuses exist', () => {
   assert.match(lib.LEGAL_VERSIONS.terms, /^20[0-9]{2}-/);
   assert.match(lib.LEGAL_VERSIONS.privacy, /^20[0-9]{2}-/);
   assert.ok(lib.VERIFICATION_STATUSES.includes('Verified') && lib.VERIFICATION_STATUSES[0] === 'Unverified');
+});
+
+const info = { generatedOn: '2026-11-25', name: 'Green Valley (School)', schoolId: 'green-valley', registeredOn: '2026-11-25', planName: 'Growth', cycle: 'Monthly', recurringMinor: 99900, discountPercent: 10, setupMinor: 150000,
+  trial: true, trialDays: 30, verificationStatus: 'Verified', consent: 'Pending the owner', activationStatus: 'Pending activation', ownerEmail: 'owner@gv.in', invitation: 'pending', websitePublished: false, domain: 'none' };
+
+test('Mark 5: the confirmation PDF is a valid, readable file with the key facts and no secrets', () => {
+  const pdf = lib.buildPdf(lib.confirmationLines(info));
+  const text = pdf.toString('latin1');
+  assert.ok(text.startsWith('%PDF-1.4'));
+  assert.ok(text.trimEnd().endsWith('%%EOF'));
+  assert.ok(text.includes('green-valley') && text.includes('Growth') && text.includes('Rs 999') && text.includes('Rs 1,500'));
+  assert.ok(text.includes('Green Valley \\(School\\)'), 'brackets are escaped');
+  assert.ok(!/password|token|https?:\/\//i.test(text.replace('no passwords and no sign-in links', '')));
+  // Every cross-reference offset points at its object.
+  const start = Number(text.match(/startxref\n(\d+)/)[1]);
+  assert.ok(text.slice(start).startsWith('xref'));
+  const rows = text.slice(start).split('\n').filter((l) => /^\d{10} 00000 n/.test(l));
+  rows.forEach((row, i) => assert.ok(text.slice(Number(row.slice(0, 10))).startsWith((i + 1) + ' 0 obj'), 'object ' + (i + 1)));
+});
+
+test('Mark 5: the PDF copes with other scripts, long text and many lines', () => {
+  const many = Array.from({ length: 100 }, (_, i) => ({ text: 'Line ' + i + ' ' + 'x'.repeat(200) }));
+  const pdf = lib.buildPdf(many).toString('latin1');
+  assert.equal((pdf.match(/\/Type \/Page /g) || []).length, 3);
+  const odd = lib.buildPdf([{ text: 'ডি এ ভি স্কুল \\ ( ) é' }]).toString('latin1');
+  assert.ok(odd.includes('?') && odd.includes('\\\\') && odd.includes('\\(') && odd.includes('\\)'));
+  assert.ok(lib.buildPdf([]).length > 100);
+});
+
+test('Mark 5: the welcome email goes to the owner, with no password', () => {
+  const text = lib.welcomeEmailText({ ownerName: 'A Owner', name: 'Green Valley', schoolId: 'green-valley', ownerEmail: 'owner@gv.in' });
+  assert.ok(text.includes('Hello A Owner') && text.includes('owner@gv.in') && text.includes('green-valley') && text.includes('/app'));
+  assert.ok(/never send passwords/i.test(text));
+  assert.ok(!/password:/i.test(text));
+});
+
+test('Mark 5: audit text is masked before it is shown', () => {
+  assert.equal(lib.redactPersonal('owner@school.in asked'), 'o***@school.in asked');
+  assert.equal(lib.redactPersonal('mobile 9830012345 ok'), 'mobile 98******45 ok');
+  assert.equal(lib.redactPersonal(undefined), '');
+  assert.equal(lib.INVITE_DAYS, 14);
+});
+
+test('Mark 5: the server functions that must be admin-only all check the role first', () => {
+  for (const name of ['getOnboardingFlag', 'setOnboardingFlag', 'retryProvisioning', 'sendWelcomeEmail', 'resendOwnerInvitation', 'expireOwnerInvitationsNow', 'getConfirmationPdf',
+    'listRegistrationAudit', 'getRegistrationStatus', 'activateSchool', 'setVerificationStatus', 'quoteSubscription', 'uploadOnboardingFile', 'removeOnboardingFile', 'previewOnboardingFile',
+    'reserveSubdomain', 'checkCustomDomain', 'cleanupAbandonedDrafts', 'registerSchool', 'saveOnboardingDraft', 'getOnboardingDraft', 'listOnboardingDrafts', 'deleteOnboardingDraft']) {
+    const at = src.indexOf('exports.' + name + ' = ');
+    assert.ok(at > 0, name);
+    const body = src.slice(at, at + 400);
+    assert.ok(/requirePlatformAdmin\(request\)/.test(body), name + ' must check the platform admin first');
+  }
+  // The two owner-side functions require the school's own owner, never an admin.
+  for (const name of ['getConsentStatus', 'acceptSchoolConsent']) assert.ok(/requireOwner\(request\)/.test(src.slice(src.indexOf('exports.' + name + ' = '), src.indexOf('exports.' + name + ' = ') + 300)), name);
+});
+
+test('Mark 5: one invitation, one welcome record per registration (the fixed record id stops a double send)', () => {
+  assert.ok(/'EM-' \+ \(draftId \|\| r\.draftId \|\| schoolId\) \+ '-welcome'/.test(src));
+  assert.ok(/ref\.create\(/.test(src));
+  assert.ok(/expiresAt: Timestamp\.fromMillis\(Date\.now\(\) \+ INVITE_DAYS/.test(src));
 });

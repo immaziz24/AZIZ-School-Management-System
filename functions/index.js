@@ -1214,6 +1214,73 @@ function buildQuote(plan, planId, v) {
     features: Array.isArray(plan.features) ? plan.features.slice(0, 40).map((f) => String(f).slice(0, 80)) : [],
   };
 }
+
+// ----- Mark 5: confirmation PDF, welcome email text and audit redaction (pure code) -----
+const INVITE_DAYS = 14;
+const APP_URL = 'https://azizschoolmanagement.plateria.in/app';
+// A small PDF writer: A4, Helvetica, text lines only. Text is converted to Latin-1 (other letters become '?'), so a name in another script
+// shows with question marks in the PDF; the registration record itself is not changed.
+function pdfSafe(value) { return String(value ?? '').replace(/[^\x20-\x7e -ÿ]/g, '?').replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)'); }
+function buildPdf(lines) {
+  const perPage = 44;
+  const pages = [];
+  for (let i = 0; i < Math.max(lines.length, 1); i += perPage) pages.push(lines.slice(i, i + perPage));
+  const objects = [];
+  objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objects[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  const kids = [];
+  pages.forEach((page, index) => {
+    const pageId = 5 + index * 2; const contentId = pageId + 1;
+    let y = 790; let stream = '';
+    for (const line of page) {
+      const size = line.size || 11;
+      stream += 'BT /' + (line.bold ? 'F2' : 'F1') + ' ' + size + ' Tf 56 ' + y + ' Td (' + pdfSafe(String(line.text ?? '').slice(0, 110)) + ') Tj ET\n';
+      y -= size + 6 + (line.gap || 0);
+    }
+    objects[pageId] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ' + contentId + ' 0 R >>';
+    objects[contentId] = '<< /Length ' + Buffer.byteLength(stream, 'latin1') + ' >>\nstream\n' + stream + 'endstream';
+    kids.push(pageId + ' 0 R');
+  });
+  objects[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + kids.length + ' >>';
+  let out = '%PDF-1.4\n'; const offsets = [];
+  for (let id = 1; id < objects.length; id += 1) { offsets[id] = Buffer.byteLength(out, 'latin1'); out += id + ' 0 obj\n' + objects[id] + '\nendobj\n'; }
+  const xref = Buffer.byteLength(out, 'latin1');
+  out += 'xref\n0 ' + objects.length + '\n0000000000 65535 f \n';
+  for (let id = 1; id < objects.length; id += 1) out += String(offsets[id]).padStart(10, '0') + ' 00000 n \n';
+  out += 'trailer\n<< /Size ' + objects.length + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n';
+  return Buffer.from(out, 'latin1');
+}
+// The confirmation document. It carries no password, token or sign-in link.
+function confirmationLines(info) {
+  const money = (minor) => 'Rs ' + (Number(minor || 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const row = (label, value) => ({ text: label + ': ' + (value === undefined || value === '' ? '-' : value) });
+  return [
+    { text: 'AZIZ School Management System', size: 18, bold: true, gap: 4 },
+    { text: 'Registration confirmation', size: 14, bold: true, gap: 10 },
+    row('Generated on', info.generatedOn),
+    row('School name', info.name), row('School ID', info.schoolId), row('Registered on', info.registeredOn), { text: '', size: 6 },
+    { text: 'Plan', bold: true },
+    row('Plan', info.planName), row('Billing cycle', info.cycle), row('Recurring price', money(info.recurringMinor) + (info.discountPercent ? ' (after ' + info.discountPercent + '% discount)' : '')),
+    row('Setup fee', money(info.setupMinor)), row('Free trial', info.trial ? info.trialDays + ' days' : 'No'), { text: '', size: 6 },
+    { text: 'Status', bold: true },
+    row('Verification', info.verificationStatus), row('Owner consent', info.consent), row('Activation', info.activationStatus),
+    row('Owner login email', info.ownerEmail), row('Owner invitation', info.invitation), row('Website published', info.websitePublished ? 'Yes' : 'No'),
+    row('Custom domain', info.domain), { text: '', size: 6 },
+    { text: 'This document contains no passwords and no sign-in links.', size: 9 },
+  ];
+}
+function welcomeEmailText(info) {
+  return ['Hello ' + (info.ownerName || 'there') + ',', '',
+    'Your school, ' + info.name + ', has been registered on AZIZ School Management System.', 'School ID: ' + info.schoolId, '',
+    'To get started:', '1. Open ' + APP_URL, '2. Sign in, or create an account, with this email address: ' + info.ownerEmail,
+    '3. Verify your email if asked, then accept the invitation for ' + info.name + '.', '4. Read and accept the terms and the privacy agreement.', '',
+    'We never send passwords by email. If you were not expecting this message, you can ignore it.'].join('\n');
+}
+// Masks personal details in audit text: "owner@school.in" becomes "o***@school.in" and long digit runs are shortened.
+function redactPersonal(value) {
+  return String(value ?? '').replace(/([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, '$1***@$2').replace(/\b(\d{2})\d{5,}(\d{2})\b/g, '$1******$2');
+}
 const TIME_PATTERN = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const classRange = (v) => { const a = CLASS_LADDER.indexOf(v.lowestClass); const b = CLASS_LADDER.indexOf(v.highestClass); return a >= 0 && b >= a ? CLASS_LADDER.slice(a, b + 1) : []; };
 // Sections are stored as "Class 1=A,B|Class 2=A".
@@ -1446,6 +1513,7 @@ exports.saveOnboardingDraft = onCall({ memory: '256MiB', timeoutSeconds: 60 }, a
   const expected = Number(d.revision);
   if (!Number.isInteger(expected) || expected < 0) throw new HttpsError('invalid-argument', 'Unknown revision.');
   const values = cleanDraftValues(d.values);
+  if (expected === 0 && !(await onboardingEnabled())) throw new HttpsError('failed-precondition', 'New registrations are switched off at the moment. Turn them on from the Register a school page.');
   const ref = db.doc('onboardingDrafts/' + draftId);
   return db.runTransaction(async (tx) => {
     const found = await tx.get(ref);
@@ -1543,6 +1611,144 @@ exports.acceptSchoolConsent = onCall({ memory: '256MiB', timeoutSeconds: 30 }, a
   return { ok: true };
 });
 
+// ----- Mark 5: setup jobs, invitation expiry, welcome email, confirmation PDF and audit history -----
+async function onboardingEnabled() {
+  const flag = await db.doc('platformConfig/onboarding').get();
+  return !(flag.exists && flag.data().enabled === false);
+}
+const recordJob = (draftId, patch) => db.doc('provisioningJobs/' + draftId).set({ ...patch, updatedAt: Timestamp.now() }, { merge: true }).catch((error) => logger.error('recordJob failed', draftId, error));
+const newEventId = (prefix) => prefix + '-' + Date.now().toString(36).toUpperCase() + nodeCrypto.randomBytes(3).toString('hex').toUpperCase();
+
+// Sends the owner's welcome email and records the result in emailOutbox. The recipient is always the owner email saved at registration,
+// never something sent from the browser. The first automatic send for a registration uses a fixed record id, so a repeated request cannot send twice.
+async function queueWelcome(schoolId, { draftId = '', manual = false } = {}) {
+  const regRef = db.doc('schools/' + schoolId + '/registration/main');
+  const reg = await regRef.get();
+  if (!reg.exists || !reg.data().ownerEmail) return { status: 'failed', error: 'No owner email on record.' };
+  const r = reg.data();
+  const outboxId = manual ? newEventId('EM') : 'EM-' + (draftId || r.draftId || schoolId) + '-welcome';
+  const ref = db.doc('emailOutbox/' + outboxId);
+  try { await ref.create({ schoolId, to: r.ownerEmail, template: 'owner-welcome', status: 'queued', attempts: 0, correlationId: r.draftId || '', createdAt: Timestamp.now() }); }
+  catch (error) { const old = await ref.get(); return { status: old.exists ? old.data().status : 'failed', outboxId, duplicate: true }; }
+  let result;
+  try { result = await sendEmail({ to: r.ownerEmail, subject: 'Your school is registered on AZIZ', text: welcomeEmailText({ ownerName: r.ownerName, name: r.name, schoolId, ownerEmail: r.ownerEmail }) }); }
+  catch (error) { result = { ok: false, error: String(error?.message || error).slice(0, 200) }; }
+  const status = result.ok ? 'sent' : (result.hint ? 'not-configured' : 'failed');
+  const note = result.ok ? '' : String(result.hint || result.error || '').slice(0, 300);
+  await ref.update({ status, attempts: 1, lastError: note, ...(result.ok ? { sentAt: Timestamp.now() } : {}) });
+  await regRef.set({ welcomeEmail: { status, at: Timestamp.now(), outboxId, note } }, { merge: true });
+  return { status, outboxId, note };
+}
+
+exports.getOnboardingFlag = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => { await requirePlatformAdmin(request); return { enabled: await onboardingEnabled() }; });
+exports.setOnboardingFlag = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const enabled = (request.data || {}).enabled === true;
+  const now = Timestamp.now();
+  const batch = db.batch();
+  batch.set(db.doc('platformConfig/onboarding'), { enabled, changedBy: uid, changedAt: now }, { merge: true });
+  batch.set(db.doc('platformAudit/' + newEventId('A')), { actor: uid, actorEmail: email, action: enabled ? 'onboarding-on' : 'onboarding-off', schoolId: '', reason: 'Registration switch', detail: JSON.stringify({ enabled }), at: now });
+  await batch.commit();
+  return { enabled };
+});
+
+// Finishes anything a registration left undone: files, academic setup and the welcome email. Safe to run again.
+exports.retryProvisioning = onCall({ memory: '512MiB', timeoutSeconds: 300 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const schoolId = text((request.data || {}).schoolId, 40);
+  if (!NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('invalid-argument', 'Unknown school.');
+  const regRef = db.doc('schools/' + schoolId + '/registration/main');
+  const reg = await regRef.get();
+  if (!reg.exists || !reg.data().draftId) throw new HttpsError('not-found', 'This school has no registration record.');
+  const r = reg.data(); const draftId = r.draftId;
+  const steps = { school: 'done', files: 'pending', academic: 'pending', welcomeEmail: r.welcomeEmail ? r.welcomeEmail.status : 'not-requested' };
+  try { await moveDraftFiles(draftId, schoolId); steps.files = 'done'; } catch (error) { steps.files = 'failed'; logger.error('retry files failed', schoolId, error); }
+  if (r.academicProvisioned === true) steps.academic = 'done';
+  else { try { await provisionAcademic(schoolId, r); steps.academic = 'done'; } catch (error) { steps.academic = 'failed'; logger.error('retry academic failed', schoolId, error); } }
+  if (String(r.invitationMethod || '').startsWith('Email') && steps.welcomeEmail !== 'sent') steps.welcomeEmail = (await queueWelcome(schoolId, { draftId, manual: true })).status;
+  const state = Object.values(steps).includes('failed') ? 'needs-retry' : 'provisioned';
+  const prior = await db.doc('provisioningJobs/' + draftId).get();
+  await recordJob(draftId, { schoolId, state, steps, attempts: (prior.exists ? Number(prior.data().attempts) || 1 : 0) + 1 });
+  await db.doc('platformAudit/' + newEventId('A')).set({ actor: uid, actorEmail: email, action: 'retry-provisioning', schoolId, reason: 'Finish registration setup', detail: JSON.stringify({ steps }), correlationId: draftId, at: Timestamp.now() });
+  return { state, steps };
+});
+
+// Sends the welcome email again (for example after email was set up, or if the first one failed).
+exports.sendWelcomeEmail = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const schoolId = text((request.data || {}).schoolId, 40);
+  if (!NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('invalid-argument', 'Unknown school.');
+  const result = await queueWelcome(schoolId, { manual: true });
+  await db.doc('platformAudit/' + newEventId('A')).set({ actor: uid, actorEmail: email, action: 'welcome-email', schoolId, reason: 'Send welcome email', detail: JSON.stringify({ status: result.status }), at: Timestamp.now() });
+  return result;
+});
+
+// Gives an invitation a new expiry. An accepted invitation cannot be reopened.
+exports.resendOwnerInvitation = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const schoolId = text(d.schoolId, 40); const reason = text(d.reason, 300);
+  if (!NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('invalid-argument', 'Unknown school.');
+  if (reason.length < 10) throw new HttpsError('invalid-argument', 'Give a reason of at least 10 characters.');
+  const reg = await db.doc('schools/' + schoolId + '/registration/main').get();
+  const inviteId = reg.exists ? reg.data().ownerInviteId : '';
+  if (!inviteId) throw new HttpsError('not-found', 'This school has no owner invitation on record.');
+  const ref = db.doc('invites/' + inviteId);
+  const expiresAt = Timestamp.fromMillis(Date.now() + INVITE_DAYS * 86400000);
+  await db.runTransaction(async (tx) => {
+    const invite = await tx.get(ref);
+    if (!invite.exists || invite.data().schoolId !== schoolId || invite.data().role !== 'owner') throw new HttpsError('not-found', 'The invitation was not found.');
+    if (invite.data().status === 'accepted') throw new HttpsError('failed-precondition', 'The owner has already accepted this invitation.');
+    tx.update(ref, { status: 'pending', expiresAt });
+  });
+  await db.doc('platformAudit/' + newEventId('A')).set({ actor: uid, actorEmail: email, action: 'resend-owner-invite', schoolId, reason, detail: JSON.stringify({ inviteId, days: INVITE_DAYS }), correlationId: reg.data().draftId || '', at: Timestamp.now() });
+  return { ok: true, expiresAt: expiresAt.toMillis() };
+});
+
+// Marks pending owner invitations that ran past their expiry as expired. Acceptance needs status "pending", so an expired one cannot be used.
+async function expireInvitations() {
+  const old = await db.collection('invites').where('expiresAt', '<', Timestamp.now()).limit(300).get();
+  let expired = 0;
+  for (const doc of old.docs) {
+    if (doc.data().status !== 'pending') continue;
+    await doc.ref.update({ status: 'expired', expiredAt: Timestamp.now() });
+    expired += 1;
+  }
+  return expired;
+}
+exports.expireOwnerInvitations = onSchedule({ schedule: '10 * * * *', timeZone: 'Asia/Kolkata', memory: '256MiB', timeoutSeconds: 120 }, async () => { logger.info('expired invitations', await expireInvitations()); });
+exports.expireOwnerInvitationsNow = onCall({ memory: '256MiB', timeoutSeconds: 120 }, async (request) => { await requirePlatformAdmin(request); return { expired: await expireInvitations() }; });
+
+exports.getConfirmationPdf = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request);
+  const schoolId = text((request.data || {}).schoolId, 40);
+  if (!NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('invalid-argument', 'Unknown school.');
+  const [reg, consent] = await Promise.all([db.doc('schools/' + schoolId + '/registration/main').get(), db.doc('schools/' + schoolId + '/registration/consent').get()]);
+  if (!reg.exists || !reg.data().planSnapshot) throw new HttpsError('not-found', 'This school has no registration record.');
+  const r = reg.data(); const snap = r.planSnapshot;
+  const invite = r.ownerInviteId ? await db.doc('invites/' + r.ownerInviteId).get() : null;
+  const date = (t) => (t && t.toDate ? t.toDate().toISOString().slice(0, 10) : '');
+  const accepted = consent.exists && consent.data().termsVersion === LEGAL_VERSIONS.terms && consent.data().privacyVersion === LEGAL_VERSIONS.privacy;
+  const pdf = buildPdf(confirmationLines({
+    generatedOn: new Date().toISOString().slice(0, 10), name: r.name, schoolId, registeredOn: date(r.registeredAt), planName: snap.planName, cycle: snap.cycle, recurringMinor: snap.recurringMinor,
+    discountPercent: snap.discountPercent, setupMinor: snap.setupMinor, trial: snap.trial, trialDays: snap.trialDays, verificationStatus: r.verificationStatus || 'Unverified',
+    consent: accepted ? 'Accepted on ' + date(consent.data().at) : 'Pending the owner', activationStatus: r.activationStatus || 'Pending activation', ownerEmail: r.ownerEmail,
+    invitation: invite && invite.exists ? invite.data().status : 'unknown', websitePublished: r.websitePublished === true,
+    domain: r.domainState && r.domainState.customDomain ? r.domainState.customDomain + ' (' + r.domainState.customDomainStatus + ', not live)' : 'none' }));
+  await db.doc('platformAudit/' + newEventId('A')).set({ actor: uid, actorEmail: email, action: 'confirmation-pdf', schoolId, reason: 'Downloaded confirmation', detail: '{}', correlationId: r.draftId || '', at: Timestamp.now() });
+  return { fileName: 'AZIZ-registration-' + schoolId + '.pdf', data: pdf.toString('base64') };
+});
+
+// The audit trail of one school. Personal details are masked before they leave the server.
+exports.listRegistrationAudit = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const schoolId = text((request.data || {}).schoolId, 40);
+  if (!NEW_SCHOOL_ID.test(schoolId)) throw new HttpsError('invalid-argument', 'Unknown school.');
+  const found = await db.collection('platformAudit').where('schoolId', '==', schoolId).limit(200).get();
+  const rows = found.docs.map((x) => { const e = x.data(); return { id: x.id, at: e.at && e.at.toMillis ? e.at.toMillis() : 0, action: String(e.action || ''), actor: redactPersonal(e.actorEmail || e.actor || ''), reason: redactPersonal(e.reason || ''), detail: redactPersonal(e.detail || '').slice(0, 400), correlationId: String(e.correlationId || '') }; });
+  return { rows: rows.sort((a, b) => b.at - a.at).slice(0, 60) };
+});
+
 // What the admin sees about a registered school's commercial and verification state. These records are never readable from the browser directly.
 exports.getRegistrationStatus = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
   await requirePlatformAdmin(request);
@@ -1551,12 +1757,16 @@ exports.getRegistrationStatus = onCall({ memory: '256MiB', timeoutSeconds: 30 },
   const [reg, consent] = await Promise.all([db.doc('schools/' + schoolId + '/registration/main').get(), db.doc('schools/' + schoolId + '/registration/consent').get()]);
   if (!reg.exists || !reg.data().planSnapshot) return { found: false };
   const r = reg.data();
+  const [invite, job] = await Promise.all([r.ownerInviteId ? db.doc('invites/' + r.ownerInviteId).get() : null, r.draftId ? db.doc('provisioningJobs/' + r.draftId).get() : null]);
   const accepted = consent.exists && consent.data().termsVersion === LEGAL_VERSIONS.terms && consent.data().privacyVersion === LEGAL_VERSIONS.privacy;
   const snap = r.planSnapshot;
   return { found: true, verificationStatus: r.verificationStatus || 'Unverified', activationStatus: r.activationStatus || 'Pending activation',
     consent: accepted ? { status: 'accepted', by: String(consent.data().acceptedEmail || ''), at: consent.data().at.toMillis(), termsVersion: consent.data().termsVersion, privacyVersion: consent.data().privacyVersion } : { status: 'pending' },
     plan: { name: snap.planName, version: snap.planVersion, cycle: snap.cycle, discountPercent: snap.discountPercent, recurringMinor: snap.recurringMinor, setupMinor: snap.setupMinor, trial: snap.trial, trialDays: snap.trialDays },
-    files: Object.keys(r.files || {}).length, siteWebsitePublished: r.websitePublished === true, domain: r.domainState || null };
+    files: Object.keys(r.files || {}).length, siteWebsitePublished: r.websitePublished === true, domain: r.domainState || null,
+    academicProvisioned: r.academicProvisioned === true, welcomeEmail: r.welcomeEmail ? { status: r.welcomeEmail.status, note: r.welcomeEmail.note || '' } : { status: 'not-requested' },
+    invitation: invite && invite.exists ? { status: invite.data().status, expiresAt: invite.data().expiresAt && invite.data().expiresAt.toMillis ? invite.data().expiresAt.toMillis() : 0 } : null,
+    job: job && job.exists ? { state: job.data().state, steps: job.data().steps || {}, attempts: job.data().attempts || 1 } : null };
 });
 
 // Activation is a recorded status. It needs the owner's consent and a verified school, and it is audited. Only a platform administrator can do it.
@@ -1809,6 +2019,7 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
     try { await provisionAcademic(schoolId, reg.data()); return { provisioned: true }; } catch (error) { logger.error('provisionAcademic failed', schoolId, error); return { provisioned: false }; }
   };
   if (first.data().status === 'registered') return { schoolId: first.data().schoolId, alreadyRegistered: true, ...(await finishAcademic(first.data().schoolId)) };
+  if (!(await onboardingEnabled())) throw new HttpsError('failed-precondition', 'New registrations are switched off at the moment.');
   // The plan comes from the saved draft and the catalog on the server. Nothing about price or limits is taken from the browser.
   const planId = text((first.data().values || {}).planId, 40);
   if (!planId) throw new HttpsError('invalid-argument', 'Choose a plan first (step M).');
@@ -1848,7 +2059,7 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
       // Commercial snapshot: the plan version and every figure used, worked out here. Consent starts pending: only the school's owner can accept it, never the admin.
       planSnapshot: { ...quote, quotedAt: now },
       consent: { status: 'pending', requiredTermsVersion: LEGAL_VERSIONS.terms, requiredPrivacyVersion: LEGAL_VERSIONS.privacy },
-      activationStatus: 'Pending activation', ownerLoginEmail: v.ownerEmail,
+      activationStatus: 'Pending activation', ownerLoginEmail: v.ownerEmail, ownerInviteId: inviteId,
     });
     if (subId) tx.update(db.doc('subdomainReservations/' + subId), { status: 'used', usedAt: now, schoolId });
     // A trial is a billing state, not a plan. The record keeps the existing 'trial' plan id (the dashboards rely on it) and remembers the chosen plan as intendedPlan.
@@ -1856,9 +2067,10 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
       ? { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + quote.trialDays * 86400000), studentLimit: 50, staffLimit: 10, intendedPlan: planId, billingCycle: quote.cycle }
       : { plan: planId, status: 'active', startedOn: now.toDate().toISOString().slice(0, 10), studentLimit: quote.studentLimit, staffLimit: quote.staffLimit, storageMb: quote.storageMb, monthlyPrice: quote.monthlyEquivalentMinor / 100, billingCycle: quote.cycle, discountPercent: quote.discountPercent };
     tx.set(db.doc('schools/' + schoolId + '/billing/main'), billing);
-    tx.set(db.doc('invites/' + inviteId), { schoolId, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: uid });
+    // The invitation expires. A scheduled job marks it expired, and an expired invitation can no longer be accepted (the rules need status "pending").
+    tx.set(db.doc('invites/' + inviteId), { schoolId, email: v.ownerEmail, role: 'owner', status: 'pending', createdBy: uid, createdAt: now, expiresAt: Timestamp.fromMillis(Date.now() + INVITE_DAYS * 86400000) });
     tx.set(db.doc('platformAudit/' + auditId), { actor: uid, actorEmail: email, action: 'register-school', schoolId, reason,
-      detail: JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: planId, state: billing.status, cycle: quote.cycle, discountPercent: quote.discountPercent, recurringMinor: quote.recurringMinor, planVersion: quote.planVersion, draftId, via: 'onboarding' }).slice(0, 1500), at: now });
+      detail: JSON.stringify({ name: v.name, owner: v.ownerEmail, plan: planId, state: billing.status, cycle: quote.cycle, discountPercent: quote.discountPercent, recurringMinor: quote.recurringMinor, planVersion: quote.planVersion, draftId, via: 'onboarding' }).slice(0, 1500), correlationId: draftId, at: now });
     tx.update(db.doc('schoolReservations/' + schoolId), { status: 'used', usedAt: now });
     tx.update(draftRef, { status: 'registered', registeredAt: now, registeredBy: uid });
     return { schoolId, alreadyRegistered: false, ownerEmail: v.ownerEmail, v };
@@ -1866,7 +2078,13 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
   // The academic structure is built after the school exists, in chunks. If it fails the school is still registered and a repeat of the call finishes it.
   let provisioned = false; let counts = null;
   if (made.alreadyRegistered) return { schoolId: made.schoolId, alreadyRegistered: true, ...(await finishAcademic(made.schoolId)) };
-  try { await moveDraftFiles(draftId, made.schoolId); } catch (error) { logger.error('moveDraftFiles failed', made.schoolId, error); }
-  try { counts = await provisionAcademic(made.schoolId, made.v); provisioned = true; } catch (error) { logger.error('provisionAcademic failed', made.schoolId, error); }
-  return { schoolId: made.schoolId, alreadyRegistered: false, ownerEmail: made.ownerEmail, provisioned, counts };
+  // Each step is recorded in provisioningJobs/{draftId}. A failed step leaves the school in place and can be retried safely (retryProvisioning).
+  const steps = { school: 'done', files: 'pending', academic: 'pending', welcomeEmail: 'not-requested' };
+  await recordJob(draftId, { schoolId: made.schoolId, state: 'provisioning', steps, attempts: 1, startedAt: Timestamp.now() });
+  try { await moveDraftFiles(draftId, made.schoolId); steps.files = 'done'; } catch (error) { steps.files = 'failed'; logger.error('moveDraftFiles failed', made.schoolId, error); }
+  try { counts = await provisionAcademic(made.schoolId, made.v); provisioned = true; steps.academic = 'done'; } catch (error) { steps.academic = 'failed'; logger.error('provisionAcademic failed', made.schoolId, error); }
+  let welcome = { status: 'not-requested' };
+  if (String(made.v.invitationMethod || '').startsWith('Email')) { welcome = await queueWelcome(made.schoolId, { draftId }); steps.welcomeEmail = welcome.status; }
+  await recordJob(draftId, { state: Object.values(steps).includes('failed') ? 'needs-retry' : 'provisioned', steps });
+  return { schoolId: made.schoolId, alreadyRegistered: false, ownerEmail: made.ownerEmail, provisioned, counts, welcomeEmail: welcome.status, job: Object.values(steps).includes('failed') ? 'needs-retry' : 'provisioned' };
 });
