@@ -98,79 +98,31 @@ beforeEach(async () => {
   for (const [seedPath, data] of seed) assert.equal(await set(ADMIN, seedPath, data), 200, seedPath);
 });
 
-const DRAFT = 'onboardingDrafts/OB-TEST0001';
-const draftData = (extra = {}) => ({ schemaVersion: 1, createdBy: 'padmin', revision: 1, status: 'draft', step: 0, values: { name: 'Green Valley School', town: 'Kolkata' }, ...extra });
-const createDraft = (who, data = draftData(), path = DRAFT) => commit(who, [{ path, data, times: ['createdAt', 'updatedAt'] }]);
-const saveDraft = (who, data, path = DRAFT) => commit(who, [{ path, data, mask: Object.keys(data), times: ['updatedAt'] }]);
+// Drafts, registration records and ID reservations are written and read by server functions only. No browser, not even a platform administrator, may touch them.
+const SERVER_ONLY = ['onboardingDrafts/OB-TEST0001', 'schoolReservations/green-valley', P('registration', 'main')];
 
-test('a platform administrator creates a draft', async () => {
-  await allowed(createDraft('padmin'), 'create');
-  await allowed(get('padmin', DRAFT), 'read back');
+test('no browser can read or write onboarding drafts, reservations or registration records', async () => {
+  for (const path of SERVER_ONLY) {
+    for (const who of ['padmin', 'owner-a', 't1', 'par', 'owner-b', null]) {
+      await denied(get(who, path), (who || 'signed out') + ' read ' + path);
+      await denied(set(who, path, { status: 'draft', name: 'x' }), (who || 'signed out') + ' write ' + path);
+    }
+  }
 });
 
-test('nobody else can create or read a draft', async () => {
-  for (const who of ['owner-a', 't1', 'par', 'owner-b']) await denied(createDraft(who), who + ' create');
-  await createDraft('padmin');
-  for (const who of ['owner-a', 't1', 'par', 'owner-b']) await denied(get(who, DRAFT), who + ' read');
-  await denied(get(null, DRAFT), 'signed out read');
+test('an unfinished draft cannot be deleted from a browser', async () => {
+  await set(ADMIN, 'onboardingDrafts/OB-TEST0001', { status: 'draft', revision: 1 });
+  await denied(remove('padmin', 'onboardingDrafts/OB-TEST0001'), 'admin delete');
+  await denied(remove('owner-a', 'onboardingDrafts/OB-TEST0001'), 'owner delete');
 });
 
-test('a draft must start at revision 1, as draft, without a school ID, and be written by its creator', async () => {
-  await denied(createDraft('padmin', draftData({ revision: 2 })), 'revision 2');
-  await denied(createDraft('padmin', draftData({ status: 'registered' })), 'registered');
-  await denied(createDraft('padmin', draftData({ schoolId: 'green-valley' })), 'school id');
-  await denied(createDraft('padmin', draftData({ createdBy: 'someone-else' })), 'other creator');
-  await denied(createDraft('padmin', draftData(), 'onboardingDrafts/bad id'), 'bad id');
-});
-
-test('a draft rejects unknown keys and unknown field names', async () => {
-  await denied(createDraft('padmin', draftData({ secret: 'x' })), 'unknown top key');
-  await denied(createDraft('padmin', draftData({ values: { name: 'X', password: 'y' } })), 'unknown value key');
-  await denied(createDraft('padmin', draftData({ step: 20 })), 'step too high');
-});
-
-test('each save raises the revision by one; a stale or repeated revision is refused', async () => {
-  await createDraft('padmin');
-  await allowed(saveDraft('padmin', { values: { name: 'Green Valley School', town: 'Howrah' }, step: 1, revision: 2 }), 'revision 2');
-  await denied(saveDraft('padmin', { values: { name: 'Other' }, step: 1, revision: 2 }), 'same revision again (another tab)');
-  await denied(saveDraft('padmin', { values: { name: 'Other' }, step: 1, revision: 5 }), 'skipped revision');
-  await allowed(saveDraft('padmin', { values: { name: 'Other' }, step: 2, revision: 3 }), 'revision 3');
-});
-
-test('the browser cannot set the school ID or mark a draft registered', async () => {
-  await createDraft('padmin');
-  await denied(saveDraft('padmin', { values: { name: 'X' }, step: 0, revision: 2, schoolId: 'sneaky' }), 'school id');
-  await denied(saveDraft('padmin', { values: { name: 'X' }, step: 0, revision: 2, status: 'registered' }), 'registered');
-});
-
-test('a registered draft is closed to the browser', async () => {
-  await set(ADMIN, DRAFT, { ...draftData({ status: 'registered', schoolId: 'green-valley' }), createdAt: { ts: '2026-01-01T00:00:00Z' }, updatedAt: { ts: '2026-01-01T00:00:00Z' } });
-  await denied(saveDraft('padmin', { values: { name: 'X' }, step: 0, revision: 2 }), 'edit registered');
-  await denied(remove('padmin', DRAFT), 'delete registered');
-});
-
-test('an open draft can be deleted by a platform administrator only', async () => {
-  await createDraft('padmin');
-  await denied(remove('owner-a', DRAFT), 'owner delete');
-  await allowed(remove('padmin', DRAFT), 'admin delete');
-});
-
-test('the registration record is readable by a platform administrator only and never writable', async () => {
-  await allowed(get('padmin', P('registration', 'main')), 'admin read');
-  for (const who of ['owner-a', 't1', 'par']) await denied(get(who, P('registration', 'main')), who + ' read');
-  await denied(get('owner-b', P('registration', 'main')), 'other school owner read');
-  await denied(set('padmin', P('registration', 'main'), { name: 'x' }), 'admin write');
-  await denied(set('owner-a', P('registration', 'main'), { name: 'x' }), 'owner write');
-});
-
-test('reservations are not readable or writable from a browser', async () => {
-  await set(ADMIN, 'schoolReservations/green-valley', { draftId: 'OB-TEST0001', status: 'reserved' });
-  await denied(get('padmin', 'schoolReservations/green-valley'), 'admin read');
-  await denied(set('padmin', 'schoolReservations/other', { status: 'reserved' }), 'admin write');
-});
-
-test('a school owner can still edit the four profile fields after registration (existing behaviour)', async () => {
+test('a school owner can still edit the four profile fields of a school registered through the wizard', async () => {
   await allowed(set(ADMIN, A, { ...profile, name: 'ABCD School', schemaVersion: 2, registeredVia: 'onboarding', createdBy: 'padmin' }), 'seed new-style school');
   const status = await commit('owner-a', [{ path: A, data: { name: 'ABCD School Renamed', contactEmail: 'n@s.in', phone: '1', address: 'x' }, mask: ['name', 'contactEmail', 'phone', 'address'] }]);
   assert.equal(status, 200);
+});
+
+test('an owner still cannot change the registration flags on the school record', async () => {
+  await allowed(set(ADMIN, A, { ...profile, name: 'ABCD School', schemaVersion: 2, registeredVia: 'onboarding', createdBy: 'padmin' }), 'seed');
+  assert.equal(await commit('owner-a', [{ path: A, data: { schemaVersion: 9 }, mask: ['schemaVersion'] }]), 403);
 });

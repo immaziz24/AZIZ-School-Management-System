@@ -1,10 +1,6 @@
 // School registration wizard (Registration Mark 1, Batch 98). Platform administrators only: the database rules and the server
 // functions decide who may do what, not this file. A full-screen, resumable form that replaces the old Register a school pop-up.
 // Mark 1 covers categories A to E (school, recognition, address, owner, principal). F to O are listed and arrive in Marks 2 to 4.
-import {
-  collection, doc, getDoc, getDocs, getDocsFromServer, setDoc, updateDoc, deleteDoc, query, where, serverTimestamp,
-} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
-
 // ---------- field registry: one declarative list drives the form, the validation, the progress and the review ----------
 const INDIA_STATES = ['Andaman and Nicobar Islands', 'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chandigarh', 'Chhattisgarh',
   'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jammu and Kashmir', 'Jharkhand', 'Karnataka',
@@ -138,9 +134,10 @@ const STYLE = `
 `;
 
 // ---------- the wizard ----------
-// ctx: { db, app, user, h, toast, friendly, plans: () => Promise<[[value, label]]>, goSchool: (id) => void, exit: () => void }
+// ctx: { app, user, h, toast, friendly, plans: () => Promise<[[value, label]]>, goSchool: (id) => void }
+// Drafts are read and saved by server functions (the browser rules do not expose them), so no Firestore import is needed here.
 export async function mountOnboarding(ctx, draftIdFromRoute) {
-  const { db, app, user, h, toast, friendly } = ctx;
+  const { app, h, toast, friendly } = ctx;
   unmountOnboarding();
   if (!document.getElementById('onb-style')) document.head.append(h('style', { id: 'onb-style' }, STYLE));
   const root = h('div', { id: 'onb' });
@@ -163,20 +160,14 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     while (saving) await new Promise((resolve) => setTimeout(resolve, 80));
     saving = true; say('', 'Saving.');
     try {
-      const ref = doc(db, 'onboardingDrafts', S.draftId);
-      if (!S.exists) {
-        await setDoc(ref, { schemaVersion: 1, createdBy: user.uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), revision: 1, status: 'draft', step: S.step, values: clean() });
-        S.exists = true; S.revision = 1;
-      } else {
-        await updateDoc(ref, { values: clean(), step: S.step, revision: S.revision + 1, updatedAt: serverTimestamp() });
-        S.revision += 1;
-      }
+      const saved = await call('saveOnboardingDraft', { draftId: S.draftId, values: clean(), step: S.step, revision: S.exists ? S.revision : 0 });
+      S.exists = true; S.revision = saved.revision;
       dirty = false;
       say('ok', 'Saved ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }));
       return true;
     } catch (error) {
       const code = String(error?.code || '');
-      say('bad', code.includes('permission-denied') ? 'Not saved. This draft was changed in another tab or window. Reload the page.' : 'Not saved. ' + friendly(error));
+      say('bad', code.includes('aborted') ? 'Not saved. This draft was changed in another tab or window. Reload the page.' : 'Not saved. ' + (error?.message || friendly(error)));
       return false;
     } finally {
       saving = false;
@@ -189,10 +180,9 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     S.draftId = ''; S.exists = false;
     root.replaceChildren(shell(h('div', {}, h('h2', {}, 'Register a school'), h('div', { class: 'empty' }, h('span', { class: 'spin' }), 'Loading drafts.'))));
     let drafts = [];
-    try { drafts = (await getDocsFromServer(query(collection(db, 'onboardingDrafts'), where('status', '==', 'draft')))).docs.map((d) => ({ id: d.id, ...d.data() })); } catch { drafts = []; }
-    drafts.sort((a, b) => (b.updatedAt?.toMillis?.() || 0) - (a.updatedAt?.toMillis?.() || 0));
+    try { drafts = (await call('listOnboardingDrafts', {})).drafts || []; } catch { drafts = []; }
     const list = h('div', { class: 'ob-list' }, drafts.length ? drafts.map((d) => h('a', { href: '#/schools/register/' + d.id },
-      h('b', {}, d.values?.name || 'Untitled registration'), h('div', { class: 'muted' }, 'Step ' + ((d.step ?? 0) + 1) + ' of 5 | ' + progressOf(d.values || {}) + ' sections complete | last saved ' + (d.updatedAt?.toDate ? d.updatedAt.toDate().toLocaleString('en-IN') : 'just now')))) : h('p', { class: 'muted' }, 'No unfinished registrations.'));
+      h('b', {}, d.values?.name || 'Untitled registration'), h('div', { class: 'muted' }, 'Step ' + ((d.step ?? 0) + 1) + ' of 5 | ' + progressOf(d.values || {}) + ' sections complete | last saved ' + (d.updatedAt ? new Date(d.updatedAt).toLocaleString('en-IN') : 'just now')))) : h('p', { class: 'muted' }, 'No unfinished registrations.'));
     root.replaceChildren(shell(h('div', {},
       h('h2', {}, 'Register a school'),
       h('p', { class: 'muted' }, 'Fill the school\'s details in sections. Your work is saved as you go, so you can leave and come back.'),
@@ -203,9 +193,9 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     S.draftId = id; S.exists = false;
     root.replaceChildren(shell(h('div', { class: 'empty' }, h('span', { class: 'spin' }), 'Loading the draft.'), true));
     let found;
-    try { found = await getDoc(doc(db, 'onboardingDrafts', id)); } catch (error) { toast(friendly(error)); return landing(); }
-    if (found.exists()) {
-      const d = found.data();
+    try { found = await call('getOnboardingDraft', { draftId: id }); } catch (error) { toast(error?.message || friendly(error)); return landing(); }
+    if (found.exists) {
+      const d = found.draft;
       if (d.status !== 'draft') { toast('That registration is already finished.'); location.hash = '#/schools'; return undefined; }
       S.exists = true; S.revision = d.revision; S.step = Math.min(d.step ?? 0, ACTIVE.length); S.values = { ...d.values }; S.schoolId = d.schoolId || '';
     }
@@ -375,7 +365,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
   async function discard() {
     if (!S.exists) { unmountOnboarding(); location.hash = '#/schools'; return; }
     if (!confirm('Delete this unfinished registration? This cannot be undone.')) return;
-    try { await deleteDoc(doc(db, 'onboardingDrafts', S.draftId)); } catch (e) { toast(friendly(e)); return; }
+    try { await call('deleteOnboardingDraft', { draftId: S.draftId }); } catch (e) { toast(e?.message || friendly(e)); return; }
     unmountOnboarding(); location.hash = '#/schools';
   }
 

@@ -3,9 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-// The module imports Firestore from a web address, which Node cannot load. The registry code does not use it, so the import is replaced by a stub.
-const source = readFileSync(new URL('../public/onboarding.mjs', import.meta.url), 'utf8')
-  .replace(/import \{[^}]*\} from 'https:[^']*';/, 'const collection = 0, doc = 0, getDoc = 0, getDocs = 0, getDocsFromServer = 0, setDoc = 0, updateDoc = 0, deleteDoc = 0, query = 0, where = 0, serverTimestamp = 0;');
+const source = readFileSync(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const mod = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const { FIELDS, CATEGORIES, fieldProblem, stepProblems, stepDone, progressOf } = mod;
 

@@ -1250,3 +1250,76 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 120 }, async
     return { schoolId, alreadyRegistered: false, ownerEmail: v.ownerEmail };
   });
 });
+
+// Drafts of the onboarding wizard live behind these functions, not behind browser rules. Only a platform administrator may call them,
+// every save must name the revision it started from (so a second tab cannot silently overwrite the first), and only the known field keys are kept.
+function cleanDraftValues(values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) throw new HttpsError('invalid-argument', 'Draft values are not valid.');
+  const out = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (!DRAFT_KEYS.includes(key)) throw new HttpsError('invalid-argument', 'Unknown field ' + String(key).slice(0, 30) + '.');
+    if (typeof value !== 'string' || value.length > 1000) throw new HttpsError('invalid-argument', 'Field ' + key + ' is not valid.');
+    if (value.trim()) out[key] = value.trim();
+  }
+  return out;
+}
+const draftView = (id, d) => ({ id, status: d.status, step: d.step, revision: d.revision, values: d.values || {}, schoolId: d.schoolId || '',
+  updatedAt: d.updatedAt ? d.updatedAt.toMillis() : 0, createdAt: d.createdAt ? d.createdAt.toMillis() : 0 });
+
+exports.saveOnboardingDraft = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid } = await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const draftId = text(d.draftId, 40);
+  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
+  const step = Number(d.step);
+  if (!Number.isInteger(step) || step < 0 || step > 19) throw new HttpsError('invalid-argument', 'Unknown step.');
+  const expected = Number(d.revision);
+  if (!Number.isInteger(expected) || expected < 0) throw new HttpsError('invalid-argument', 'Unknown revision.');
+  const values = cleanDraftValues(d.values);
+  const ref = db.doc('onboardingDrafts/' + draftId);
+  return db.runTransaction(async (tx) => {
+    const found = await tx.get(ref);
+    const now = Timestamp.now();
+    if (!found.exists) {
+      if (expected !== 0) throw new HttpsError('not-found', 'That draft no longer exists.');
+      tx.set(ref, { schemaVersion: 1, createdBy: uid, createdAt: now, updatedAt: now, revision: 1, status: 'draft', step, values });
+      return { revision: 1 };
+    }
+    const current = found.data();
+    if (current.status !== 'draft') throw new HttpsError('failed-precondition', 'This registration is already finished.');
+    if (current.revision !== expected) throw new HttpsError('aborted', 'This draft was changed in another tab or window. Reload the page.');
+    tx.update(ref, { values, step, revision: expected + 1, updatedAt: now });
+    return { revision: expected + 1 };
+  });
+});
+
+exports.getOnboardingDraft = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const draftId = text((request.data || {}).draftId, 40);
+  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
+  const found = await db.doc('onboardingDrafts/' + draftId).get();
+  return found.exists ? { exists: true, draft: draftView(found.id, found.data()) } : { exists: false };
+});
+
+exports.listOnboardingDrafts = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const found = await db.collection('onboardingDrafts').where('status', '==', 'draft').limit(100).get();
+  return { drafts: found.docs.map((x) => draftView(x.id, x.data())).sort((a, b) => b.updatedAt - a.updatedAt) };
+});
+
+exports.deleteOnboardingDraft = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const draftId = text((request.data || {}).draftId, 40);
+  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
+  const ref = db.doc('onboardingDrafts/' + draftId);
+  await db.runTransaction(async (tx) => {
+    const found = await tx.get(ref);
+    if (found.exists && found.data().status !== 'draft') throw new HttpsError('failed-precondition', 'A finished registration cannot be deleted.');
+    if (found.exists) {
+      const hold = found.data().schoolId;
+      if (hold) tx.set(db.doc('schoolReservations/' + hold), { status: 'released', releasedAt: Timestamp.now() }, { merge: true });
+      tx.delete(ref);
+    }
+  });
+  return { ok: true };
+});
