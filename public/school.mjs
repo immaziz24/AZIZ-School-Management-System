@@ -8,7 +8,7 @@ const wanted = new URLSearchParams(location.search).get('school') ?? '';
 const status = document.querySelector('#site-status');
 // Which school is this? ?school=<id> wins. On AZIZ's own address the demo school opens. On any other address the
 // verified-domain lookup (domainMap/<hostname>, written when the platform administrator marks the domain verified) says.
-const OWN_HOSTS = ['azizschoolmanagement.plateria.in', 'www.azizschoolmanagement.plateria.in', 'localhost', '127.0.0.1'];
+const OWN_HOSTS = ['azizschoolmanagement.plateria.in', 'www.azizschoolmanagement.plateria.in', 'azizschoolmanagementsystem.com', 'www.azizschoolmanagementsystem.com', 'localhost', '127.0.0.1'];
 async function findSchoolId() {
   if (/^[a-z][a-z0-9-]{2,29}$/.test(wanted)) return wanted;
   const host = location.hostname.toLowerCase();

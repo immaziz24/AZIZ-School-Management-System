@@ -4,7 +4,7 @@ RewriteEngine On
 RewriteRule ^public/?$ / [R=302,L]
 # Marketing website at the front; the school app lives at /app.
 # A school's own address (any host other than AZIZ's own) opens that school's public page at the front door.
-RewriteCond %{HTTP_HOST} !^(www\.)?azizschoolmanagement\.plateria\.in$ [NC]
+RewriteCond %{HTTP_HOST} !^(www\.)?(azizschoolmanagement\.plateria\.in|azizschoolmanagementsystem\.com)$ [NC]
 RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1)(:[0-9]+)?$ [NC]
 RewriteRule ^$ public/school.html [L]
 RewriteRule ^$ public/site/index.html [L]

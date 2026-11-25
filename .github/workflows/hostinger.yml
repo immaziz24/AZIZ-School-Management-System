@@ -1,0 +1,47 @@
+name: Publish Hostinger frontend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hostinger-production
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Update the frontend-only branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch=hostinger-production
+          if [[ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]]; then
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          export GIT_INDEX_FILE="$RUNNER_TEMP/hostinger-index"
+          git read-tree --empty
+          git ls-tree -rz "$GITHUB_SHA" -- .htaccess public/ | git update-index -z --index-info
+          tree="$(git write-tree)"
+          parent=()
+          if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+            previous="$(git rev-parse "origin/$branch")"
+            if [[ "$(git rev-parse "$previous^{tree}")" == "$tree" ]]; then
+              exit 0
+            fi
+            parent=(-p "$previous")
+          fi
+          commit="$(git commit-tree "$tree" "${parent[@]}" -m "Publish frontend from $GITHUB_SHA")"
+          git push origin "$commit:refs/heads/$branch"
