@@ -9,7 +9,7 @@ const grab = (re) => { const m = src.match(re); assert.ok(m, 'missing ' + re); r
 const block = src.match(/\/\/ --- registration rules begin[\s\S]*?\/\/ --- registration rules end ---/);
 assert.ok(block, 'registration rules block is missing');
 const code = "class HttpsError extends Error { constructor(code, message) { super(message); this.code = code; } }\n" + block[0];
-const lib = new Function(code + '\n; return { slugifySchoolName, normalName, checkRegistration, cleanDraftValues, buildAcademicPlan, moneyToMinor, parseSections, NEW_SCHOOL_ID, DRAFT_ID, HttpsError, DRAFT_KEYS, REQUIRED_REGISTRATION };')();
+const lib = new Function(code + '\n; return { slugifySchoolName, normalName, checkRegistration, cleanDraftValues, buildAcademicPlan, moneyToMinor, parseSections, sniffFile, slotAccepts, normalizeSubdomain, UPLOAD_SLOTS, THEME_KEYS, RESERVED_SUBDOMAINS, FACILITY_KEYS, NEW_SCHOOL_ID, DRAFT_ID, HttpsError, DRAFT_KEYS, REQUIRED_REGISTRATION };')();
 
 const good = {
   name: 'Green Valley School', schoolType: 'Private unaided', schoolLevel: 'Secondary', genderComposition: 'Co-educational', medium: 'English',
@@ -96,10 +96,13 @@ test('Mark 2: the server repeats the academic, capacity, timing and fee checks',
 test('the server and the form agree on which fields exist and which are required', () => {
   const ui = readFileSync(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
   const keys = [...ui.matchAll(/\{ id: 'F\d{3}', key: '([A-Za-z]+)'/g)].map((m) => m[1]);
-  assert.equal(keys.length, 71);
-  const uploads = keys.filter((k) => !lib.DRAFT_KEYS.includes(k));
-  assert.deepEqual(uploads, []);
-  assert.equal(lib.DRAFT_KEYS.length, 71);
+  assert.equal(keys.length, 99);
+  // Uploads are files, not text values, so they are the only form fields the draft does not store as text.
+  const fileKeys = keys.filter((k) => !lib.DRAFT_KEYS.includes(k)).sort();
+  assert.deepEqual(fileKeys, ['affiliationCert', 'favicon', 'gallery', 'heroImage', 'logo', 'ownerPhoto', 'ownershipDoc', 'principalPhoto', 'recognitionCert']);
+  assert.equal(lib.DRAFT_KEYS.length, 90);
+  assert.equal(new Set(lib.DRAFT_KEYS).size, 90);
+  assert.ok(Object.keys(lib.UPLOAD_SLOTS).includes('gallery6') && fileKeys.every((k) => k === 'gallery' || lib.UPLOAD_SLOTS[k]));
 });
 
 test('money is converted to the smallest unit without rounding errors', () => {
@@ -144,4 +147,56 @@ test('a January to December session ends in the same year; classesOffered narrow
 test('a leap-year February end date is handled', () => {
   const plan = lib.buildAcademicPlan({ ...good, sessionLabel: '2027-28', sessionStartMonth: '4', sessionEndMonth: '2' });
   assert.equal(plan.year.data.endDate, '2028-02-29');
+});
+
+test('Mark 3: the server repeats the website, domain and facility checks', () => {
+  const bad = (patch, re) => assert.ok(lib.checkRegistration({ ...good, ...patch }).some((p) => re.test(p)), JSON.stringify(patch));
+  bad({ websiteTheme: 'neon' }, /websiteTheme/);
+  bad({ brandPrimary: 'blue' }, /brandPrimary/);
+  bad({ brandSecondary: '#12' }, /brandSecondary/);
+  bad({ principalMessage: 'x'.repeat(901) }, /principalMessage/);
+  bad({ preferredSubdomain: 'www' }, /preferredSubdomain/);
+  bad({ preferredSubdomain: 'Bad Name' }, /preferredSubdomain/);
+  bad({ domainPreference: 'Whenever' }, /domainPreference/);
+  bad({ customDomain: 'http://x.com' }, /customDomain/);
+  bad({ domainPreference: 'Connect my own domain now' }, /customDomain is required/);
+  bad({ facebookUrl: 'http://facebook.com/x' }, /facebookUrl/);
+  bad({ facebookUrl: 'https://notfacebook.com/x' }, /facebookUrl/);
+  bad({ instagramUrl: 'https://instagram.com.evil.com/x' }, /instagramUrl/);
+  bad({ facilityLibrary: 'maybe' }, /facilityLibrary/);
+  assert.deepEqual(lib.checkRegistration({ ...good, websiteTheme: 'royal', brandPrimary: '#14243D', preferredSubdomain: 'green-valley', domainPreference: 'Connect my own domain now', customDomain: 'school.example.com',
+    facebookUrl: 'https://www.facebook.com/gv', youtubeUrl: 'https://youtu.be/abc', facilityLibrary: 'yes', facilityHostel: 'no' }), []);
+  assert.ok(lib.THEME_KEYS.includes('royal') && lib.FACILITY_KEYS.length === 7);
+});
+
+test('Mark 3: files are recognised by their contents, never by name', () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(20)]);
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(20)]);
+  const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP'), Buffer.alloc(10)]);
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(20)]);
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  const html = Buffer.from('<html><body>hello world</body></html>');
+  const exe = Buffer.concat([Buffer.from('MZ'), Buffer.alloc(30)]);
+  assert.equal(lib.sniffFile(png).type, 'image/png');
+  assert.equal(lib.sniffFile(jpg).ext, 'jpg');
+  assert.equal(lib.sniffFile(webp).type, 'image/webp');
+  assert.equal(lib.sniffFile(pdf).type, 'application/pdf');
+  for (const x of [svg, html, exe, Buffer.alloc(0), Buffer.from('abc')]) assert.equal(lib.sniffFile(x), null);
+  assert.equal(lib.slotAccepts('logo', lib.sniffFile(png)), true);
+  assert.equal(lib.slotAccepts('logo', lib.sniffFile(pdf)), false);
+  assert.equal(lib.slotAccepts('ownerPhoto', lib.sniffFile(pdf)), false);
+  assert.equal(lib.slotAccepts('recognitionCert', lib.sniffFile(pdf)), true);
+  assert.equal(lib.slotAccepts('recognitionCert', lib.sniffFile(jpg)), true);
+  assert.equal(lib.slotAccepts('recognitionCert', lib.sniffFile(svg)), false);
+  assert.equal(lib.slotAccepts('notASlot', lib.sniffFile(png)), false);
+  assert.equal(lib.slotAccepts('logo', null), false);
+});
+
+test('Mark 3: subdomain names are normalised and unsafe ones refused', () => {
+  assert.equal(lib.normalName('x'), 'x');
+  assert.equal(lib.normalizeSubdomain(' Green-Valley '), 'green-valley');
+  for (const bad of ['', 'ab', 'a b', '9abc', 'a--b', '-abc', 'abc-', 'abc.def', '../x', 'x'.repeat(31), 'ñandú']) assert.equal(lib.normalizeSubdomain(bad), null, bad);
+  assert.ok(lib.RESERVED_SUBDOMAINS.includes('www') && lib.RESERVED_SUBDOMAINS.includes('admin'));
+  assert.equal(lib.UPLOAD_SLOTS.favicon.max, 256 * 1024);
+  assert.ok(Object.values(lib.UPLOAD_SLOTS).every((r) => r.max <= 5 * 1024 * 1024));
 });

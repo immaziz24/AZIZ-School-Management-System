@@ -99,7 +99,7 @@ beforeEach(async () => {
 });
 
 // Drafts, registration records and ID reservations are written and read by server functions only. No browser, not even a platform administrator, may touch them.
-const SERVER_ONLY = ['onboardingDrafts/OB-TEST0001', 'schoolReservations/green-valley', P('registration', 'main')];
+const SERVER_ONLY = ['onboardingDrafts/OB-TEST0001', 'schoolReservations/green-valley', 'subdomainReservations/green-valley', P('registration', 'main')];
 
 test('no browser can read or write onboarding drafts, reservations or registration records', async () => {
   for (const path of SERVER_ONLY) {

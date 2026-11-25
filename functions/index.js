@@ -11,7 +11,7 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
 const { setGlobalOptions, logger } = require('firebase-functions/v2');
 const { initializeApp } = require('firebase-admin/app');
-const { getFirestore, Timestamp } = require('firebase-admin/firestore');
+const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { getStorage } = require('firebase-admin/storage');
 const { getMessaging } = require('firebase-admin/messaging');
 
@@ -1147,6 +1147,41 @@ const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const PHONE_PATTERN = /^\+?[0-9][0-9 -]{6,17}$/;
 const COUNT_FIELDS = { studentCount: 100000, maxCapacity: 100000, teacherCount: 10000, nonTeachingCount: 10000, adminStaffCount: 10000, classroomCount: 5000, campusCount: 50 };
 const MONEY_FIELDS = ['admissionFee', 'annualFee', 'examFee'];
+const THEME_KEYS = ['classic', 'royal', 'emerald', 'crimson', 'midnight', 'teal', 'maroon', 'indigo', 'forest', 'sunrise', 'rose', 'charcoal', 'sky', 'saffron', 'ocean', 'slate', 'obsidian', 'champagne', 'sapphire', 'emerald-noir', 'ruby', 'rose-gold', 'sandstone', 'lavender', 'sage', 'blush', 'pearl', 'platinum', 'copper', 'abyss', 'amethyst', 'bordeaux', 'olive', 'denim', 'mocha', 'aurora'];
+const DOMAIN_PREFERENCES = ['AZIZ subdomain only', 'Connect my own domain later', 'Connect my own domain now'];
+const FACILITY_KEYS = ['facilityTransport', 'facilityHostel', 'facilityLibrary', 'facilityLab', 'facilityComputerLab', 'facilityCanteen', 'facilitySports'];
+const RESERVED_SUBDOMAINS = ['www', 'app', 'admin', 'api', 'mail', 'smtp', 'ftp', 'cdn', 'static', 'assets', 'login', 'auth', 'dashboard', 'billing', 'support', 'help', 'status', 'blog', 'docs', 'test', 'demo', 'staging', 'dev', 'aziz', 'root', 'ns1', 'ns2'];
+const HEX_COLOUR = /^#[0-9a-fA-F]{6}$/;
+const DOMAIN_NAME = /^(?=.{4,100}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/;
+// File slots. Images are public-site candidates (never published here); documents and photos of people stay private.
+const UPLOAD_SLOTS = {
+  logo: { kind: 'image', max: 1024 * 1024 }, favicon: { kind: 'image', max: 256 * 1024 }, heroImage: { kind: 'image', max: 2 * 1024 * 1024 },
+  gallery1: { kind: 'image', max: 2 * 1024 * 1024 }, gallery2: { kind: 'image', max: 2 * 1024 * 1024 }, gallery3: { kind: 'image', max: 2 * 1024 * 1024 },
+  gallery4: { kind: 'image', max: 2 * 1024 * 1024 }, gallery5: { kind: 'image', max: 2 * 1024 * 1024 }, gallery6: { kind: 'image', max: 2 * 1024 * 1024 },
+  ownerPhoto: { kind: 'private-image', max: 1024 * 1024 }, principalPhoto: { kind: 'private-image', max: 1024 * 1024 },
+  recognitionCert: { kind: 'document', max: 5 * 1024 * 1024 }, affiliationCert: { kind: 'document', max: 5 * 1024 * 1024 }, ownershipDoc: { kind: 'document', max: 5 * 1024 * 1024 },
+};
+// The type is decided from the first bytes of the file, never from its name or what the browser says. SVG and everything else is refused.
+function sniffFile(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 && buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a) return { type: 'image/png', ext: 'png' };
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { type: 'image/jpeg', ext: 'jpg' };
+  if (buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') return { type: 'image/webp', ext: 'webp' };
+  if (buf.slice(0, 5).toString('latin1') === '%PDF-') return { type: 'application/pdf', ext: 'pdf' };
+  return null;
+}
+// What a slot accepts: images only for image slots; documents may also be a PDF.
+function slotAccepts(slot, sniffed) {
+  const rule = UPLOAD_SLOTS[slot];
+  if (!rule || !sniffed) return false;
+  return rule.kind === 'document' ? true : sniffed.type !== 'application/pdf';
+}
+// "Green-Valley " -> "green-valley"; null when it cannot be a subdomain.
+function normalizeSubdomain(value) {
+  const x = String(value || '').trim().toLowerCase();
+  return /^[a-z][a-z0-9-]{1,28}[a-z0-9]$/.test(x) && !x.includes('--') ? x : null;
+}
+const socialHost = (url, hosts) => { try { const u = new URL(url); return u.protocol === 'https:' && hosts.includes(u.hostname.replace(/^www\./, '')) && !u.username && !u.password; } catch { return false; } };
 const TIME_PATTERN = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const classRange = (v) => { const a = CLASS_LADDER.indexOf(v.lowestClass); const b = CLASS_LADDER.indexOf(v.highestClass); return a >= 0 && b >= a ? CLASS_LADDER.slice(a, b + 1) : []; };
 // Sections are stored as "Class 1=A,B|Class 2=A".
@@ -1225,6 +1260,18 @@ function checkRegistration(v) {
   for (const key of MONEY_FIELDS) if (v[key] && !/^[0-9]{1,9}(\.[0-9]{1,2})?$/.test(v[key])) problems.push(key + ' must be an amount with at most 2 decimals');
   if (v.feeDueDay && (!/^[0-9]{1,2}$/.test(v.feeDueDay) || Number(v.feeDueDay) < 1 || Number(v.feeDueDay) > 28)) problems.push('feeDueDay must be 1 to 28');
   if (splitList(v.paymentMethods).some((m) => !PAYMENT_METHODS.includes(m))) problems.push('paymentMethods has an unknown option');
+  // Mark 3: website, domain and facilities.
+  if (v.websiteTheme && !THEME_KEYS.includes(v.websiteTheme)) problems.push('websiteTheme is not a listed theme');
+  for (const key of ['brandPrimary', 'brandSecondary']) if (v[key] && !HEX_COLOUR.test(v[key])) problems.push(key + ' must be a colour like #1A2B3C');
+  for (const [key, max] of [['principalMessage', 900], ['mission', 500], ['vision', 500]]) if (v[key] && String(v[key]).length > max) problems.push(key + ' is too long');
+  if (v.preferredSubdomain && (!normalizeSubdomain(v.preferredSubdomain) || RESERVED_SUBDOMAINS.includes(v.preferredSubdomain))) problems.push('preferredSubdomain is not allowed (use 3 to 30 lowercase letters, numbers or single dashes)');
+  if (v.domainPreference && !DOMAIN_PREFERENCES.includes(v.domainPreference)) problems.push('domainPreference is not a listed option');
+  if (v.customDomain && !DOMAIN_NAME.test(v.customDomain)) problems.push('customDomain must look like school.example.com');
+  if (v.domainPreference === 'Connect my own domain now' && !v.customDomain) problems.push('customDomain is required when you connect your own domain now');
+  for (const [key, hosts] of [['facebookUrl', ['facebook.com', 'fb.com']], ['instagramUrl', ['instagram.com']], ['youtubeUrl', ['youtube.com', 'youtu.be']]]) {
+    if (v[key] && (v[key].length > 300 || !socialHost(v[key], hosts))) problems.push(key + ' must be an https link on ' + hosts[0]);
+  }
+  for (const key of FACILITY_KEYS) if (v[key] && !['yes', 'no'].includes(v[key])) problems.push(key + ' must be yes or no');
   return problems;
 }
 const DRAFT_KEYS = ['name', 'shortName', 'estYear', 'schoolType', 'schoolLevel', 'genderComposition', 'medium', 'motto', 'description', 'board', 'affiliationNo', 'udise',
@@ -1234,7 +1281,10 @@ const DRAFT_KEYS = ['name', 'shortName', 'estYear', 'schoolType', 'schoolLevel',
   'sessionLabel', 'sessionStartMonth', 'sessionEndMonth', 'lowestClass', 'highestClass', 'classesOffered', 'sectionsByClass', 'subjects', 'examSystem', 'gradingSystem',
   'studentCount', 'maxCapacity', 'teacherCount', 'nonTeachingCount', 'adminStaffCount', 'classroomCount', 'campusCount',
   'openTime', 'closeTime', 'workingDays', 'weeklyHolidays', 'teacherReportTime', 'lateGraceMinutes', 'studentAttendanceMethod', 'teacherAttendanceMethods', 'geofenceRadius',
-  'currency', 'admissionFee', 'tuitionFee', 'annualFee', 'examFee', 'feeDueDay', 'latePolicy', 'paymentMethods'];
+  'currency', 'admissionFee', 'tuitionFee', 'annualFee', 'examFee', 'feeDueDay', 'latePolicy', 'paymentMethods',
+  'websiteTheme', 'brandPrimary', 'brandSecondary', 'principalMessage', 'mission', 'vision',
+  'preferredSubdomain', 'customDomain', 'domainPreference', 'facebookUrl', 'instagramUrl', 'youtubeUrl',
+  'facilityTransport', 'facilityHostel', 'facilityLibrary', 'facilityLab', 'facilityComputerLab', 'facilityCanteen', 'facilitySports'];
 function cleanDraftValues(values) {
   if (!values || typeof values !== 'object' || Array.isArray(values)) throw new HttpsError('invalid-argument', 'Draft values are not valid.');
   const out = {};
@@ -1335,6 +1385,8 @@ exports.checkSchoolDuplicates = onCall({ memory: '256MiB', timeoutSeconds: 60 },
 });
 
 const draftView = (id, d) => ({ id, status: d.status, step: d.step, revision: d.revision, values: d.values || {}, schoolId: d.schoolId || '',
+  files: Object.fromEntries(Object.entries(d.files || {}).map(([slot, f]) => [slot, { name: f.name, size: f.size, type: f.type }])),
+  subdomain: d.subdomain || '', domainStatus: d.domainStatus || '',
   updatedAt: d.updatedAt ? d.updatedAt.toMillis() : 0, createdAt: d.createdAt ? d.createdAt.toMillis() : 0 });
 
 exports.saveOnboardingDraft = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
@@ -1389,11 +1441,177 @@ exports.deleteOnboardingDraft = onCall({ memory: '256MiB', timeoutSeconds: 60 },
     if (found.exists) {
       const hold = found.data().schoolId;
       if (hold) tx.set(db.doc('schoolReservations/' + hold), { status: 'released', releasedAt: Timestamp.now() }, { merge: true });
+      const sub = found.data().subdomain;
+      if (sub) tx.set(db.doc('subdomainReservations/' + sub), { status: 'released', releasedAt: Timestamp.now() }, { merge: true });
       tx.delete(ref);
     }
   });
+  await deleteDraftFiles(draftId);
   return { ok: true };
 });
+
+// ----- Mark 3: files, subdomain and domain checks (all through the Admin SDK; no database or storage rules are involved) -----
+const draftFolder = (draftId) => 'onboarding/' + draftId + '/';
+async function deleteDraftFiles(draftId) {
+  try { await getStorage().bucket().deleteFiles({ prefix: draftFolder(draftId) }); } catch (error) { logger.error('deleteDraftFiles failed', draftId, error); }
+}
+async function openDraftFor(draftId) {
+  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
+  const snap = await db.doc('onboardingDrafts/' + draftId).get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Save the first step before adding files.');
+  if (snap.data().status !== 'draft') throw new HttpsError('failed-precondition', 'This registration is already finished.');
+  return snap;
+}
+
+exports.uploadOnboardingFile = onCall({ memory: '512MiB', timeoutSeconds: 120 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const draftId = text(d.draftId, 40);
+  const slot = text(d.slot, 30);
+  const rule = UPLOAD_SLOTS[slot];
+  if (!rule) throw new HttpsError('invalid-argument', 'Unknown file slot.');
+  if (typeof d.data !== 'string' || d.data.length > Math.ceil(rule.max * 1.4) + 100) throw new HttpsError('invalid-argument', 'That file is too large for this field.');
+  const buffer = Buffer.from(d.data, 'base64');
+  if (buffer.length === 0 || buffer.length > rule.max) throw new HttpsError('invalid-argument', 'That file is empty or larger than ' + Math.round(rule.max / 1024) + ' KB.');
+  const sniffed = sniffFile(buffer);
+  if (!slotAccepts(slot, sniffed)) throw new HttpsError('invalid-argument', rule.kind === 'document' ? 'Use a PDF, JPG, PNG or WEBP file.' : 'Use a PNG, JPG or WEBP image (SVG is not accepted).');
+  const snap = await openDraftFor(draftId);
+  const name = text(d.name, 100).replace(/[^A-Za-z0-9._ -]/g, '_') || slot;
+  const path = draftFolder(draftId) + slot + '-' + nodeCrypto.randomBytes(4).toString('hex') + '.' + sniffed.ext;
+  const bucket = getStorage().bucket();
+  await bucket.file(path).save(buffer, { contentType: sniffed.type, resumable: false, metadata: { cacheControl: 'private, max-age=0' } });
+  const old = (snap.data().files || {})[slot];
+  await db.doc('onboardingDrafts/' + draftId).update({ ['files.' + slot]: { path, name, size: buffer.length, type: sniffed.type, at: Timestamp.now() } });
+  if (old && old.path && old.path !== path) { try { await bucket.file(old.path).delete({ ignoreNotFound: true }); } catch (error) { logger.warn('old upload not removed', old.path); } }
+  return { slot, name, size: buffer.length, type: sniffed.type };
+});
+
+exports.removeOnboardingFile = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const draftId = text(d.draftId, 40);
+  const slot = text(d.slot, 30);
+  if (!UPLOAD_SLOTS[slot]) throw new HttpsError('invalid-argument', 'Unknown file slot.');
+  const snap = await openDraftFor(draftId);
+  const old = (snap.data().files || {})[slot];
+  if (old && old.path) { try { await getStorage().bucket().file(old.path).delete({ ignoreNotFound: true }); } catch (error) { logger.warn('upload not removed', old.path); } }
+  await db.doc('onboardingDrafts/' + draftId).update({ ['files.' + slot]: FieldValue.delete() });
+  return { ok: true };
+});
+
+// Returns a small preview of an image the admin already uploaded (as a data URL), so the wizard can show it after a reload. Only image slots; never documents.
+exports.previewOnboardingFile = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const draftId = text(d.draftId, 40);
+  const slot = text(d.slot, 30);
+  const rule = UPLOAD_SLOTS[slot];
+  if (!rule || rule.kind === 'document') throw new HttpsError('invalid-argument', 'No preview for this field.');
+  const snap = await openDraftFor(draftId);
+  const file = (snap.data().files || {})[slot];
+  if (!file || !file.path || !file.path.startsWith(draftFolder(draftId))) return { found: false };
+  const [buffer] = await getStorage().bucket().file(file.path).download();
+  return { found: true, url: 'data:' + file.type + ';base64,' + buffer.toString('base64') };
+});
+
+// Holds one subdomain for one draft. The transaction makes sure two drafts can never hold the same name.
+exports.reserveSubdomain = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid } = await requirePlatformAdmin(request);
+  const d = request.data || {};
+  const draftId = text(d.draftId, 40);
+  if (!DRAFT_ID.test(draftId)) throw new HttpsError('invalid-argument', 'Unknown draft.');
+  const wanted = text(d.subdomain, 40);
+  const draftRef = db.doc('onboardingDrafts/' + draftId);
+  if (!wanted) {
+    // Clearing the field releases the held name.
+    return db.runTransaction(async (tx) => {
+      const draft = await tx.get(draftRef);
+      if (!draft.exists || draft.data().status !== 'draft') throw new HttpsError('failed-precondition', 'This draft is not open.');
+      const mine = draft.data().subdomain;
+      if (mine) { tx.set(db.doc('subdomainReservations/' + mine), { status: 'released', releasedAt: Timestamp.now() }, { merge: true }); tx.update(draftRef, { subdomain: FieldValue.delete() }); }
+      return { status: 'none' };
+    });
+  }
+  const sub = normalizeSubdomain(wanted);
+  if (!sub) throw new HttpsError('invalid-argument', 'Use 3 to 30 lowercase letters, numbers or single dashes, starting with a letter.');
+  if (RESERVED_SUBDOMAINS.includes(sub)) throw new HttpsError('already-exists', 'That name is reserved by the platform.');
+  return db.runTransaction(async (tx) => {
+    const [draft, hold, school, schoolHold] = await Promise.all([tx.get(draftRef), tx.get(db.doc('subdomainReservations/' + sub)), tx.get(db.doc('schools/' + sub)), tx.get(db.doc('schoolReservations/' + sub))]);
+    if (!draft.exists || draft.data().status !== 'draft') throw new HttpsError('failed-precondition', 'This draft is not open.');
+    const mine = draft.data().subdomain;
+    const heldByOther = hold.exists && hold.data().status !== 'released' && hold.data().draftId !== draftId;
+    // A name equal to an existing school's ID is taken, unless it is this very draft's own school ID.
+    const schoolTaken = school.exists || (schoolHold.exists && schoolHold.data().status !== 'released' && schoolHold.data().draftId !== draftId);
+    if (heldByOther || schoolTaken) throw new HttpsError('already-exists', 'That name is already taken. Try another.');
+    if (mine && mine !== sub) tx.set(db.doc('subdomainReservations/' + mine), { status: 'released', releasedAt: Timestamp.now() }, { merge: true });
+    tx.set(db.doc('subdomainReservations/' + sub), { draftId, by: uid, status: 'reserved', at: Timestamp.now() });
+    tx.update(draftRef, { subdomain: sub });
+    return { status: 'reserved', subdomain: sub };
+  });
+});
+
+// Looks for the school's proof-of-ownership TXT record. The result is only "pending" or "verified". HTTPS is not checked here, so nothing says "live".
+exports.checkCustomDomain = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const draftId = text((request.data || {}).draftId, 40);
+  const snap = await openDraftFor(draftId);
+  const domain = String((snap.data().values || {}).customDomain || '').trim().toLowerCase();
+  if (!DOMAIN_NAME.test(domain)) throw new HttpsError('failed-precondition', 'Save a valid domain name first.');
+  let token = snap.data().domainToken;
+  if (!token || snap.data().domainFor !== domain) { token = nodeCrypto.randomBytes(12).toString('hex'); await snap.ref.update({ domainToken: token, domainFor: domain, domainStatus: 'pending' }); }
+  const record = '_aziz-verify.' + domain;
+  const expected = 'aziz-verify=' + token;
+  let verified = false;
+  try {
+    const rows = await require('dns').promises.resolveTxt(record);
+    verified = rows.some((parts) => parts.join('') === expected);
+  } catch (error) { /* no record yet */ }
+  await snap.ref.update({ domainStatus: verified ? 'verified' : 'pending', domainCheckedAt: Timestamp.now() });
+  return { domain, status: verified ? 'verified' : 'pending', ssl: 'not-checked', record, value: expected,
+    message: verified ? 'Ownership is verified. HTTPS and publishing are set up later, so the site is not live on this domain yet.' : 'Not found yet. Add the TXT record at your domain provider, then check again. DNS changes can take time.' };
+});
+
+// Removes drafts nobody has touched for 30 days, with their files and held names. Run it by hand from the admin panel.
+exports.cleanupAbandonedDrafts = onCall({ memory: '256MiB', timeoutSeconds: 300 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const cutoff = Timestamp.fromMillis(Date.now() - 30 * 86400000);
+  const old = await db.collection('onboardingDrafts').where('updatedAt', '<', cutoff).limit(50).get();
+  let removed = 0;
+  for (const doc of old.docs) {
+    const data = doc.data();
+    if (data.status !== 'draft') continue;
+    await deleteDraftFiles(doc.id);
+    for (const [col, id] of [['schoolReservations', data.schoolId], ['subdomainReservations', data.subdomain]]) if (id) await db.doc(col + '/' + id).set({ status: 'released', releasedAt: Timestamp.now() }, { merge: true });
+    await doc.ref.delete();
+    removed += 1;
+  }
+  return { removed };
+});
+
+// Moves a draft's uploaded files into the school's own folder (images and documents kept apart) and records them in registration/main.
+// Safe to run again: files that were already moved are skipped.
+async function moveDraftFiles(draftId, schoolId) {
+  const draftRef = db.doc('onboardingDrafts/' + draftId);
+  const snap = await draftRef.get();
+  const files = snap.exists ? (snap.data().files || {}) : {};
+  const bucket = getStorage().bucket();
+  const moved = {};
+  for (const [slot, file] of Object.entries(files)) {
+    const rule = UPLOAD_SLOTS[slot];
+    if (!rule || !file || !file.path || !file.path.startsWith(draftFolder(draftId))) continue;
+    const visibility = rule.kind === 'image' ? 'public-candidate' : 'private';
+    const target = 'schools/' + schoolId + '/onboarding/' + (visibility === 'private' ? 'private' : 'site') + '/' + slot + '.' + file.path.split('.').pop();
+    await bucket.file(file.path).copy(bucket.file(target));
+    await bucket.file(file.path).delete({ ignoreNotFound: true });
+    moved[slot] = { path: target, name: file.name, size: file.size, type: file.type, visibility };
+  }
+  if (Object.keys(moved).length) {
+    await db.doc('schools/' + schoolId + '/registration/main').set({ files: moved }, { merge: true });
+    await draftRef.update({ files: FieldValue.delete() });
+  }
+  await deleteDraftFiles(draftId);
+  return Object.keys(moved).length;
+}
 
 // Writes the academic structure in chunks (a registration can have hundreds of class-subject links). Every write is a plain set,
 // so running it again after a failure is safe. When it is done, registration/main is marked so it is not repeated.
@@ -1430,6 +1648,7 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
   if (!first.exists) throw new HttpsError('not-found', 'That draft was not found.');
   // Already registered: return the same school, and finish the academic setup if an earlier attempt stopped part way.
   const finishAcademic = async (schoolId) => {
+    try { await moveDraftFiles(draftId, schoolId); } catch (error) { logger.error('moveDraftFiles failed', schoolId, error); }
     const reg = await db.doc('schools/' + schoolId + '/registration/main').get();
     if (!reg.exists || reg.data().academicProvisioned === true) return { provisioned: true };
     try { await provisionAcademic(schoolId, reg.data()); return { provisioned: true }; } catch (error) { logger.error('provisionAcademic failed', schoolId, error); return { provisioned: false }; }
@@ -1449,8 +1668,10 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
     for (const key of DRAFT_KEYS) v[key] = String((draft.data().values || {})[key] ?? '').trim();
     const problems = checkRegistration(v);
     if (problems.length) throw new HttpsError('invalid-argument', 'Fix these first: ' + problems.slice(0, 6).join('; ') + (problems.length > 6 ? '; and ' + (problems.length - 6) + ' more' : '') + '.');
-    const [school, hold] = await Promise.all([tx.get(db.doc('schools/' + schoolId)), tx.get(db.doc('schoolReservations/' + schoolId))]);
+    const subId = v.preferredSubdomain;
+    const [school, hold, subHold] = await Promise.all([tx.get(db.doc('schools/' + schoolId)), tx.get(db.doc('schoolReservations/' + schoolId)), subId ? tx.get(db.doc('subdomainReservations/' + subId)) : Promise.resolve(null)]);
     if (school.exists) throw new HttpsError('already-exists', 'A school with this ID already exists.');
+    if (subId && !(subHold.exists && subHold.data().draftId === draftId && subHold.data().status === 'reserved')) throw new HttpsError('failed-precondition', 'The subdomain is no longer held for this draft. Check it again.');
     if (!hold.exists || hold.data().draftId !== draftId || hold.data().status !== 'reserved') throw new HttpsError('failed-precondition', 'The school ID is no longer held for this draft. Reserve it again.');
     const now = Timestamp.now();
     const address = [v.street, v.block, v.town, v.district, v.state, v.pin, v.country].filter(Boolean).join(', ').slice(0, 500);
@@ -1461,7 +1682,11 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
       ...v, schemaVersion: 2, draftId, registeredBy: uid, registeredAt: now, academicProvisioned: false,
       sessionStartDate: academic.year.data.startDate, sessionEndDate: academic.year.data.endDate,
       feesMinor: { admission: moneyToMinor(v.admissionFee), annual: moneyToMinor(v.annualFee), exam: moneyToMinor(v.examFee) },
+      // Nothing here is live. The subdomain is only held, a custom domain stays pending until DNS and HTTPS are checked, and the website content is not published.
+      domainState: { subdomain: v.preferredSubdomain || '', subdomainStatus: v.preferredSubdomain ? 'reserved' : 'none', customDomain: v.customDomain || '', customDomainStatus: v.customDomain ? (draft.data().domainStatus === 'verified' ? 'verified' : 'pending') : 'none', ssl: 'not-checked', live: false },
+      websitePublished: false,
     });
+    if (subId) tx.update(db.doc('subdomainReservations/' + subId), { status: 'used', usedAt: now, schoolId });
     const billing = TRIAL_DAYS[planId]
       ? { plan: 'trial', status: 'trial', trialEnds: Timestamp.fromMillis(Date.now() + TRIAL_DAYS[planId] * 86400000), studentLimit: 50, staffLimit: 10 }
       : { plan: planId, status: 'active', startedOn: now.toDate().toISOString().slice(0, 10), studentLimit: plan.data().studentLimit, staffLimit: plan.data().staffLimit, storageMb: plan.data().storageMb, monthlyPrice: plan.data().monthlyPrice };
@@ -1476,6 +1701,7 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
   // The academic structure is built after the school exists, in chunks. If it fails the school is still registered and a repeat of the call finishes it.
   let provisioned = false; let counts = null;
   if (made.alreadyRegistered) return { schoolId: made.schoolId, alreadyRegistered: true, ...(await finishAcademic(made.schoolId)) };
+  try { await moveDraftFiles(draftId, made.schoolId); } catch (error) { logger.error('moveDraftFiles failed', made.schoolId, error); }
   try { counts = await provisionAcademic(made.schoolId, made.v); provisioned = true; } catch (error) { logger.error('provisionAcademic failed', made.schoolId, error); }
   return { schoolId: made.schoolId, alreadyRegistered: false, ownerEmail: made.ownerEmail, provisioned, counts };
 });

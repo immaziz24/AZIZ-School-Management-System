@@ -19,6 +19,56 @@ export const PAYMENT_METHODS = ['Cash', 'UPI', 'Bank transfer', 'Cheque', 'Card'
 export const CURRENCIES = ['INR', 'BDT', 'NPR', 'AED', 'USD'];
 const COMMON_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Mathematics', 'Science', 'Social Science', 'History', 'Geography', 'Physics', 'Chemistry', 'Biology',
   'Computer Science', 'Environmental Studies', 'Art and Craft', 'Physical Education', 'Music'];
+export const DOMAIN_PREFERENCES = ['AZIZ subdomain only', 'Connect my own domain later', 'Connect my own domain now'];
+export const UPLOAD_LIMITS = { logo: 1024 * 1024, favicon: 256 * 1024, heroImage: 2 * 1024 * 1024, gallery1: 2 * 1024 * 1024, gallery2: 2 * 1024 * 1024, gallery3: 2 * 1024 * 1024,
+  gallery4: 2 * 1024 * 1024, gallery5: 2 * 1024 * 1024, gallery6: 2 * 1024 * 1024, ownerPhoto: 1024 * 1024, principalPhoto: 1024 * 1024,
+  recognitionCert: 5 * 1024 * 1024, affiliationCert: 5 * 1024 * 1024, ownershipDoc: 5 * 1024 * 1024 };
+const DOCUMENT_SLOTS = ['recognitionCert', 'affiliationCert', 'ownershipDoc'];
+const HEX = /^#[0-9a-fA-F]{6}$/;
+const DOMAIN_NAME = /^(?=.{4,100}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/;
+const RESERVED_SUBDOMAINS = ['www', 'app', 'admin', 'api', 'mail', 'smtp', 'ftp', 'cdn', 'static', 'assets', 'login', 'auth', 'dashboard', 'billing', 'support', 'help', 'status', 'blog', 'docs', 'test', 'demo', 'staging', 'dev', 'aziz', 'root', 'ns1', 'ns2'];
+// The colours of each website theme, copied from school.mjs (a test checks the two lists agree).
+export const THEME_PALETTES = {
+  'classic': ['#14243d', '#faf6ec', '#b8913a'],
+  'royal': ['#2e1a4d', '#f7f3fb', '#c29b3f'],
+  'emerald': ['#0f3d2e', '#f3f8f4', '#c0a040'],
+  'crimson': ['#5a1020', '#fbf4f2', '#c79a3a'],
+  'midnight': ['#0b1020', '#e8ecf5', '#d4af37'],
+  'teal': ['#0d4a52', '#f1f8f8', '#d0a23c'],
+  'maroon': ['#4a0f1f', '#fbf5f4', '#c9a24a'],
+  'indigo': ['#1f2a6b', '#f4f5fc', '#d1a53c'],
+  'forest': ['#1f4d2b', '#f5f8f1', '#bf9b3a'],
+  'sunrise': ['#9a3412', '#fff7ed', '#eab308'],
+  'rose': ['#8a1e4a', '#fdf3f6', '#c9a24a'],
+  'charcoal': ['#222222', '#f5f5f3', '#c8a24a'],
+  'sky': ['#0f5c8a', '#f2f9fd', '#e0b43c'],
+  'saffron': ['#7a2e0e', '#fdf6ee', '#d19a2a'],
+  'ocean': ['#0b3550', '#f1f7fa', '#c9a23c'],
+  'slate': ['#2b2f38', '#f4f5f7', '#b8913a'],
+  'obsidian': ['#121212', '#f3ecd6', '#d4af37'],
+  'champagne': ['#5b4a2e', '#fbf6ea', '#c9a86a'],
+  'sapphire': ['#0b2a5b', '#f4f7fc', '#d4b04a'],
+  'emerald-noir': ['#06241c', '#e6f2ec', '#d1b05a'],
+  'ruby': ['#6b0f2a', '#fbf3f5', '#e0b55a'],
+  'rose-gold': ['#5a3a3f', '#fdf6f4', '#d08a93'],
+  'sandstone': ['#6b4f3a', '#faf4ea', '#d9a45e'],
+  'lavender': ['#4a3f6b', '#f7f4fc', '#c3aaf0'],
+  'sage': ['#3d5a47', '#f4f7f1', '#d2bc72'],
+  'blush': ['#8c4a3c', '#fff5f0', '#f0b27c'],
+  'pearl': ['#2f3a4a', '#fcfbf7', '#c4a55a'],
+  'platinum': ['#3a3f47', '#f6f7f8', '#b4bcc7'],
+  'copper': ['#4a2c1a', '#fbf5ee', '#d18b4c'],
+  'abyss': ['#04202f', '#e4f1f6', '#6fd0d8'],
+  'amethyst': ['#1b1033', '#ece6f7', '#cdb0ff'],
+  'bordeaux': ['#3a1020', '#fbf4f3', '#d2a56c'],
+  'olive': ['#3b4220', '#f8f7ee', '#cdb84a'],
+  'denim': ['#2c4a6e', '#faf5ea', '#d9b66a'],
+  'mocha': ['#4b3621', '#f8f1e7', '#d0a778'],
+  'aurora': ['#101a2e', '#e8f0ff', '#7fdcc8']
+};
+const DARK_THEMES = ['obsidian', 'emerald-noir', 'abyss', 'amethyst', 'aurora'];
+const THEME_OPTIONS = Object.keys(THEME_PALETTES).map((key) => [key, key.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase())]);
+const socialOk = (url, hosts) => { try { const u = new URL(url); return u.protocol === 'https:' && hosts.includes(u.hostname.replace(/^www\./, '')) && !u.username && !u.password; } catch { return false; } };
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MONTH_OPTIONS = MONTH_NAMES.map((name, i) => [String(i + 1), name]);
 const CLASS_OPTIONS = CLASS_LADDER.map((c) => [c, c]);
@@ -35,8 +85,8 @@ export const CATEGORIES = [
   { id: 'D', title: 'School owner' }, { id: 'E', title: 'Principal and administration' },
   { id: 'F', title: 'Academic configuration' }, { id: 'G', title: 'Capacity and staff' },
   { id: 'H', title: 'Timing and attendance' }, { id: 'I', title: 'Fees and finance' },
-  { id: 'J', title: 'Website and branding', later: 'Mark 3' }, { id: 'K', title: 'Domain configuration', later: 'Mark 3' },
-  { id: 'L', title: 'Facilities', later: 'Mark 3' }, { id: 'M', title: 'Subscription and commercial', later: 'Mark 4' },
+  { id: 'J', title: 'Website and branding' }, { id: 'K', title: 'Domain configuration' },
+  { id: 'L', title: 'Facilities' }, { id: 'M', title: 'Subscription and commercial', later: 'Mark 4' },
   { id: 'N', title: 'Login and security', later: 'Mark 4' }, { id: 'O', title: 'Verification and activation', later: 'Mark 4' },
 ];
 const noAffiliation = (v) => !v.board || v.board === 'none' || v.board === 'state';
@@ -137,9 +187,45 @@ export const FIELDS = [
   { id: 'F075', key: 'feeDueDay', cat: 'I', label: 'Monthly fee due date (day of the month)', type: 'int', min: 1, maxInt: 28 },
   { id: 'F076', key: 'latePolicy', cat: 'I', label: 'Late payment policy', type: 'textarea', max: 500, wide: true },
   { id: 'F077', key: 'paymentMethods', cat: 'I', label: 'Accepted payment methods', type: 'multi', wide: true, options: opts(PAYMENT_METHODS) },
+
+  // ----- Mark 3: uploads of Marks 1 to 2, then website, domain and facilities (F078 to F100) -----
+  { id: 'F017', key: 'recognitionCert', cat: 'B', label: 'Recognition certificate', type: 'upload', wide: true, help: 'PDF, JPG, PNG or WEBP, up to 5 MB. Kept private.' },
+  { id: 'F018', key: 'affiliationCert', cat: 'B', label: 'Affiliation certificate', type: 'upload', wide: true, help: 'PDF, JPG, PNG or WEBP, up to 5 MB. Kept private.' },
+  { id: 'F035', key: 'ownerPhoto', cat: 'D', label: 'Owner photograph', type: 'upload', wide: true, help: 'JPG, PNG or WEBP, up to 1 MB. Kept private.' },
+  { id: 'F036', key: 'ownershipDoc', cat: 'D', label: 'Ownership or authorization document', type: 'upload', wide: true, help: 'PDF, JPG, PNG or WEBP, up to 5 MB. Kept private.' },
+  { id: 'F040', key: 'principalPhoto', cat: 'E', label: 'Principal photograph', type: 'upload', wide: true, help: 'JPG, PNG or WEBP, up to 1 MB. Kept private.' },
+
+  { id: 'F078', key: 'logo', cat: 'J', label: 'School logo', type: 'upload', help: 'PNG, JPG or WEBP, up to 1 MB. SVG is not accepted.' },
+  { id: 'F079', key: 'favicon', cat: 'J', label: 'Favicon (small browser icon)', type: 'upload', help: 'PNG, JPG or WEBP, up to 256 KB.' },
+  { id: 'F080', key: 'heroImage', cat: 'J', label: 'Hero image (home page banner)', type: 'upload', wide: true, help: 'PNG, JPG or WEBP, up to 2 MB.' },
+  { id: 'F081', key: 'websiteTheme', cat: 'J', label: 'Website theme', type: 'select', options: THEME_OPTIONS, help: 'Preview only. Nothing is published to a public website at registration.' },
+  { id: 'F082', key: 'brandPrimary', cat: 'J', label: 'Primary brand colour', type: 'colour', help: 'Like #14243D. Leave empty to use the theme.' },
+  { id: 'F083', key: 'brandSecondary', cat: 'J', label: 'Secondary brand colour', type: 'colour' },
+  { id: 'F084', key: 'principalMessage', cat: 'J', label: 'Principal\'s message', type: 'textarea', max: 900, wide: true },
+  { id: 'F085', key: 'mission', cat: 'J', label: 'Mission', type: 'textarea', max: 500, wide: true },
+  { id: 'F086', key: 'vision', cat: 'J', label: 'Vision', type: 'textarea', max: 500, wide: true },
+  { id: 'F087', key: 'gallery', cat: 'J', label: 'Gallery images (up to 6)', type: 'gallery', wide: true, help: 'PNG, JPG or WEBP, up to 2 MB each.' },
+
+  { id: 'F088', key: 'preferredSubdomain', cat: 'K', label: 'Preferred subdomain', type: 'subdomain', wide: true, max: 30,
+    validate: (x) => (!/^[a-z][a-z0-9-]{1,28}[a-z0-9]$/.test(x) || x.includes('--') ? 'Use 3 to 30 lowercase letters, numbers or single dashes, starting with a letter.' : RESERVED_SUBDOMAINS.includes(x) ? 'That name is reserved by the platform.' : '') },
+  { id: 'F089', key: 'customDomain', cat: 'K', label: 'Existing custom domain', type: 'text', max: 100, wide: true, help: 'For example school.example.com. Ownership is checked through a DNS record, below.',
+    showIf: (v) => v.domainPreference !== 'AZIZ subdomain only', reqIf: (v) => v.domainPreference === 'Connect my own domain now',
+    validate: (x) => (DOMAIN_NAME.test(x) ? '' : 'Enter a domain like school.example.com (lowercase, no https://).') },
+  { id: 'F090', key: 'domainPreference', cat: 'K', label: 'Domain configuration preference', type: 'select', def: 'AZIZ subdomain only', redraw: true, options: opts(DOMAIN_PREFERENCES) },
+  { id: 'F091', key: 'facebookUrl', cat: 'K', label: 'Facebook page link', type: 'url', max: 300, validate: (x) => (socialOk(x, ['facebook.com', 'fb.com']) ? '' : 'Enter an https link on facebook.com.') },
+  { id: 'F092', key: 'instagramUrl', cat: 'K', label: 'Instagram link', type: 'url', max: 300, validate: (x) => (socialOk(x, ['instagram.com']) ? '' : 'Enter an https link on instagram.com.') },
+  { id: 'F093', key: 'youtubeUrl', cat: 'K', label: 'YouTube link', type: 'url', max: 300, validate: (x) => (socialOk(x, ['youtube.com', 'youtu.be']) ? '' : 'Enter an https link on youtube.com.') },
+
+  { id: 'F094', key: 'facilityTransport', cat: 'L', label: 'Transport (school buses)', type: 'toggle' },
+  { id: 'F095', key: 'facilityHostel', cat: 'L', label: 'Hostel', type: 'toggle' },
+  { id: 'F096', key: 'facilityLibrary', cat: 'L', label: 'Library', type: 'toggle' },
+  { id: 'F097', key: 'facilityLab', cat: 'L', label: 'Laboratory', type: 'toggle' },
+  { id: 'F098', key: 'facilityComputerLab', cat: 'L', label: 'Computer laboratory', type: 'toggle' },
+  { id: 'F099', key: 'facilityCanteen', cat: 'L', label: 'Canteen', type: 'toggle' },
+  { id: 'F100', key: 'facilitySports', cat: 'L', label: 'Sports and playground', type: 'toggle' },
 ];
-const UPLOAD_NOTES = { B: 'Recognition and affiliation certificates (F017, F018)', D: 'Owner photograph and authorization document (F035, F036)', E: 'Principal photograph (F040)' };
-const ACTIVE = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+FIELDS.sort((a, b) => a.id.localeCompare(b.id));
+const ACTIVE = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
 
 const typeOf = (field, v) => (field.dynamicType ? field.dynamicType(v) : field.type);
 const visible = (field, v) => !field.showIf || field.showIf(v);
@@ -155,6 +241,8 @@ export function fieldProblem(field, v) {
   if (type === 'phone' && !PHONE.test(x)) return 'Enter a phone number with digits only (a leading + is fine).';
   if (type === 'select' && !field.options.some(([value]) => value === x)) return 'Choose one of the listed options.';
   if (type === 'multi') { const list = field.optionsFn ? field.optionsFn(v) : field.options; if (splitList(x).some((item) => !list.some(([value]) => value === item))) return 'Choose from the listed options.'; }
+  if (type === 'colour' && !HEX.test(x)) return 'Enter a colour like #14243D.';
+  if (type === 'url' && !/^https:\/\//.test(x)) return 'The link must start with https://.';
   if (type === 'time' && !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(x)) return 'Enter a time like 08:30.';
   if (type === 'int') {
     if (!/^[0-9]{1,6}$/.test(x)) return 'Enter a whole number, zero or more.';
@@ -212,6 +300,18 @@ const STYLE = `
 #onb .ob-checks input{width:auto}
 #onb .ob-sections{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px 16px}
 #onb .ob-sections label{display:block}
+#onb .ob-file{display:flex;gap:12px;align-items:center;margin:6px 0}
+#onb .ob-thumb{width:64px;height:64px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#fff}
+#onb .ob-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:4px 14px}
+#onb .ob-toggle{display:flex;gap:8px;align-items:center}
+#onb .ob-toggle input{width:auto}
+#onb .ob-preview{margin:16px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--pv-bg,#faf6ec);color:var(--pv-ink,#1b1b1b);max-width:520px;padding-bottom:10px}
+#onb .pv-bar{display:flex;gap:10px;align-items:center;padding:10px 14px;background:var(--pv-main,#14243d);color:#fff}
+#onb .pv-logo{width:30px;height:30px;object-fit:contain;background:#fff;border-radius:6px}
+#onb .pv-hero{min-height:110px;padding:18px 14px;background-size:cover;background-position:center;background-color:rgba(0,0,0,.04)}
+#onb .pv-msg{margin:0;background:rgba(255,255,255,.82);color:#1b1b1b;padding:8px 10px;border-radius:8px;font-size:.9rem}
+#onb .pv-btn{display:inline-block;margin:0 14px;padding:6px 14px;border-radius:20px;background:var(--pv-accent,#b8913a);color:#111;font-weight:600;font-size:.85rem}
+#onb .ob-preview small{display:block;margin:8px 14px 0;opacity:.7}
 #onb .ob-pick{display:none}
 #onb .ob-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 18px}
 #onb .ob-grid .wide{grid-column:1/-1}
@@ -242,7 +342,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
   document.body.append(root);
   document.body.style.overflow = 'hidden';
 
-  const S = { draftId: draftIdFromRoute || '', exists: false, revision: 0, step: 0, values: {}, schoolId: '', dupes: [], saveState: '', saveAt: '', busy: false, plan: 'trial', reason: '', registered: null };
+  const S = { draftId: draftIdFromRoute || '', exists: false, revision: 0, step: 0, values: {}, schoolId: '', dupes: [], saveState: '', saveAt: '', busy: false, plan: 'trial', reason: '', registered: null, files: {}, thumbs: {}, subHeld: '', domainInfo: null, domainStatus: '' };
   let timer = 0; let saving = false; let dirty = false;
 
   const call = async (name, data) => {
@@ -252,7 +352,8 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
   const say = (state, text) => { S.saveState = state; S.saveAt = text; const chip = root.querySelector('.ob-chip'); if (chip) { chip.className = 'ob-chip ' + state; chip.textContent = text; } };
 
   // ----- saving: debounced, with a revision check so a second tab cannot silently overwrite the first (C04) -----
-  const clean = () => Object.fromEntries(Object.entries(S.values).filter(([, x]) => String(x ?? '').trim() !== '').map(([k, x]) => [k, String(x).trim()]));
+  // Fields hidden by an earlier answer are not saved, so an old value cannot fail the server's check (C08).
+  const clean = () => { const hidden = new Set(FIELDS.filter((f) => !visible(f, S.values)).map((f) => f.key)); return Object.fromEntries(Object.entries(S.values).filter(([k, x]) => !hidden.has(k) && String(x ?? '').trim() !== '').map(([k, x]) => [k, String(x).trim()])); };
   async function persist() {
     if (!S.draftId) return true;
     while (saving) await new Promise((resolve) => setTimeout(resolve, 80));
@@ -303,6 +404,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       const d = found.draft;
       if (d.status !== 'draft') { toast('That registration is already finished.'); location.hash = '#/schools'; return undefined; }
       S.exists = true; S.revision = d.revision; S.step = Math.min(d.step ?? 0, ACTIVE.length); S.values = { ...d.values }; S.schoolId = d.schoolId || '';
+      S.files = d.files || {}; S.subHeld = d.subdomain || ''; S.domainStatus = d.domainStatus || '';
       if (applyDefaults()) later();
     }
     return draw();
@@ -371,9 +473,146 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       body, field.help ? h('p', { class: 'ob-help' }, field.help) : null, err);
   }
 
+  // ----- Mark 3: files, theme preview, subdomain and domain status -----
+  const sizeText = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
+  const readBase64 = (file) => new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = () => reject(new Error('The file could not be read.')); r.readAsDataURL(file); });
+  const isDocSlot = (slot) => DOCUMENT_SLOTS.includes(slot);
+  async function ensureDraft() {
+    if (!S.draftId) { S.draftId = newDraftId(); history.replaceState(null, '', '#/schools/register/' + S.draftId); }
+    clearTimeout(timer);
+    return persist();
+  }
+  // One file box. The file is checked here for size and type, and again on the server, which also reads the file's contents.
+  function slotBox(slot, label) {
+    const info = S.files[slot];
+    const status = h('span', { class: 'ob-help', id: 'ob-' + slot + '-err', role: 'status' }, info ? info.name + ' (' + sizeText(info.size) + ')' : 'No file chosen.');
+    const input = h('input', { type: 'file', id: 'ob-' + slot, accept: isDocSlot(slot) ? 'image/png,image/jpeg,image/webp,application/pdf' : 'image/png,image/jpeg,image/webp', 'aria-label': label });
+    const thumb = h('img', { class: 'ob-thumb', alt: '', hidden: !S.thumbs[slot] });
+    if (S.thumbs[slot]) thumb.src = S.thumbs[slot];
+    else if (info && !isDocSlot(slot) && !['ownerPhoto', 'principalPhoto'].includes(slot)) {
+      call('previewOnboardingFile', { draftId: S.draftId, slot }).then((r) => { if (r.found) { S.thumbs[slot] = r.url; thumb.src = r.url; thumb.hidden = false; } }).catch(() => {});
+    }
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      if (!file) return;
+      if (file.size > UPLOAD_LIMITS[slot]) { status.textContent = 'That file is larger than ' + sizeText(UPLOAD_LIMITS[slot]) + '.'; input.value = ''; return; }
+      if (!/^image\/(png|jpeg|webp)$/.test(file.type) && !(isDocSlot(slot) && file.type === 'application/pdf')) { status.textContent = isDocSlot(slot) ? 'Use a PDF, JPG, PNG or WEBP file.' : 'Use a PNG, JPG or WEBP image (SVG is not accepted).'; input.value = ''; return; }
+      status.textContent = 'Uploading.';
+      try {
+        if (!(await ensureDraft())) { status.textContent = 'Save the draft first (see the message at the top).'; return; }
+        const data = await readBase64(file);
+        const r = await call('uploadOnboardingFile', { draftId: S.draftId, slot, name: file.name, data });
+        S.files[slot] = { name: r.name, size: r.size, type: r.type };
+        if (r.type.startsWith('image/') && !isDocSlot(slot)) S.thumbs[slot] = 'data:' + r.type + ';base64,' + data; else delete S.thumbs[slot];
+        draw();
+      } catch (error) { status.textContent = error?.message || friendly(error); input.value = ''; }
+    });
+    const remove = info ? h('button', { type: 'button', class: 'btn sm', onclick: async () => {
+      try { await call('removeOnboardingFile', { draftId: S.draftId, slot }); delete S.files[slot]; delete S.thumbs[slot]; draw(); } catch (error) { status.textContent = error?.message || friendly(error); }
+    } }, 'Remove') : null;
+    return h('div', { class: 'ob-file' }, thumb, h('div', {}, h('div', {}, input), status, remove));
+  }
+  function uploadInput(field) {
+    const body = field.type === 'gallery' ? h('div', { class: 'ob-gallery' }, [1, 2, 3, 4, 5, 6].map((n) => slotBox('gallery' + n, 'Gallery image ' + n))) : slotBox(field.key, field.label);
+    return h('div', { class: field.wide ? 'wide' : '' }, h('label', {}, field.label, h('span', { class: 'ob-id' }, field.id)), body, field.help ? h('p', { class: 'ob-help' }, field.help) : null);
+  }
+  function toggleInput(field) {
+    const box = h('input', { type: 'checkbox', id: 'ob-' + field.key });
+    box.checked = S.values[field.key] === 'yes';
+    box.addEventListener('change', () => { if (box.checked) S.values[field.key] = 'yes'; else delete S.values[field.key]; later(); });
+    return h('div', {}, h('label', { class: 'ob-toggle', for: 'ob-' + field.key }, box, ' ' + field.label, h('span', { class: 'ob-id' }, field.id)));
+  }
+  function colourInput(field) {
+    const id = 'ob-' + field.key;
+    const text = h('input', { id, placeholder: '#14243D', maxlength: '7', autocomplete: 'off' }); text.value = S.values[field.key] || '';
+    const pick = h('input', { type: 'color', 'aria-label': field.label + ' picker', value: HEX.test(text.value) ? text.value : '#14243d' });
+    const err = h('p', { class: 'ob-err', id: id + '-err' });
+    const sync = () => { S.values[field.key] = text.value.trim(); err.textContent = fieldProblem(field, S.values); if (HEX.test(text.value)) pick.value = text.value; later(); refreshPreview(); };
+    text.addEventListener('input', sync);
+    pick.addEventListener('input', () => { text.value = pick.value.toUpperCase(); sync(); });
+    return h('div', {}, h('label', { for: id }, field.label, h('span', { class: 'ob-id' }, field.id)), h('div', { class: 'row' }, text, pick), field.help ? h('p', { class: 'ob-help' }, field.help) : null, err);
+  }
+  // Holds the subdomain for this draft. Two drafts can never hold the same name (the server does it in one transaction).
+  async function holdSubdomain(value, status) {
+    const x = String(value || '').trim().toLowerCase();
+    if (!x) { if (S.subHeld) { try { await call('reserveSubdomain', { draftId: S.draftId, subdomain: '' }); } catch { /* released later */ } S.subHeld = ''; } if (status) status.textContent = ''; return true; }
+    if (x === S.subHeld) return true;
+    if (status) status.textContent = 'Checking.';
+    try {
+      if (!(await ensureDraft())) return false;
+      const r = await call('reserveSubdomain', { draftId: S.draftId, subdomain: x });
+      S.subHeld = r.subdomain; if (status) status.textContent = '';
+      return true;
+    } catch (error) { if (status) status.textContent = error?.message || friendly(error); S.subHeld = ''; return false; }
+  }
+  function subdomainInput(field) {
+    const id = 'ob-' + field.key;
+    const el = h('input', { id, placeholder: S.schoolId || 'your-school', autocomplete: 'off', maxlength: '30' }); el.value = S.values[field.key] || '';
+    const err = h('p', { class: 'ob-err', id: id + '-err' });
+    const held = h('p', { class: 'ob-help', role: 'status' });
+    const showHeld = () => { held.textContent = S.values[field.key] && S.values[field.key] === S.subHeld ? 'Held for this registration. It is not live: the address is switched on only after setup is complete.' : S.values[field.key] ? 'Not held yet. Press Check, or it is checked when you continue.' : 'Optional. Leave empty to decide later.'; };
+    showHeld();
+    el.addEventListener('input', () => { S.values[field.key] = el.value.trim().toLowerCase(); err.textContent = ''; later(); showHeld(); });
+    const check = h('button', { type: 'button', class: 'btn sm', onclick: async () => {
+      el.value = el.value.trim().toLowerCase(); S.values[field.key] = el.value;
+      const p = el.value ? fieldProblem(field, S.values) : '';
+      if (p) { err.textContent = p; return; }
+      await holdSubdomain(el.value, err); showHeld();
+    } }, 'Check and hold');
+    return h('div', { class: 'wide' }, h('label', { for: id }, field.label, h('span', { class: 'ob-id' }, field.id)), h('div', { class: 'row' }, el, check), held, err);
+  }
+  // Preview of the chosen branding. It only changes this panel; nothing is written to any website (C13).
+  let previewBox = null;
+  function refreshPreview() {
+    if (!previewBox) return;
+    const v = S.values;
+    const pal = THEME_PALETTES[v.websiteTheme] || ['#14243d', '#faf6ec', '#b8913a'];
+    const main = HEX.test(v.brandPrimary || '') ? v.brandPrimary : pal[0];
+    const accent = HEX.test(v.brandSecondary || '') ? v.brandSecondary : pal[2];
+    const dark = DARK_THEMES.includes(v.websiteTheme);
+    previewBox.style.setProperty('--pv-main', main); previewBox.style.setProperty('--pv-accent', accent);
+    previewBox.style.setProperty('--pv-bg', dark ? pal[0] : pal[1]); previewBox.style.setProperty('--pv-ink', dark ? pal[1] : '#1b1b1b');
+    previewBox.querySelector('.pv-name').textContent = v.name || 'Your school name';
+    previewBox.querySelector('.pv-msg').textContent = (v.mission || v.principalMessage || 'Your mission or principal\'s message appears here.').slice(0, 160);
+    const logo = previewBox.querySelector('.pv-logo'); logo.hidden = !S.thumbs.logo; if (S.thumbs.logo) logo.src = S.thumbs.logo;
+    const hero = previewBox.querySelector('.pv-hero'); hero.style.backgroundImage = S.thumbs.heroImage ? 'url("' + S.thumbs.heroImage + '")' : '';
+  }
+  function themePreview() {
+    previewBox = h('div', { class: 'ob-preview', 'aria-label': 'Branding preview' },
+      h('div', { class: 'pv-bar' }, h('img', { class: 'pv-logo', alt: '', hidden: true }), h('b', { class: 'pv-name' }, '')),
+      h('div', { class: 'pv-hero' }, h('p', { class: 'pv-msg' }, '')), h('span', { class: 'pv-btn' }, 'Admission open'),
+      h('small', {}, 'Preview only. Nothing is published to a website.'));
+    setTimeout(refreshPreview, 0);
+    return previewBox;
+  }
+  // DNS ownership check for a custom domain: pending until the TXT record is really found. HTTPS and publishing are not claimed here.
+  function domainPanel() {
+    if (S.values.domainPreference === 'AZIZ subdomain only' || !S.values.customDomain || fieldProblem(FIELDS.find((f) => f.key === 'customDomain'), S.values)) return null;
+    const out = h('div', { role: 'status' });
+    const paint = (info) => {
+      const state = info?.status || S.domainStatus || 'pending';
+      out.replaceChildren(h('p', {}, h('b', {}, 'Status: '), state === 'verified' ? 'Ownership verified (not live yet)' : 'Pending: DNS record not found yet', ' | HTTPS: not checked'),
+        info ? h('p', { class: 'ob-help' }, info.message) : h('p', { class: 'ob-help' }, 'Press Check to get the DNS record to add.'),
+        info?.record ? h('p', { class: 'ob-help' }, 'Add a TXT record. Name: ', h('code', {}, info.record), ' Value: ', h('code', {}, info.value)) : null);
+    };
+    paint(S.domainInfo);
+    const btn = h('button', { type: 'button', class: 'btn sm', onclick: async () => {
+      btn.disabled = true; out.textContent = 'Checking DNS.';
+      try {
+        if (!(await ensureDraft())) throw new Error('Save the draft first.');
+        S.domainInfo = await call('checkCustomDomain', { draftId: S.draftId }); S.domainStatus = S.domainInfo.status; paint(S.domainInfo);
+      } catch (error) { out.textContent = error?.message || friendly(error); } finally { btn.disabled = false; }
+    } }, 'Check DNS record');
+    return h('div', { class: 'card', style: 'margin:12px 0' }, h('h3', { style: 'margin-top:0' }, 'Custom domain status'), out, btn);
+  }
+
   function input(field) {
     const type = typeOf(field, S.values);
     if (['multi', 'sections', 'subjects'].includes(type)) return groupInput(field);
+    if (type === 'upload' || type === 'gallery') return uploadInput(field);
+    if (type === 'toggle') return toggleInput(field);
+    if (type === 'colour') return colourInput(field);
+    if (type === 'subdomain') return subdomainInput(field);
     const id = 'ob-' + field.key;
     const value = S.values[field.key] ?? '';
     let el;
@@ -390,6 +629,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       let x = el.value;
       if (type === 'email') x = x.toLowerCase();
       S.values[field.key] = x;
+      refreshPreview();
       if (field.redraw || ['country', 'board', 'schoolType'].includes(field.key)) { draw(); later(); return; }
       if (final) { el.value = x.trim(); S.values[field.key] = x.trim(); const p = fieldProblem(field, S.values); err.textContent = p; el.setAttribute('aria-invalid', p ? 'true' : 'false'); }
       later();
@@ -431,10 +671,17 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
       h('h2', {}, CATEGORIES[S.step].id + '. ' + CATEGORIES[S.step].title),
       dupePanel(),
       h('div', { class: 'ob-grid' }, cat === 'A' ? [fields.slice(0, 1).map(input), idBlock(), fields.slice(1).map(input)] : fields.map(input)),
-      UPLOAD_NOTES[cat] ? h('p', { class: 'ob-help', style: 'margin-top:14px' }, UPLOAD_NOTES[cat] + ' arrive in Mark 3, together with secure file storage.') : null,
+      cat === 'J' ? themePreview() : null,
+      cat === 'K' ? domainPanel() : null,
       h('button', { type: 'submit', hidden: true }));
   }
 
+  function shownValue(f) {
+    if (f.type === 'upload') return S.files[f.key] ? S.files[f.key].name : '';
+    if (f.type === 'gallery') { const n = [1, 2, 3, 4, 5, 6].filter((i) => S.files['gallery' + i]).length; return n ? n + ' image(s)' : ''; }
+    if (f.type === 'toggle') return S.values[f.key] === 'yes' ? 'Yes' : '';
+    return S.values[f.key];
+  }
   function review() {
     const missing = ACTIVE.flatMap((cat) => stepProblems(cat, S.values).map((p) => ({ cat, ...p })).concat(
       FIELDS.filter((f) => f.cat === cat && required(f, S.values) && !String(S.values[f.key] ?? '').trim() && !fieldProblem(f, S.values)).map((f) => ({ cat, field: f, message: f.label + ' is required.' }))));
@@ -449,7 +696,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
         h('ul', {}, missing.map((m) => h('li', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); go(ACTIVE.indexOf(m.cat)); } }, m.message))))) : h('p', { class: 'ob-help' }, 'Everything required is filled in.'),
       dupePanel(),
       ACTIVE.map((cat, i) => h('div', { class: 'card', style: 'margin:12px 0' }, h('div', { class: 'row' }, h('h3', { style: 'flex:1;margin:0' }, cat + '. ' + CATEGORIES[i].title), h('a', { href: '#', onclick: (e) => { e.preventDefault(); go(i); } }, 'Edit')),
-        h('table', { class: 'ob-rev' }, h('tbody', {}, FIELDS.filter((f) => f.cat === cat && visible(f, S.values)).map((f) => h('tr', {}, h('td', {}, f.label), h('td', {}, S.values[f.key] || h('span', { class: 'muted' }, '-')))))))),
+        h('table', { class: 'ob-rev' }, h('tbody', {}, FIELDS.filter((f) => f.cat === cat && visible(f, S.values)).map((f) => h('tr', {}, h('td', {}, f.label), h('td', {}, shownValue(f) || h('span', { class: 'muted' }, '-')))))))),
       h('div', { class: 'card', style: 'margin:12px 0' }, h('h3', {}, 'Plan and reason'),
         h('p', { class: 'ob-help' }, 'Billing and activation settings arrive in Mark 4. For now choose the plan, as before. The price and limits are taken from the plan list on the server.'),
         h('label', { for: 'ob-plan' }, 'Plan'), planBox, h('label', { for: 'ob-reason' }, 'Reason (kept in the audit log)'), reason),
@@ -481,6 +728,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
     if (S.step === 0 && !S.schoolId && S.values.name) {
       try { S.schoolId = (await call('reserveSchoolId', { draftId: S.draftId, name: S.values.name })).schoolId; } catch (e) { toast(e?.message || 'Could not hold a school ID.'); return; }
     }
+    if (ACTIVE[S.step] === 'K' && S.values.preferredSubdomain && !(await holdSubdomain(S.values.preferredSubdomain, root.querySelector('#ob-preferredSubdomain-err')))) return;
     if (S.step <= 2) await checkDupes();
     S.step = Math.min(S.step + 1, ACTIVE.length); await persist(); draw(); scrollTop();
   }
@@ -514,6 +762,7 @@ export async function mountOnboarding(ctx, draftIdFromRoute) {
   }
 
   function draw() {
+    previewBox = null;
     const width = Math.round((progressOf(S.values) / ACTIVE.length) * 100);
     const main = h('div', {},
       h('p', { class: 'muted', style: 'margin:0' }, 'Step ' + (S.step + 1) + ' of ' + (ACTIVE.length + 1) + ': ' + stepName(S.step) + ' | ' + progressOf(S.values) + ' of ' + ACTIVE.length + ' sections complete'),

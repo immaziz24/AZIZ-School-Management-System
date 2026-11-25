@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../public/onboarding.mjs', import.meta.url), 'utf8');
 const mod = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
-const { FIELDS, CATEGORIES, fieldProblem, stepProblems, stepDone, progressOf, CLASS_LADDER, WEEK_DAYS, ATTENDANCE_METHODS, EXAM_SYSTEMS, GRADING_SYSTEMS, PAYMENT_METHODS, CURRENCIES } = mod;
+const { FIELDS, CATEGORIES, fieldProblem, stepProblems, stepDone, progressOf, CLASS_LADDER, WEEK_DAYS, ATTENDANCE_METHODS, EXAM_SYSTEMS, GRADING_SYSTEMS, PAYMENT_METHODS, CURRENCIES, THEME_PALETTES, DOMAIN_PREFERENCES, UPLOAD_LIMITS } = mod;
 
 const good = {
   name: 'Green Valley School', schoolType: 'Private unaided', schoolLevel: 'Secondary', genderComposition: 'Co-educational', medium: 'English',
@@ -15,11 +15,11 @@ const good = {
 };
 const field = (key) => FIELDS.find((f) => f.key === key);
 
-test('the registry covers the 71 stored fields of categories A to I with no duplicates', () => {
-  assert.equal(FIELDS.length, 71);
-  assert.equal(new Set(FIELDS.map((f) => f.key)).size, 71);
-  assert.equal(new Set(FIELDS.map((f) => f.id)).size, 71);
-  assert.deepEqual([...new Set(FIELDS.map((f) => f.cat))], ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']);
+test('the registry covers the 99 fields of categories A to L with no duplicates', () => {
+  assert.equal(FIELDS.length, 99);
+  assert.equal(new Set(FIELDS.map((f) => f.key)).size, 99);
+  assert.equal(new Set(FIELDS.map((f) => f.id)).size, 99);
+  assert.deepEqual([...new Set(FIELDS.map((f) => f.cat))], ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L']);
   assert.equal(CATEGORIES.length, 15);
 });
 
@@ -155,4 +155,58 @@ test('lists for classes, days, attendance and so on are in sync with the server'
   assert.deepEqual(GRADING_SYSTEMS, list('GRADING_SYSTEMS'));
   assert.deepEqual(PAYMENT_METHODS, list('PAYMENT_METHODS'));
   assert.deepEqual(CURRENCIES, list('CURRENCIES'));
+});
+
+test('Mark 3: website branding checks', () => {
+  assert.match(fieldProblem(field('brandPrimary'), { brandPrimary: 'red' }), /colour/);
+  assert.match(fieldProblem(field('brandPrimary'), { brandPrimary: '#12345' }), /colour/);
+  assert.equal(fieldProblem(field('brandPrimary'), { brandPrimary: '#14243D' }), '');
+  assert.equal(fieldProblem(field('brandSecondary'), {}), '');
+  assert.match(fieldProblem(field('websiteTheme'), { websiteTheme: 'neon-pink' }), /listed/);
+  assert.equal(fieldProblem(field('websiteTheme'), { websiteTheme: 'royal' }), '');
+  assert.match(fieldProblem(field('principalMessage'), { principalMessage: 'x'.repeat(901) }), /too long/);
+  assert.equal(fieldProblem(field('mission'), { mission: 'x'.repeat(500) }), '');
+});
+
+test('Mark 3: subdomain, custom domain and links', () => {
+  const sub = field('preferredSubdomain');
+  assert.equal(fieldProblem(sub, { preferredSubdomain: 'green-valley' }), '');
+  for (const bad of ['ab', 'Green', '9school', 'a--b', '-abc', 'abc-', 'www', 'admin', 'x'.repeat(31)]) assert.notEqual(fieldProblem(sub, { preferredSubdomain: bad }), '', bad);
+  const dom = field('customDomain');
+  assert.equal(dom.showIf({ domainPreference: 'AZIZ subdomain only' }), false);
+  assert.equal(fieldProblem(dom, { domainPreference: 'AZIZ subdomain only', customDomain: 'not a domain' }), '');
+  assert.match(fieldProblem(dom, { domainPreference: 'Connect my own domain now' }), /required/);
+  assert.equal(fieldProblem(dom, { domainPreference: 'Connect my own domain later' }), '');
+  assert.match(fieldProblem(dom, { domainPreference: 'Connect my own domain later', customDomain: 'https://x.com' }), /domain/);
+  assert.equal(fieldProblem(dom, { domainPreference: 'Connect my own domain now', customDomain: 'school.example.com' }), '');
+  assert.match(fieldProblem(field('facebookUrl'), { facebookUrl: 'http://facebook.com/x' }), /https/);
+  assert.match(fieldProblem(field('facebookUrl'), { facebookUrl: 'https://evil.com/facebook.com' }), /facebook/);
+  assert.equal(fieldProblem(field('facebookUrl'), { facebookUrl: 'https://www.facebook.com/greenvalley' }), '');
+  assert.equal(fieldProblem(field('youtubeUrl'), { youtubeUrl: 'https://youtu.be/abc' }), '');
+  assert.match(fieldProblem(field('instagramUrl'), { instagramUrl: 'https://user:pw@instagram.com/x' }), /instagram/);
+});
+
+test('Mark 3: uploads and facilities are optional and keep no text value', () => {
+  const uploads = FIELDS.filter((f) => f.type === 'upload' || f.type === 'gallery');
+  assert.equal(uploads.length, 9);
+  for (const f of uploads) assert.equal(fieldProblem(f, {}), '');
+  assert.equal(FIELDS.filter((f) => f.type === 'toggle').length, 7);
+  assert.equal(stepDone('L', {}), false);
+  assert.equal(stepDone('L', { facilityLibrary: 'yes' }), true);
+  assert.equal(stepProblems('J', {}).length, 0);
+  assert.equal(stepProblems('K', {}).length, 0);
+});
+
+test('Mark 3: theme list, domain options and file limits agree with school.mjs and the server', () => {
+  const school = readFileSync(new URL('../public/school.mjs', import.meta.url), 'utf8');
+  const block = school.slice(school.indexOf('const THEMES = {'), school.indexOf('async function loadExtras'));
+  const keys = [...block.matchAll(/'?([a-z][a-z-]*)'?:\s*\['#/g)].map((m) => m[1]);
+  assert.deepEqual(Object.keys(THEME_PALETTES), keys);
+  const server = readFileSync(new URL('../functions/index.js', import.meta.url), 'utf8');
+  const serverThemes = [...server.match(/const THEME_KEYS = \[([^\]]*)\]/)[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  assert.deepEqual(serverThemes, keys);
+  const serverPrefs = [...server.match(/const DOMAIN_PREFERENCES = \[([^\]]*)\]/)[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  assert.deepEqual(serverPrefs, DOMAIN_PREFERENCES);
+  const slots = Object.fromEntries([...server.matchAll(/(\w+): \{ kind: '[a-z-]+', max: (\d+(?: \* \d+)*) \}/g)].map((m) => [m[1], eval(m[2])]));
+  assert.deepEqual(slots, UPLOAD_LIMITS);
 });
