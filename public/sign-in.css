@@ -1,0 +1,295 @@
+/* AZIZ School Management System: premium theme for sign-in, owner, principal, teacher, student and parent screens. */
+:root{--bg:#060b17;--bg2:#0c1428;--card:rgba(15,24,46,.8);--ink:#f3eee1;--mut:#9ca7c0;--gold:#c9a24a;--gold2:#ecd592;--line:rgba(201,162,74,.2);--line2:rgba(201,162,74,.45);--ok:#6fd3a0;--bad:#ff8c8c;
+  font-family:Inter,"Segoe UI",system-ui,sans-serif;color:var(--ink);background:var(--bg);color-scheme:dark}
+*{box-sizing:border-box}
+[hidden],[data-off]{display:none!important}
+body{margin:0;min-height:100vh;background:radial-gradient(1100px 650px at 85% -8%,#16264a 0,transparent 60%),radial-gradient(900px 600px at -8% 35%,#101b36 0,transparent 55%),var(--bg);color:var(--ink);line-height:1.6;display:flow-root;padding:0}
+body::before,body::after{content:"";position:fixed;z-index:-1;border-radius:50%;pointer-events:none}
+body::before{width:520px;height:520px;background:radial-gradient(closest-side,#c9a24a2a,transparent);top:4%;left:-200px}
+body::after{width:640px;height:640px;background:radial-gradient(closest-side,#2a4cc02a,transparent);bottom:-260px;right:-220px}
+@keyframes drift{to{transform:translate(60px,-40px) scale(1.15)}}
+main{width:min(1180px,94vw);margin:0 auto;padding:12px 0 80px;background:none;border:0;box-shadow:none}
+h1,h2,h3,h4{font-family:"Cormorant Garamond",Georgia,serif;font-weight:600;letter-spacing:.01em;line-height:1.15;margin:0 0 .5em;color:var(--ink)}
+h1{font-size:clamp(1.9rem,4vw,2.6rem)}h2{font-size:clamp(1.7rem,3vw,2.3rem)}h3{font-size:1.55rem}h4{font-size:1.2rem;color:var(--gold2)}
+a{color:var(--gold2);text-decoration-color:var(--line2);text-underline-offset:3px}
+a:hover{color:#fff}
+p{margin:.5em 0}
+small,.note{color:var(--mut)}
+#firebase-status{color:var(--mut);overflow-wrap:anywhere;margin:12px 0}
+[role=status]{color:var(--mut);font-size:.92rem}
+[role=status]:empty{display:none}
+
+/* ---------- Signed-out: centred sign-in card ---------- */
+body:not(.signed-in) main{width:min(480px,92vw);margin:7vh auto 0;padding:46px 40px 36px;border:1px solid var(--line);border-top:2px solid var(--gold);border-radius:28px;background:var(--card);box-shadow:0 50px 120px -30px #000,0 0 0 1px #ffffff08 inset}
+body:not(.signed-in) main>h1{text-align:center;font-size:2.2rem;background:linear-gradient(100deg,#b88a2e,#f3dfa2 45%,#c9a24a 75%,#f3dfa2);-webkit-background-clip:text;background-clip:text;color:transparent}
+body:not(.signed-in) main>h1::before{content:"A";display:grid;place-items:center;width:58px;height:58px;margin:0 auto 16px;border-radius:18px;background:conic-gradient(from 200deg,#8a6a22,#f3dfa2,#c9a24a,#8a6a22);color:#0a0f1d;font:700 1.9rem Inter;-webkit-text-fill-color:#0a0f1d;box-shadow:0 0 40px #c9a24a66}
+body:not(.signed-in) main>p{text-align:center}
+#sign-in{display:block}
+#sign-in p{margin:0 0 16px}
+
+/* ---------- Form controls ---------- */
+label{display:grid;gap:7px;font-weight:500;font-size:.88rem;letter-spacing:.03em;color:var(--mut)}
+input,select,textarea,button{font:inherit;border-radius:12px}
+input,select,textarea{width:100%;padding:12px 14px;border:1px solid var(--line);background:rgba(5,9,20,.72);color:var(--ink);transition:border-color .2s,box-shadow .2s,background .2s}
+input::placeholder,textarea::placeholder{color:#6b7690}
+input:hover,select:hover,textarea:hover{border-color:var(--line2)}
+input:focus,select:focus,textarea:focus{outline:0;border-color:var(--gold);box-shadow:0 0 0 3px #c9a24a33;background:rgba(8,14,30,.9)}
+input[type=checkbox],input[type=radio]{width:auto;accent-color:var(--gold);transform:scale(1.15)}
+input[type=date],input[type=month],input[type=time]{color-scheme:dark}
+select option{background:#0b1426;color:var(--ink)}
+input:disabled,select:disabled{opacity:.5;cursor:not-allowed}
+textarea{resize:vertical;min-height:90px}
+button{width:auto;padding:10px 20px;border:1px solid var(--line2);background:rgba(201,162,74,.08);color:var(--gold2);font-weight:600;cursor:pointer;transition:transform .2s,background .2s,box-shadow .25s,border-color .2s}
+button:hover{background:rgba(201,162,74,.18);border-color:var(--gold);transform:translateY(-1px)}
+button:active{transform:translateY(0)}
+button:disabled{opacity:.55;cursor:wait;transform:none}
+button[type=submit],#sign-in button,.btn-gold{background:linear-gradient(120deg,#b88a2e,#f3dfa2 52%,#c9a24a);color:#150f02;border:0;padding:12px 26px;box-shadow:0 10px 34px -10px #c9a24a99}
+button[type=submit]:hover,#sign-in button:hover{background:linear-gradient(120deg,#c9992f,#fff0bb 52%,#d8b25a);box-shadow:0 16px 44px -8px #ecd592aa}
+#sign-in button{width:100%}
+:focus-visible{outline:2px solid var(--gold2);outline-offset:3px}
+form{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px 20px;align-items:end;margin:.6em 0 1em}
+form>p{margin:0}
+form>button,form>p:has(>button),form>[role=status],form>table,form>ul,form>ol,form>fieldset,form>h4,form>hr{grid-column:1/-1}
+form>p:has(>button),form>button{justify-self:start}
+#sign-in{display:block}
+
+/* ---------- Tables and lists ---------- */
+table{display:block;max-width:100%;overflow-x:auto;border-spacing:0;margin:10px 0;border:1px solid var(--line);border-radius:16px;background:rgba(5,9,20,.4)}
+th,td{padding:11px 16px;text-align:left;vertical-align:top;border-bottom:1px solid rgba(255,255,255,.05)}
+th{font-size:.74rem;letter-spacing:.14em;text-transform:uppercase;color:var(--gold2);font-weight:600;background:rgba(201,162,74,.07);white-space:nowrap}
+tbody tr:hover td{background:rgba(201,162,74,.05)}
+tr:last-child td{border-bottom:0}
+td input,td select{padding:8px 10px}
+ul,ol{padding-left:0;list-style:none;margin:.6em 0}
+li{padding:12px 16px;margin-bottom:8px;border:1px solid rgba(255,255,255,.06);border-radius:14px;background:rgba(255,255,255,.025);transition:border-color .2s,background .2s}
+li:hover{border-color:var(--line);background:rgba(201,162,74,.04)}
+li button,td button{padding:5px 12px;font-size:.82rem;margin:2px 4px 2px 0;border-radius:99px}
+li>ul,li>ol{margin-top:8px}
+dl{display:flex;flex-wrap:wrap;gap:10px 14px;margin:14px 0}
+dt{display:none}
+dd{margin:0;padding:6px 14px;border:1px solid var(--line);border-radius:99px;background:rgba(201,162,74,.08);font-size:.88rem;color:var(--gold2)}
+details{border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.03);padding:14px 18px;margin:16px 0}
+summary{cursor:pointer;font:600 1.15rem "Cormorant Garamond",serif;color:var(--gold2)}
+details[open] summary{margin-bottom:12px}
+
+/* ---------- Signed-in shell ---------- */
+.hd:has(#jump-search){display:none!important}
+body.signed-in main>h1{position:sticky;top:12px;z-index:30;display:flex;align-items:center;gap:14px;margin:0 0 26px;padding:14px 22px;border:1px solid var(--line);border-radius:20px;background:rgba(8,13,28,.96);font-size:1.5rem;box-shadow:0 8px 20px -14px #000}
+body.signed-in main>h1::before{content:"A";display:grid;place-items:center;flex:none;width:36px;height:36px;border-radius:11px;background:conic-gradient(from 200deg,#8a6a22,#f3dfa2,#c9a24a,#8a6a22);color:#0a0f1d;font:700 1.15rem Inter;box-shadow:0 0 24px #c9a24a66}
+body.signed-in main>p:not([role]){display:none}
+body.signed-in #firebase-status:empty{display:none}
+#sign-out{position:fixed;top:25px;right:max(24px,calc((100vw - 1180px)/2 + 22px));z-index:40;padding:8px 20px;font-size:.88rem;border-radius:99px;background:rgba(8,13,28,.9)}
+body:not(.signed-in) #sign-out{position:static;margin-top:18px;width:100%}
+
+.dash{animation:fadein .25s ease-out both}
+@keyframes rise{from{opacity:0;transform:translateY(24px)}}@keyframes fadein{from{opacity:0}}
+.dash>h2{font-size:clamp(2rem,4vw,3rem);margin-bottom:.15em;background:linear-gradient(100deg,#f3eee1,#ecd592);-webkit-background-clip:text;background-clip:text;color:transparent}
+.dash>.hd:not(h2):not(dl){max-width:760px}
+#view-only-note{padding:12px 18px;border:1px solid #6fb7ff55;border-radius:14px;background:#1f3c7a33;color:#bcd8ff}
+.launcher{margin-top:22px}
+.launch-head{display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.launch-head h3{margin:0;font-size:1.7rem}
+.launch-head input{max-width:340px;margin-left:auto;border-radius:99px;padding-left:20px}
+.cats{display:block}
+.cat-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px;padding:0}
+button.cat-tab{flex:0 0 auto;display:flex;align-items:center;gap:8px;width:auto;padding:9px 16px;border:1px solid var(--line);border-radius:99px;background:rgba(10,17,34,.6);color:var(--ink);font-size:.98rem;white-space:nowrap;box-shadow:none}
+button.cat-tab:hover{border-color:var(--gold)}
+button.cat-tab.on,button.cat-tab[aria-selected=true]{border-color:#f3dfa2;background:linear-gradient(120deg,#b88a2e,#f3dfa2 52%,#c9a24a);color:#150f02;font-weight:700;box-shadow:0 8px 26px -10px #c9a24a}
+button.cat-tab.on .cat-count,button.cat-tab[aria-selected=true] .cat-count{background:#150f02;color:#f3dfa2;border-color:#150f02}
+.cat-count{min-width:24px;padding:1px 8px;text-align:center;border:1px solid var(--line);border-radius:99px;font-size:.8rem;color:var(--mut)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px}
+button.tile{display:flex;flex-direction:column;align-items:flex-start;gap:10px;width:100%;min-height:128px;padding:20px;text-align:left;border:1px solid var(--line);border-radius:22px;background:linear-gradient(155deg,rgba(24,38,72,.85),rgba(10,17,34,.9));color:var(--ink);box-shadow:0 8px 20px -14px #000;content-visibility:auto;contain-intrinsic-size:auto 128px;transition:transform .15s,border-color .15s,background .15s}
+button.tile:hover{border-color:var(--gold);background:linear-gradient(155deg,rgba(32,50,94,.9),rgba(12,21,42,.95));transform:translateY(-3px);box-shadow:0 10px 24px -14px #c9a24a88}
+.ti{display:grid;place-items:center;width:46px;height:46px;border-radius:14px;font-size:1.4rem;background:linear-gradient(145deg,rgba(201,162,74,.32),rgba(201,162,74,.05));border:1px solid var(--line)}
+.tt{font:600 1.18rem/1.2 "Cormorant Garamond",serif;color:var(--ink)}
+.launcher-bar{position:sticky;top:84px;z-index:20;display:flex;align-items:center;gap:14px;margin-bottom:20px;padding:10px 14px;border:1px solid var(--line);border-radius:16px;background:rgba(8,13,28,.97);}
+.launcher-bar strong{font:600 1.35rem "Cormorant Garamond",serif;color:var(--gold2)}
+.dash[data-open]>.launcher,.dash:not([data-open])>.launcher-bar,.dash:not([data-open])>.mod,.dash[data-open]>.mod:not(.mod-open),.dash[data-open]>.hd:not(.keep){display:none}
+.mod{position:relative;padding:30px 32px;margin-bottom:22px;border:1px solid var(--line);border-radius:26px;background:var(--card);box-shadow:0 10px 30px -20px #000;animation:fadein .2s ease-out both}
+.mod::before{content:"";position:absolute;left:32px;right:32px;top:0;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent);opacity:.7}
+.mod h3:first-child,.mod>h2:first-child{font-size:2rem;margin-bottom:.6em}
+.mod section{margin-top:18px}
+#invite-accept,#signup:not([hidden]){border:1px solid var(--line);border-radius:20px;background:var(--card);padding:20px 24px;margin:0 0 20px}
+body:not(.signed-in) #signup{margin:22px 0 0;background:rgba(255,255,255,.03)}
+.portal-keep{margin-bottom:18px}
+.card-sheet{max-width:420px;padding:18px;border:2px solid var(--gold);border-radius:16px;background:#fffaf0;color:#14243d}
+.card-sheet h1,.card-sheet h2,.card-sheet h3,.card-sheet p,.card-sheet li{color:#14243d;background:none;border:0}
+.card-sheet ul{margin:8px 0;padding-left:20px;list-style:disc}
+.print-only{display:none}
+
+/* Live clock beside Sign out (batch 59), shown on every signed-in panel. */
+#clock{position:fixed;top:21px;right:max(160px,calc((100vw - 1180px)/2 + 158px));z-index:40;display:flex;flex-direction:column;align-items:flex-end;line-height:1.25;color:var(--ink);font-variant-numeric:tabular-nums;pointer-events:none}
+#clock .clock-date{font-size:.8rem;opacity:.85}#clock .clock-time{font-size:1.05rem;font-weight:600;letter-spacing:.03em;color:var(--gold2,#d4af37)}
+#clock .d-short{display:none}
+body:not(.signed-in) #clock{display:none}
+@media print{#clock{display:none}}
+@media(max-width:760px){
+  #clock{top:15px;right:118px}#clock .clock-date{font-size:.66rem}#clock .clock-time{font-size:.8rem}
+  #clock .d-long{display:none}#clock .d-short{display:inline}
+  body.signed-in main>h1{padding-right:210px}
+  main{padding-top:16px}
+  body.signed-in main>h1{font-size:1.15rem;padding:10px 14px;padding-right:110px}
+  #sign-out{top:18px;right:16px;padding:6px 14px}
+  .mod{padding:22px 18px;border-radius:20px}
+  .mod::before{left:18px;right:18px}
+  .tiles{grid-template-columns:repeat(2,1fr);gap:12px}
+  button.cat-tab{padding:8px 13px;font-size:.92rem}
+  button.tile{min-height:112px;padding:16px}
+  .launcher-bar{top:70px}
+  .launch-head input{max-width:100%;margin-left:0;width:100%}
+  body:not(.signed-in) main{padding:34px 22px 26px}
+}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* Print or "Save as PDF": only the chosen report is printed, on plain white. */
+@media print {
+  body.printing *{visibility:hidden}
+  body.printing .print-target,body.printing .print-target *{visibility:visible;color:#000!important;background:#fff!important;box-shadow:none!important;text-shadow:none!important;-webkit-text-fill-color:#000!important}
+  body.printing .print-target{position:absolute;left:0;top:0;width:100%;border:0}
+  body.printing .print-only{display:block;font:700 20px/1.3 Georgia,serif}
+  body.printing .no-print,body.printing select{display:none}
+  body.printing .page-break{break-after:page;page-break-after:always}
+  body.printing .page-break:last-child{break-after:auto;page-break-after:auto}
+  :root,body{background:#fff!important;color:#000}
+  body::before,body::after{display:none}
+  table{display:table;width:100%;border-collapse:collapse;border:0}
+  th,td{border-bottom:1px solid #999}
+  th{background:#eee!important}
+}
+
+body.signed-in #signup{display:none}
+
+.thumb{width:56px;height:56px;object-fit:cover;border-radius:10px;border:1px solid var(--line);vertical-align:middle;margin:0 8px}
+.card-photo{width:96px;height:96px;object-fit:cover;border:1px solid #999;float:right;margin:0 0 8px 12px}
+.print-logo{display:block;max-height:64px;max-width:200px;margin:0 0 6px}
+
+/* The fee office login sees only the fee screens. */
+body[data-role="accountant"] #owner-dashboard section:not(#fees):not(#concessions){display:none!important}
+
+/* Mobile-friendly portals: thumb-sized controls, one column, no sideways scrolling. */
+@media(max-width:600px){
+  #portal-dashboard, #teacher-dashboard, #owner-dashboard{padding:10px}
+  #portal-dashboard button, #portal-dashboard select, #portal-dashboard input, #portal-dashboard textarea{min-height:44px;font-size:16px;width:100%;box-sizing:border-box}
+  #portal-dashboard ul, #portal-dashboard ol{padding-left:18px}
+  #portal-dashboard li{overflow-wrap:anywhere;margin-bottom:8px}
+  #portal-dashboard table{display:block;overflow-x:auto;max-width:100%}
+  #portal-dashboard section{padding:12px;margin:10px 0}
+  #portal-dashboard h3{font-size:1.15rem}
+  #portal-dashboard form p{margin:8px 0}
+  #portal-dashboard img{max-width:100%;height:auto}
+}
+
+/* Theme gallery (batch 47). */
+.theme-card[aria-pressed="true"]{border-color:#14243d!important;box-shadow:0 0 0 3px #b8913a}
+.theme-card:focus-visible{outline:3px solid #14243d;outline-offset:2px}
+
+#portal-exam-pick button[aria-pressed="true"]{background:var(--gold,#b8913a);color:#1d1608;border-color:var(--gold,#b8913a)}
+#portal-head{margin-bottom:8px}
+
+/* Student and parent dashboards (batch 51). */
+#portal-home{margin:0 0 18px}
+#portal-tagline{margin:0 0 8px;color:var(--gold2,#d8b45a);letter-spacing:.04em}
+#portal-dashboard[data-open] #portal-home{display:none}
+#portal-welcome{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;margin-bottom:12px}
+#portal-welcome p{margin:0}
+#portal-hello{font:600 1.5rem "Cormorant Garamond",serif}
+#portal-date{color:var(--mut,#9aa5bd)}
+#portal-childcard{display:flex;gap:14px;align-items:center;padding:12px;margin-bottom:12px;border:1px solid var(--line,#2b3552);border-radius:16px;background:rgba(255,255,255,.04)}
+#portal-childcard img{width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--gold2,#d8b45a)}
+#portal-childcard p{margin:2px 0}
+#portal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+#portal-stats button{min-height:88px;text-align:left;padding:12px;border-radius:14px;border:1px solid var(--line,#2b3552);border-left-width:5px;background:rgba(255,255,255,.05);color:inherit;cursor:pointer}
+#portal-stats button:nth-child(1){border-left-color:#4f8cff}#portal-stats button:nth-child(2){border-left-color:#f59e0b}
+#portal-stats button:nth-child(3){border-left-color:#22c55e}#portal-stats button:nth-child(4){border-left-color:#a855f7}
+#portal-stats strong{display:block;font-size:1.6rem}
+#portal-stats span{display:block;color:var(--mut,#9aa5bd);font-size:.9rem}
+#portal-glance{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:12px}
+.glance{padding:12px;border:1px solid var(--line,#2b3552);border-radius:14px;background:rgba(255,255,255,.04)}
+.glance h4{margin:0 0 6px}
+.glance ul{margin:0;padding-left:18px}
+#portal-quick{display:flex;flex-wrap:wrap;gap:8px}
+#portal-quick button{padding:10px 14px;border-radius:999px;border:1px solid var(--gold2,#d8b45a);background:transparent;color:inherit;cursor:pointer;min-height:44px}
+#portal-dashboard[data-role="parent"] #portal-stats button:nth-child(2){border-left-color:#ef4444}
+#idcard{max-width:340px;margin:10px 0;padding:16px;border:2px solid var(--gold2,#d8b45a);border-radius:16px;background:rgba(255,255,255,.06)}
+#idcard img{width:96px;height:96px;object-fit:cover;border-radius:8px}
+#idcard p{margin:4px 0}
+@media print{#portal-home{display:none}#idcard-print{display:none}}
+
+/* Revenue chart on the platform admin screen: always on ivory so the navy and gold bars stay readable. */
+.chart-box { background: #faf6ea; color: #14243d; border: 1px solid #d9d2bd; border-radius: 8px; padding: 12px; margin: 12px 0; }
+.chart-box svg { display: block; max-width: 100%; height: auto; }
+.chart-box p { margin: 8px 0 0; }
+
+/* Eye button inside a password box (show or hide what is typed). The sign-in form gives every button the gold style, so the ID rule below puts this one back to a plain icon. */
+.pw-wrap{position:relative;display:block}
+.pw-wrap input{padding-right:46px}
+.pw-wrap .pw-eye,#sign-in .pw-wrap .pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;padding:0;margin:0;display:flex;align-items:center;justify-content:center;background:none;border:0;border-radius:50%;box-shadow:none;color:var(--mut)}
+.pw-wrap .pw-eye:hover,#sign-in .pw-wrap .pw-eye:hover{background:rgba(201,162,74,.14);color:var(--gold2);box-shadow:none;transform:translateY(-50%)}
+.pw-wrap .pw-eye:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+.pw-eye .off{display:none}
+.pw-eye[aria-pressed="true"] .on{display:none}
+.pw-eye[aria-pressed="true"] .off{display:block}
+
+/* Online test question picker */
+#otpicker{border:1px solid var(--line);border-radius:18px;padding:14px 16px;margin:0}
+#otpicker legend{padding:0 8px;color:var(--gold2);font-weight:600}
+#otpicker>p{margin:.5em 0}
+#otpicker label{display:inline-block;margin:0 14px 8px 0;vertical-align:bottom}
+#otpicker input[type=number]{width:110px}
+#otpick-list{max-height:380px;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:6px;background:rgba(5,9,20,.45)}
+label.otq{display:flex;align-items:flex-start;gap:12px;margin:0;padding:9px 10px;border-radius:10px;cursor:pointer;color:var(--ink);font-weight:400}
+label.otq:hover{background:rgba(201,162,74,.12)}
+label.otq input{flex:0 0 auto;margin-top:3px}
+#otpicker label.otq{display:flex;margin:0;width:100%}
+
+/* Online test: one question at a time */
+#portal-test-timer{font-size:1.25rem;font-weight:600;color:var(--gold2)}
+#portal-test-nav{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
+#portal-test-nav button.qn{min-width:40px;padding:6px 10px;border-radius:10px;font-size:.9rem;background:rgba(10,17,34,.6);color:var(--mut);border:1px solid var(--line)}
+#portal-test-nav button.qn.done{background:rgba(201,162,74,.28);color:var(--gold2);border-color:var(--gold)}
+#portal-test-nav button.qn.now{outline:2px solid var(--gold2);outline-offset:2px;color:var(--ink)}
+#portal-test-form fieldset{border:1px solid var(--line);border-radius:16px;padding:16px 18px}
+#portal-test-form legend{padding:0 8px;color:var(--gold2);font-weight:600}
+#portal-test-form p{font-size:1.1rem;margin:.2em 0 .8em}
+label.otopt{display:flex;align-items:center;gap:12px;margin:8px 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;cursor:pointer;color:var(--ink);font-weight:400;font-size:1.05rem}
+label.otopt:hover{border-color:var(--gold);background:rgba(201,162,74,.1)}
+#portal-test-buttons{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0}
+#portal-test-paused{border:1px solid var(--line);border-radius:16px;padding:18px;text-align:center}
+
+/* Restore lists (batch 66): tick box beside its words */
+#restore-list{list-style:none;padding:0;margin:0 0 12px}
+#restore-list label{display:flex;align-items:center;gap:12px;margin:0;width:100%}
+#restore-list input[type=checkbox]{flex:0 0 auto;width:20px;height:20px;margin:0}
+
+/* QR sheets (batch 67): printed from this page; only the sheet shows on paper */
+#qr-print-area{display:none}
+@media print{
+  body.qr-printing > *:not(#qr-print-area){display:none !important}
+  body.qr-printing{background:#fff !important}
+  body.qr-printing #qr-print-area{display:block;color:#000;background:#fff;font-family:Arial,sans-serif}
+  #qr-print-area h1{font-size:16px;margin:0 0 8px;color:#000}
+  #qr-print-area .qr-grid{display:flex;flex-wrap:wrap;gap:8px}
+  #qr-print-area .qr-tag{width:190px;border:1px dashed #666;padding:8px;text-align:center;break-inside:avoid;color:#000}
+  #qr-print-area .qr-tag img{width:150px;height:150px}
+  #qr-print-area .qr-tag b{display:block;font-size:13px}
+  #qr-print-area .qr-tag span{font-size:11px}
+}
+
+p:has(> #autorem-on) label,p:has(#autorem-on) label{display:flex;align-items:center;gap:.6rem}
+#autorem-on{flex:0 0 auto;width:20px;height:20px;margin:0}
+
+/* Batch 74: lighter, smoother screens. */
+.tiles{contain:layout style}
+html{scroll-behavior:auto}
+body[data-mode=superadmin] #owner-dashboard,body[data-mode=superadmin] #teacher-dashboard,body[data-mode=superadmin] #portal-dashboard{display:none!important}
+
+/* Batch 76: banner while the super admin is inside a school */
+#super-banner{position:sticky;top:0;z-index:9999;display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 14px;background:#0b1f3a;color:#f6efdc;border-bottom:3px solid #c9a24b;font-size:.9rem}
+#super-banner span{flex:1;min-width:220px}
+#super-banner button,#super-banner a{background:#c9a24b;color:#0b1f3a;border:0;border-radius:6px;padding:6px 12px;font-weight:600;text-decoration:none;cursor:pointer}
+
+/* Batch 77: platform inbox on the owner dashboard */
+#platform-inbox{margin:0 0 16px;padding:12px 16px;border:1px solid #c9a24b;border-left-width:5px;border-radius:8px;background:#fffaf0;color:#1b2540}
+#platform-inbox h3{margin:0 0 8px;font-size:1rem}
+#platform-inbox .inbox-row{padding:8px 0;border-top:1px solid #eadcb8}
+#platform-inbox p{margin:4px 0 8px}
