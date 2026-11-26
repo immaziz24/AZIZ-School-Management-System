@@ -8,7 +8,12 @@ const monthLabel = (c) => new Date(c + '-01T00:00:00Z').toLocaleDateString('en-I
 const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const ALL_CLASSES = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12', 'College / Other'];
-const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Mathematics', 'Science', 'Social Science', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge'];
+const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Sanskrit', 'Mathematics', 'Science', 'Environmental Studies', 'Social Science', 'History', 'Geography', 'Civics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge',
+  'Spoken English', 'Handwriting', 'Drawing', 'Art', 'Music', 'Dance'];
+const GROUPS = [['All subjects', null], ['Science group', ['Mathematics', 'Science', 'Physics', 'Chemistry', 'Biology', 'Computer Science']],
+  ['Arts group', ['English', 'Bengali', 'Hindi', 'History', 'Geography', 'Civics', 'Sanskrit', 'Social Science']], ['Commerce group', ['Accountancy', 'Commerce', 'Economics', 'Mathematics', 'English']]];
+const subjectsOf = (r) => (Array.isArray(r?.subjects) && r.subjects.length ? r.subjects : String(r?.subject || '').split(',').map((x) => x.trim()).filter(Boolean));
+const subjectSummary = (r) => { const l = subjectsOf(r); return l.length > 4 ? l.length + ' subjects' : l.join(', '); };
 const STATUS_LABEL = { paid: 'Paid', unpaid: 'Unpaid', overdue: 'Overdue' };
 
 export function mountTuition({ section, inst, call, h, body, go }) {
@@ -64,18 +69,19 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     const draw = async () => {
       let items; try { items = (await loadBatches(true)).filter((b) => b.status === 'active'); } catch (e) { box.replaceChildren(h('p', { class: 'err' }, failText(e))); return; }
       box.replaceChildren(h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'button', onclick: () => form(null) }, 'Add batch')),
-        table(['Batch', 'Class', 'Subject', 'Days', 'Time', 'Students', ''], items.map((b) => h('tr', {}, h('td', {}, b.name), h('td', {}, b.className), h('td', {}, b.subject), h('td', {}, b.days.join(', ')), h('td', {}, b.startTime + ' – ' + b.endTime), h('td', {}, String(b.students)),
+        table(['Batch', 'Class', 'Subject', 'Days', 'Time', 'Students', ''], items.map((b) => h('tr', {}, h('td', {}, b.name), h('td', {}, b.className), h('td', {}, subjectSummary(b)), h('td', {}, b.days.join(', ')), h('td', {}, b.startTime + ' – ' + b.endTime), h('td', {}, String(b.students)),
           h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(b) }, 'Edit'), h('button', { type: 'button', onclick: () => confirmBox('Archive "' + b.name + '"? Students keep their records, but the batch closes.', async () => { try { await api('tuitionBatchArchive', { batchId: b.id }); draw(); } catch (e) { window.alert(failText(e)); } }) }, 'Archive')))),
           'No batches yet. Add your first batch.'));
     };
     const form = (b) => {
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.');
-        const values = withOther({ name: fd.get('name'), className: fd.get('className'), classNameOther: fd.get('classNameOther'), subject: fd.get('subject'), subjectOther: fd.get('subjectOther'), days: fd.getAll('days'), startTime: fd.get('startTime'), endTime: fd.get('endTime') });
+        const values = withOther({ name: fd.get('name'), className: fd.get('className'), classNameOther: fd.get('classNameOther'), subjects: [...fd.getAll('subjects[]'), ...String(fd.get('subjectsOther') || '').split(',')].map((x) => x.trim()).filter(Boolean), days: fd.getAll('days'), startTime: fd.get('startTime'), endTime: fd.get('endTime') });
         try { await api('tuitionBatchSave', { batchId: b ? b.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, b ? 'Edit batch' : 'New batch'),
         field('Batch name', inp('name', 'text', b?.name, { maxlength: 60, placeholder: 'Class 10 Maths – Morning' }), 'name'),
-        field('Class', choiceSelect('className', 'classes', b?.className, 'Choose a class'), 'className'), field('Subject', choiceSelect('subject', 'subjects', b?.subject, 'Choose a subject'), 'subject'), settingsHint('classes or subjects'),
+        field('Class', choiceSelect('className', 'classes', b?.className, 'Choose a class'), 'className'), settingsHint('classes or subjects'),
+        subjectPicker(subjectsOf(b), true),
         h('fieldset', {}, h('legend', {}, 'Days'), WEEKDAYS.map((d) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'days', value: d, checked: b?.days?.includes(d) ? true : undefined }), d)), h('span', { class: 'ferr', 'data-err': 'days' })),
         h('div', { class: 'two' }, field('Starts', inp('startTime', 'time', b?.startTime), 'startTime'), field('Ends', inp('endTime', 'time', b?.endTime), 'endTime')),
         h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save batch'), h('button', { type: 'button', onclick: draw }, 'Cancel')));
@@ -94,6 +100,17 @@ export function mountTuition({ section, inst, call, h, body, go }) {
       mine.length ? h('optgroup', { label: 'Your ' + kind }, mine.map(opt)) : null, h('optgroup', { label: 'More ' + kind }, more.map(opt)), h('option', { value: '__other' }, 'Other (type your own)'));
     return h('span', {}, select, other);
   };
+  // Many subjects: tick the boxes, or press a group button to tick a set at once (then change any box). Own subjects can be typed.
+  const subjectPicker = (current, required) => {
+    const mine = profile.subjects || []; const options = [...new Set([...mine, ...ALL_SUBJECTS, ...current])];
+    const boxes = options.map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'subjects[]', value: o, checked: current.includes(o) ? true : undefined }), o));
+    const wrap = h('fieldset', { 'data-field': 'subjects' }, h('legend', {}, required ? 'Subjects (tick one or more)' : 'Subjects (optional, tick any)'),
+      h('div', { class: 'actions' }, GROUPS.map(([label, list]) => h('button', { type: 'button', onclick: () => wrap.querySelectorAll('input[type=checkbox]').forEach((c) => { c.checked = list === null || list.includes(c.value); }) }, label)),
+        h('button', { type: 'button', onclick: () => wrap.querySelectorAll('input[type=checkbox]').forEach((c) => { c.checked = false; }) }, 'Clear')),
+      h('div', { class: 'checks' }, boxes), h('input', { type: 'text', name: 'subjectsOther', maxlength: 120, placeholder: 'Other subjects, separated by commas', 'aria-label': 'Other subjects' }), h('span', { class: 'ferr', 'data-err': 'subjects' }));
+    return wrap;
+  };
+  const collectSubjects = (fd, values) => { values.subjects = [...fd.getAll('subjects[]'), ...String(fd.get('subjectsOther') || '').split(',')].map((x) => x.trim()).filter(Boolean); delete values['subjects[]']; delete values.subjectsOther; return values; };
   const withOther = (values) => { for (const k of ['className', 'subject']) { if (values[k] === '__other') values[k] = String(values[k + 'Other'] || '').trim(); delete values[k + 'Other']; } return values; };
   const settingsHint = (what) => h('span', { class: 'hint' }, 'Missing one? Add more ' + what + ' in ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); go('Settings'); } }, 'Settings'), '.');
 
@@ -113,7 +130,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
         h('button', { class: 'gold', type: 'button', onclick: () => form(null) }, 'Add student')), list, ...datalists());
       try {
         const r = await api('tuitionStudentList', state); const bname = Object.fromEntries(bl.map((b) => [b.id, b.name]));
-        list.replaceChildren(table(['Student', 'Class', 'Guardian', 'Batch', 'Fee / month', 'Status', ''], r.items.map((s) => h('tr', {}, h('td', {}, h('b', {}, s.name), h('br'), h('small', {}, s.subject)), h('td', {}, s.className), h('td', {}, s.guardianName, h('br'), h('small', {}, s.guardianMobile)),
+        list.replaceChildren(table(['Student', 'Class', 'Guardian', 'Batch', 'Fee / month', 'Status', ''], r.items.map((s) => h('tr', {}, h('td', {}, h('b', {}, s.name), h('br'), h('small', {}, subjectSummary(s))), h('td', {}, s.className), h('td', {}, s.guardianName, h('br'), h('small', {}, s.guardianMobile)),
           h('td', {}, bname[s.batchId] || '–'), h('td', {}, money(s.monthlyFeePaise)), h('td', {}, h('span', { class: 'pill ' + s.status }, s.status)),
           h('td', { class: 'row-actions' }, s.status !== 'archived' ? h('button', { type: 'button', onclick: () => form(s) }, 'Edit') : null, s.status === 'active' ? h('button', { type: 'button', onclick: () => change(s, 'inactive') }, 'Pause') : null,
             s.status !== 'active' ? h('button', { type: 'button', onclick: () => change(s, 'active') }, 'Activate') : null, s.status !== 'archived' ? h('button', { type: 'button', onclick: () => change(s, 'archived') }, 'Archive') : null))),
@@ -130,13 +147,14 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     };
     const form = (s) => {
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
-        e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = withOther(Object.fromEntries(fd.entries()));
+        e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = collectSubjects(fd, withOther(Object.fromEntries(fd.entries())));
         try { await api('tuitionStudentSave', { studentId: s ? s.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, s ? 'Edit student' : 'New student'),
         h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', choiceSelect('className', 'classes', s?.className, 'Choose a class'), 'className')),
-        h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Subject', choiceSelect('subject', 'subjects', s?.subject, 'Choose a subject'), 'subject')),
+        h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Batch', sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), s?.batchId || '', 'No batch yet'), 'batchId')),
+        subjectPicker(subjectsOf(s), false),
         h('div', { class: 'two' }, field('Guardian name', inp('guardianName', 'text', s?.guardianName, { maxlength: 80 }), 'guardianName'), field('Guardian mobile', inp('guardianMobile', 'tel', s?.guardianMobile, { placeholder: '+91 98300 12345' }), 'guardianMobile')),
-        h('div', { class: 'two' }, field('Student mobile (optional)', inp('studentMobile', 'tel', s?.studentMobile), 'studentMobile'), field('Batch', sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), s?.batchId || '', 'No batch yet'), 'batchId')),
+        h('div', { class: 'two' }, field('Student mobile (optional)', inp('studentMobile', 'tel', s?.studentMobile), 'studentMobile'), h('span')),
         field('Address (optional)', inp('address', 'text', s?.address, { maxlength: 200 }), 'address'),
         h('div', { class: 'two' }, field('Joining date', inp('joiningDate', 'date', s?.joiningDate || today(), { max: '9999-12-31' }), 'joiningDate'), field('Joining time (optional)', inp('joiningTime', 'time', s?.joiningTime), 'joiningTime')),
         h('div', { class: 'two' }, field('Monthly fee (₹)', inp('monthlyFee', 'text', s ? rupees(s.monthlyFeePaise) : '', { inputmode: 'decimal', placeholder: '500' }), 'monthlyFee'), field('Fee due day of month (1–31)', inp('dueDay', 'number', s?.dueDay ?? 5, { min: 1, max: 31 }), 'dueDay')),
