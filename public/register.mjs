@@ -103,6 +103,7 @@ function drawChoose() {
   const card = (type, tag, title, lines) => h('button', { type: 'button', class: 'card', onclick: () => { S.type = type; S.step = 0; S.values = { ...S.values }; S.view = 'form'; draw(); window.scrollTo({ top: 0 }); } },
     h('span', { class: 'tag' }, tag), h('h3', {}, title), h('p', {}, lines[0]), h('ul', {}, lines.slice(1).map((x) => h('li', {}, x))));
   root.append(
+    h('p', {}, h('a', { href: '/', style: 'text-decoration:underline' }, '← Back to home')),
     h('p', { class: 'notice' }, 'Already registered? ', h('a', { href: '/app', style: 'text-decoration:underline' }, 'Sign in'), ' with your email. Schools should use ', h('a', { href: '/app#signup', style: 'text-decoration:underline' }, 'Start free trial'), '.'),
     h('div', { class: 'pick' },
       card('tuition', 'Free · 20 features', 'Tuition Teacher', ['For a teacher who runs their own tuition.', 'Students, batches and monthly fees', 'Partial payments and receipts', 'Attendance and monthly income summary']),
@@ -231,7 +232,7 @@ async function checkCode(user, code) {
 
 function drawVerify() {
   const user = auth.currentUser;
-  const code = h('input', { name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6, pattern: '[0-9]{6}', placeholder: '6-digit code', 'aria-label': 'Verification code', style: 'font-size:1.4rem;letter-spacing:.35em;text-align:center;max-width:14rem' });
+  const code = h('input', { type: 'text', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6, pattern: '[0-9]{6}', placeholder: '6-digit code', 'aria-label': 'Verification code', style: 'font-size:1.4rem;letter-spacing:.35em;text-align:center;max-width:14rem' });
   root.append(h('div', { class: 'card formcard' },
     h('h3', {}, 'Enter the code from your email'),
     h('p', {}, 'We sent a 6-digit code to ', h('b', {}, user?.email || 'your email address'), '. Type it here to confirm your email.'),
@@ -239,9 +240,10 @@ function drawVerify() {
     h('form', { onsubmit: (e) => { e.preventDefault(); const v = code.value.trim(); if (!/^[0-9]{6}$/.test(v)) { S.codeError = 'Enter the 6-digit code.'; draw(); return; } checkCode(user, v); } },
       code, S.codeError ? h('p', { class: 'err', role: 'alert' }, S.codeError) : null,
       h('div', { class: 'actions' },
+        h('button', { type: 'button', class: 'btn', disabled: S.busy, onclick: () => { S.view = 'form'; S.step = FIELDS[S.type].length - 1; S.note = ''; S.errors = {}; S.codeError = ''; draw(); } }, 'Back'),
         h('button', { type: 'submit', class: 'btn gold-bg', disabled: S.busy }, S.busy ? 'Checking.' : 'Verify and continue'),
         h('button', { type: 'button', id: 'resend-code', class: 'btn', disabled: S.cool > 0 || S.busy, onclick: () => user && sendVerification(user) }, S.cool > 0 ? 'Send a new code in ' + S.cool + 's' : 'Send a new code'),
-        h('button', { type: 'button', class: 'btn', onclick: async () => { await signOut(auth); clearValues(); S.view = 'choose'; S.values = {}; draw(); } }, 'Use a different email')))));
+        h('button', { type: 'button', class: 'btn', onclick: async () => { await signOut(auth); clearValues(); S.view = 'choose'; S.values = {}; draw(); } }, 'Cancel registration')))));
 }
 
 async function provision(user) {
