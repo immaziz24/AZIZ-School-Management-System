@@ -138,3 +138,7 @@ test('a tuition or coaching owner who opens the school sign-in is sent to their 
   const si = read('public/sign-in.mjs'); assert.match(si, /resolveMyInstitutions/); assert.match(si, /location\.replace\('\/' \+ mine\[0\]\.type\)/); assert.match(si, /sign in at \/tuition or \/coaching/);
   const portal = read('public/institution.mjs'); assert.ok((portal.match(/Back to home/g) || []).length >= 2); assert.match(portal, /'Home'/);
 });
+
+test('the one sign-in page tells tuition and coaching owners they sign in there too', () => {
+  const idx = read('public/index.html'); assert.match(idx, /tuition teachers and coaching centres/); assert.match(idx, /href="\/register"/);
+});
