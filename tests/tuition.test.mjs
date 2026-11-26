@@ -7,7 +7,7 @@ const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 const src = read('functions/index.js');
 const block = src.match(/\/\/ --- tuition rules begin[\s\S]*?\/\/ --- tuition rules end ---/);
 assert.ok(block, 'tuition rules block is missing');
-const lib = new Function(block[0] + '\n; return { subjectList, rupeesToPaise, validDate, validTime, todayIST, cycleOf, daysInMonth, dueDateFor, chargeIdFor, chargeStatus, allocatePayment, receiptNoFor, checkStudent, checkBatch, checkPayment, checkAttendanceEntries };')();
+const lib = new Function(block[0] + '\n; return { nextCycle, planFor, updatePlan, subjectList, rupeesToPaise, validDate, validTime, todayIST, cycleOf, daysInMonth, dueDateFor, chargeIdFor, chargeStatus, allocatePayment, receiptNoFor, checkStudent, checkBatch, checkPayment, checkAttendanceEntries };')();
 
 const student = { name: 'Anika Sen', className: 'Class 9', guardianName: 'Ravi Sen', guardianMobile: '+91 98300 12345', joiningDate: '2026-11-03', monthlyFee: '500', dueDay: 5 };
 const charge = (id, due, amount, paid = 0) => ({ id, dueDate: due, amountPaise: amount, paidPaise: paid });
@@ -141,4 +141,21 @@ test('a tuition or coaching owner who opens the school sign-in is sent to their 
 
 test('the one sign-in page says this page is for tuition and coaching, and schools use their own website', () => {
   const idx = read('public/index.html'); assert.match(idx, /Tuition teachers and coaching centres sign in here\. Schools sign in on their own school website/); assert.match(idx, /href="\/register"/);
+});
+
+test('fee plan: a change starts from a chosen month and older months keep the old fee', () => {
+  assert.equal(lib.nextCycle('2026-11'), '2026-12'); assert.equal(lib.nextCycle('2026-12'), '2027-01');
+  const old = [{ from: '2026-09', monthlyFeePaise: 50000, dueDay: 5 }];
+  const plan = lib.updatePlan(old, { from: '2027-01', monthlyFeePaise: 60000, dueDay: 10 });
+  assert.equal(lib.planFor(plan, '2026-12', {}).monthlyFeePaise, 50000); assert.equal(lib.planFor(plan, '2027-01', {}).monthlyFeePaise, 60000); assert.equal(lib.planFor(plan, '2027-03', {}).dueDay, 10);
+  assert.equal(lib.planFor([], '2026-11', { monthlyFeePaise: 30000, dueDay: 3 }).monthlyFeePaise, 30000);
+  assert.equal(lib.planFor(plan, '2026-08', { monthlyFeePaise: 1, dueDay: 1 }).monthlyFeePaise, 1);
+  const again = lib.updatePlan(plan, { from: '2026-12', monthlyFeePaise: 55000, dueDay: 5 }); assert.deepEqual(again.map((x) => x.from), ['2026-09', '2026-12']);
+});
+
+test('student money history, attendance by student, fee start month and calendar pickers are in place', () => {
+  const ui = read('public/tuition-ui.mjs');
+  assert.match(ui, /const ledger = async/); assert.match(ui, /'History'/); assert.match(ui, /feeEffectiveFrom/); assert.match(ui, /'studentId', roster/); assert.match(ui, /showPicker/);
+  assert.match(read('public/institution.html'), /color-scheme:dark/);
+  const f = bodyOf('tuitionFees'); assert.match(f, /studentId/); assert.match(bodyOf('tuitionStudentSave'), /fee-plan-changed/); assert.match(src, /planFor\(d\.data\(\)\.feePlan, cycle, d\.data\(\)\)/);
 });

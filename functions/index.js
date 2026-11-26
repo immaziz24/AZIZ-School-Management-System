@@ -1554,6 +1554,10 @@ function allocatePayment(charges, amountPaise, targetId = '') {
   if (left > 0) return { error: 'That is more than the balance due. The most you can record is ' + (amountPaise - left) / 100 + ' rupees.' };
   return { allocations };
 }
+// Fee plan: a student's monthly fee and due day can change from a chosen month. Older months keep the plan that applied then.
+function nextCycle(cycle) { const [y, m] = cycle.split('-').map(Number); return m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0'); }
+function planFor(plan, cycle, fallback) { const list = (Array.isArray(plan) ? plan : []).filter((p) => p.from <= cycle).sort((a, b) => (a.from < b.from ? -1 : 1)); return list.length ? list[list.length - 1] : fallback; }
+function updatePlan(plan, entry) { return [...(Array.isArray(plan) ? plan : []).filter((p) => p.from < entry.from), entry]; }
 const receiptNoFor = (n) => 'R-' + String(n).padStart(6, '0');
 const STUDENT_STATUSES = ['active', 'inactive', 'archived'];
 const PAY_METHODS = ['cash', 'upi', 'bank'];
@@ -1950,9 +1954,9 @@ const studentFields = (c, now) => ({ name: c.name, nameLower: c.name.toLowerCase
 
 async function ensureCharges(ctx, cycle) {
   const students = await ctx.col('students').where('status', '==', 'active').limit(600).get();
-  await Promise.all(students.docs.filter((d) => d.data().monthlyFeePaise > 0 && d.data().joiningCycle <= cycle).map(async (d) => {
-    const s = d.data();
-    try { await ctx.doc('feeCharges/' + chargeIdFor(d.id, cycle)).create({ studentId: d.id, cycle, kind: 'monthly', dueDate: dueDateFor(cycle, s.dueDay), amountPaise: s.monthlyFeePaise, paidPaise: 0, balancePaise: s.monthlyFeePaise, createdAt: Timestamp.now() }); }
+  await Promise.all(students.docs.filter((d) => d.data().joiningCycle <= cycle && planFor(d.data().feePlan, cycle, d.data()).monthlyFeePaise > 0).map(async (d) => {
+    const s = d.data(); const pl = planFor(s.feePlan, cycle, s);
+    try { await ctx.doc('feeCharges/' + chargeIdFor(d.id, cycle)).create({ studentId: d.id, cycle, kind: 'monthly', dueDate: dueDateFor(cycle, pl.dueDay), amountPaise: pl.monthlyFeePaise, paidPaise: 0, balancePaise: pl.monthlyFeePaise, createdAt: Timestamp.now() }); }
     catch (error) { if (error.code !== 6) throw error; }
   }));
 }
@@ -1974,12 +1978,21 @@ exports.tuitionStudentSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, as
     if (editing) {
       if (!found.exists) throw new HttpsError('not-found', 'Unknown student.');
       if (found.data().status === 'archived') throw new HttpsError('failed-precondition', 'Reactivate this student before editing.');
-      tx.update(sRef, studentFields(c, now));
+      const old = found.data(); const fields = studentFields(c, now);
+      delete fields.admissionFeePaise; delete fields.openingBalancePaise; delete fields.joiningCycle;
+      const oldPlan = Array.isArray(old.feePlan) && old.feePlan.length ? old.feePlan : [{ from: '0000-00', monthlyFeePaise: old.monthlyFeePaise, dueDay: old.dueDay }];
+      if (c.monthlyFeePaise !== old.monthlyFeePaise || c.dueDay !== old.dueDay) {
+        const asked = String(data.feeEffectiveFrom || ''); const from = CYCLE.test(asked) && asked >= cycle ? asked : nextCycle(cycle);
+        const plan = updatePlan(oldPlan, { from, monthlyFeePaise: c.monthlyFeePaise, dueDay: c.dueDay }); const now_ = planFor(plan, cycle, old);
+        fields.feePlan = plan; fields.monthlyFeePaise = now_.monthlyFeePaise; fields.dueDay = now_.dueDay;
+        tx.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action: 'fee-plan-changed', studentId: editing, from, monthlyFeePaise: c.monthlyFeePaise, dueDay: c.dueDay, at: now });
+      } else { fields.monthlyFeePaise = old.monthlyFeePaise; fields.dueDay = old.dueDay; }
+      tx.update(sRef, fields);
       return;
     }
     const u = inst.data().usage || {}; const limit = (inst.data().limits || {}).activeStudents || 0;
     if (c.status === 'active' && (u.activeStudents || 0) + 1 > limit) throw new HttpsError('resource-exhausted', 'You have reached the free limit of ' + limit + ' active students. Archive a student or switch one to inactive first.');
-    tx.create(sRef, { ...studentFields(c, now), status: c.status, createdAt: now, createdBy: ctx.uid });
+    tx.create(sRef, { ...studentFields(c, now), feePlan: [{ from: cycleOf(c.joiningDate), monthlyFeePaise: c.monthlyFeePaise, dueDay: c.dueDay }], status: c.status, createdAt: now, createdBy: ctx.uid });
     const base = { studentId, paidPaise: 0, createdAt: now };
     if (c.openingBalancePaise > 0) tx.create(ctx.doc('feeCharges/' + studentId + '_OPEN'), { ...base, cycle: cycleOf(c.joiningDate), kind: 'opening', dueDate: c.joiningDate, amountPaise: c.openingBalancePaise, balancePaise: c.openingBalancePaise });
     if (c.admissionFeePaise > 0) tx.create(ctx.doc('feeCharges/' + studentId + '_ADM'), { ...base, cycle: cycleOf(c.joiningDate), kind: 'admission', dueDate: c.joiningDate, amountPaise: c.admissionFeePaise, balancePaise: c.admissionFeePaise });
@@ -2023,7 +2036,7 @@ exports.tuitionStudentList = onCall({ memory: '256MiB', timeoutSeconds: 60 }, as
   const size = 25; const total = rows.length; const pages = Math.max(1, Math.ceil(total / size)); const page = Math.min(Math.max(1, Math.floor(Number(data.page)) || 1), pages);
   rows = rows.slice((page - 1) * size, page * size).map((s) => ({ id: s.id, name: s.name, className: s.className, schoolName: s.schoolName, guardianName: s.guardianName, guardianMobile: s.guardianMobile, studentMobile: s.studentMobile,
     address: s.address, subject: s.subject, subjects: s.subjects || [], batchId: s.batchId, joiningDate: s.joiningDate, joiningTime: s.joiningTime, monthlyFeePaise: s.monthlyFeePaise, dueDay: s.dueDay, admissionFeePaise: s.admissionFeePaise,
-    openingBalancePaise: s.openingBalancePaise, status: s.status, notes: s.notes }));
+    openingBalancePaise: s.openingBalancePaise, feePlan: s.feePlan || [], status: s.status, notes: s.notes }));
   return { items: rows, total, page, pages };
 });
 
@@ -2071,8 +2084,9 @@ exports.tuitionFees = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (re
   const today = todayIST(); const current = cycleOf(today);
   const cycle = CYCLE.test(String(data.cycle || '')) ? data.cycle : current;
   if (cycle === current) await ensureCharges(ctx, current);
-  const open = data.scope === 'due';
-  const snap = open ? await ctx.col('feeCharges').where('balancePaise', '>', 0).limit(600).get() : await ctx.col('feeCharges').where('cycle', '==', cycle).limit(600).get();
+  const open = data.scope === 'due'; const only = text(data.studentId, 30);
+  if (only && !STUDENT_ID.test(only)) throw new HttpsError('invalid-argument', 'Unknown student.');
+  const snap = only ? await ctx.col('feeCharges').where('studentId', '==', only).limit(300).get() : open ? await ctx.col('feeCharges').where('balancePaise', '>', 0).limit(600).get() : await ctx.col('feeCharges').where('cycle', '==', cycle).limit(600).get();
   const ids = [...new Set(snap.docs.map((d) => d.data().studentId))];
   const refs = ids.map((id) => ctx.doc('students/' + id)); const studs = refs.length ? await db.getAll(...refs) : [];
   const map = {}; studs.forEach((s) => { if (s.exists) map[s.id] = s.data(); });
