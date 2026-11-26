@@ -14,7 +14,7 @@ const SCHOOL_ID = await (async () => {
   const wanted = new URLSearchParams(location.search).get('school') ?? '';
   if (/^[a-z][a-z0-9-]{2,29}$/.test(wanted)) return wanted;
   const host = location.hostname.toLowerCase();
-  if (['azizschoolmanagement.plateria.in', 'www.azizschoolmanagement.plateria.in', 'localhost', '127.0.0.1'].includes(host)) return 'abcd-school';
+  if (['azizschoolmanagement.plateria.in', 'www.azizschoolmanagement.plateria.in', 'azizschoolmanagementsystem.com', 'www.azizschoolmanagementsystem.com', 'localhost', '127.0.0.1'].includes(host)) return 'abcd-school';
   try {
     const fs = await import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js');
     for (const name of [...new Set([host, host.replace(/^www\./, '')])]) {
