@@ -2,6 +2,7 @@
 // the restricted screen for a suspended account. The records themselves are read through server functions only.
 import { app } from './firebase-client.mjs';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { mountTuition } from './tuition-ui.mjs?v=tc-2';
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
 const auth = getAuth(app);
@@ -47,26 +48,17 @@ function restricted(inst) {
 
 function usageCard(label, used, limit) { return h('div', { class: 'card' }, h('small', {}, label), h('b', {}, used + ' / ' + limit)); }
 
-function render() {
+function render(mode) {
   const inst = list[chosen];
   const nav = NAV[inst.type];
   const layout = h('div', { class: 'layout' });
   const side = h('nav', { class: 'side', 'aria-label': 'Sections' }, nav.map((n) => h('button', { type: 'button', ...(n === current ? { 'aria-current': 'page' } : {}), onclick: () => { current = n; render(); } }, n)));
   const body = h('main', {});
-  if (current === 'Dashboard') {
-    const l = inst.limits || {}; const u = inst.usage || {};
-    body.append(h('h1', {}, inst.name), h('p', { style: 'color:var(--mut)' }, (inst.type === 'coaching' ? 'Coaching centre' : 'Tuition') + ' · Free plan · AZIZ branding on receipts'),
-      h('div', { class: 'grid' },
-        usageCard('Active students', u.activeStudents ?? 0, l.activeStudents ?? 0), usageCard('Batches', u.batches ?? 0, l.batches ?? 0),
-        ...(inst.type === 'coaching' ? [usageCard('Extra teachers', u.extraTeachers ?? 0, l.extraTeachers ?? 0)] : []),
-        h('div', { class: 'card' }, h('small', {}, 'Expected fees'), h('b', {}, '₹0')), h('div', { class: 'card' }, h('small', {}, 'Collected'), h('b', {}, '₹0')), h('div', { class: 'card' }, h('small', {}, 'Pending'), h('b', {}, '₹0'))),
-      h('h2', {}, 'Quick actions'),
-      h('div', { style: 'display:flex;gap:.7rem;flex-wrap:wrap' }, ['Add student', 'Record payment', 'Mark attendance'].map((a) => h('button', { type: 'button', disabled: true, title: 'Coming in the next release' }, a))),
-      h('h2', {}, 'Get started'), h('ol', { class: 'todo' }, CHECKLIST[inst.type].map((x) => h('li', {}, x))),
-      h('p', { class: 'empty' }, 'Students, batches, fees and attendance are being switched on in the next releases. Your account and limits are ready.'));
-  } else {
-    body.append(h('h1', {}, current), h('p', { class: 'empty' }, 'Nothing here yet. This section opens in the next release.'));
-  }
+  body.append(h('h1', {}, current === 'Dashboard' ? inst.name : current));
+  if (current === 'Dashboard') body.append(h('p', { style: 'color:var(--mut)' }, (inst.type === 'coaching' ? 'Coaching centre' : 'Tuition') + ' · Free plan · AZIZ branding on receipts'));
+  const go = (to, mode) => { current = to; render(mode === 'add' ? 'Students+add' : undefined); };
+  const handled = mountTuition({ section: mode || current, inst, call, h, body, go });
+  if (!handled) body.append(h('p', { class: 'empty' }, 'This coaching section opens in the next release. Everything you need for students, fees and attendance is already available.'));
   const bar = h('header', { class: 'bar' }, h('div', { class: 'brand' }, h('i', {}, 'A'), h('span', {}, 'AZIZ'), h('span', { class: 'tag' }, inst.type)),
     h('div', { style: 'display:flex;gap:.6rem;align-items:center;flex-wrap:wrap' },
       list.length > 1 ? h('select', { 'aria-label': 'Switch institution', onchange: (e) => { chosen = Number(e.target.value); current = 'Dashboard'; render(); } }, list.map((x, i) => h('option', { value: i, selected: i === chosen ? true : undefined }, x.name))) : null,

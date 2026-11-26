@@ -1517,6 +1517,107 @@ function buildInstitutionRecords(type, clean, { uid, tenantId, terms, privacy, n
 }
 // --- institution rules end ---
 
+// --- tuition rules begin (Tuition & Coaching shared engine: pure code, no database access) ---
+// Money is always whole paise. Dates are YYYY-MM-DD text in Indian time. A fee cycle is YYYY-MM.
+const MAX_FEE_PAISE = 100000000;
+function rupeesToPaise(value) {
+  const t = String(value ?? '').trim().replace(/,/g, '');
+  if (!/^[0-9]{1,9}(\.[0-9]{1,2})?$/.test(t)) return null;
+  const paise = Math.round(Number(t) * 100);
+  return paise >= 0 && paise <= MAX_FEE_PAISE ? paise : null;
+}
+const ISO_DATE = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/;
+function validDate(s) { if (!ISO_DATE.test(String(s))) return false; const d = new Date(s + 'T00:00:00Z'); return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s; }
+const validTime = (s) => /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(String(s));
+function todayIST(nowMs = Date.now()) { return new Date(nowMs + 330 * 60000).toISOString().slice(0, 10); }
+const cycleOf = (dateStr) => String(dateStr).slice(0, 7);
+function daysInMonth(cycle) { const [y, m] = cycle.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
+// The due day is clamped to the last day of shorter months (due day 31 in February is the 28th or 29th).
+function dueDateFor(cycle, dueDay) { return cycle + '-' + String(Math.min(Math.max(1, dueDay), daysInMonth(cycle))).padStart(2, '0'); }
+const chargeIdFor = (studentId, cycle) => studentId + '_' + cycle;
+// paid, unpaid (not due yet or due today) or overdue (due date passed with a balance). Future cycles are never overdue.
+function chargeStatus(charge, today) {
+  const balance = (charge.amountPaise || 0) - (charge.paidPaise || 0);
+  if (balance <= 0) return 'paid';
+  return charge.dueDate < today ? 'overdue' : 'unpaid';
+}
+const WORST = { overdue: 3, unpaid: 2, paid: 1 };
+const worstStatus = (statuses) => statuses.reduce((a, b) => (WORST[b] > WORST[a] ? b : a), 'paid');
+// Spreads a payment over charges. With a target charge it goes only there; otherwise oldest due date first. Overpayment is refused.
+function allocatePayment(charges, amountPaise, targetId = '') {
+  if (!Number.isInteger(amountPaise) || amountPaise <= 0) return { error: 'Enter an amount above zero.' };
+  const open = charges.filter((c) => (c.amountPaise - c.paidPaise) > 0).sort((a, b) => (a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : a.id < b.id ? -1 : 1));
+  const list = targetId ? open.filter((c) => c.id === targetId) : open;
+  if (targetId && !list.length) return { error: 'That charge is already paid or does not exist.' };
+  let left = amountPaise; const allocations = [];
+  for (const c of list) { if (left <= 0) break; const take = Math.min(left, c.amountPaise - c.paidPaise); allocations.push({ chargeId: c.id, amountPaise: take }); left -= take; }
+  if (left > 0) return { error: 'That is more than the balance due. The most you can record is ' + (amountPaise - left) / 100 + ' rupees.' };
+  return { allocations };
+}
+const receiptNoFor = (n) => 'R-' + String(n).padStart(6, '0');
+const STUDENT_STATUSES = ['active', 'inactive', 'archived'];
+const PAY_METHODS = ['cash', 'upi', 'bank'];
+const ATT_STATUSES = ['present', 'absent', 'late', 'excused'];
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+function cleanText(v, key, label, min, max, errors, out) {
+  const t = typeof v[key] === 'string' ? v[key].trim().replace(/\s+/g, ' ') : '';
+  if (t.length < min) errors[key] = label + (min ? ' is required.' : ' is invalid.'); else if (t.length > max) errors[key] = label + ' is too long.';
+  out[key] = t.slice(0, max);
+}
+function checkStudent(v, today = todayIST()) {
+  const errors = {}; const c = {};
+  cleanText(v, 'name', 'Student name', 2, 80, errors, c); cleanText(v, 'className', 'Class', 1, 40, errors, c); cleanText(v, 'schoolName', 'School name', 0, 100, errors, c);
+  cleanText(v, 'guardianName', 'Guardian name', 2, 80, errors, c); cleanText(v, 'subject', 'Subject', 0, 80, errors, c); cleanText(v, 'address', 'Address', 0, 200, errors, c); cleanText(v, 'notes', 'Notes', 0, 300, errors, c);
+  for (const [key, label, req] of [['guardianMobile', 'Guardian mobile', true], ['studentMobile', 'Student mobile', false]]) {
+    const t = typeof v[key] === 'string' ? v[key].trim() : '';
+    if ((req || t) && !/^\+?[0-9][0-9 -]{6,17}$/.test(t)) errors[key] = label + ' must be a valid number.'; c[key] = t.slice(0, 20);
+  }
+  c.batchId = typeof v.batchId === 'string' ? v.batchId.trim().slice(0, 40) : '';
+  if (!validDate(v.joiningDate)) errors.joiningDate = 'Enter the joining date.'; c.joiningDate = String(v.joiningDate || '');
+  c.joiningTime = v.joiningTime === '' || v.joiningTime == null ? '' : String(v.joiningTime);
+  if (c.joiningTime && !validTime(c.joiningTime)) errors.joiningTime = 'Enter the time as HH:MM.';
+  for (const [key, label] of [['monthlyFee', 'Monthly fee'], ['admissionFee', 'Admission fee'], ['openingBalance', 'Opening balance']]) {
+    const raw = v[key] === '' || v[key] == null ? '0' : v[key]; const p = rupeesToPaise(raw);
+    if (p === null) errors[key] = label + ' must be an amount in rupees.'; c[key + 'Paise'] = p === null ? 0 : p;
+  }
+  const dd = Number(v.dueDay); if (!Number.isInteger(dd) || dd < 1 || dd > 31) errors.dueDay = 'Due day must be from 1 to 31.'; c.dueDay = Number.isInteger(dd) ? dd : 1;
+  c.status = v.status === 'inactive' ? 'inactive' : 'active';
+  return { ok: Object.keys(errors).length === 0, errors, clean: c };
+}
+function checkBatch(v) {
+  const errors = {}; const c = {};
+  cleanText(v, 'name', 'Batch name', 2, 60, errors, c); cleanText(v, 'className', 'Class', 1, 40, errors, c); cleanText(v, 'subject', 'Subject', 1, 40, errors, c);
+  const days = (Array.isArray(v.days) ? v.days : []).filter((d, i, a) => WEEKDAYS.includes(d) && a.indexOf(d) === i);
+  if (!days.length) errors.days = 'Choose at least one day.'; c.days = days;
+  c.startTime = String(v.startTime || ''); c.endTime = String(v.endTime || '');
+  if (!validTime(c.startTime)) errors.startTime = 'Enter the start time.'; if (!validTime(c.endTime)) errors.endTime = 'Enter the end time.';
+  if (!errors.startTime && !errors.endTime && c.endTime <= c.startTime) errors.endTime = 'The end time must be after the start time.';
+  return { ok: Object.keys(errors).length === 0, errors, clean: c };
+}
+function checkPayment(v, today = todayIST()) {
+  const errors = {}; const amountPaise = rupeesToPaise(v.amount);
+  if (amountPaise === null || amountPaise <= 0) errors.amount = 'Enter an amount above zero.';
+  if (!PAY_METHODS.includes(v.method)) errors.method = 'Choose cash, UPI or bank transfer.';
+  if (!validDate(v.paidOn)) errors.paidOn = 'Enter the payment date.'; else if (v.paidOn > today) errors.paidOn = 'The payment date cannot be in the future.';
+  const note = typeof v.note === 'string' ? v.note.trim().slice(0, 100) : '';
+  const key = typeof v.idempotencyKey === 'string' ? v.idempotencyKey.trim() : '';
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(key)) errors.idempotencyKey = 'Missing request key. Reload and try again.';
+  return { ok: Object.keys(errors).length === 0, errors, clean: { amountPaise, method: v.method, paidOn: v.paidOn, note, idempotencyKey: key } };
+}
+function checkAttendanceEntries(entries, date, today = todayIST()) {
+  if (!validDate(date)) return { error: 'Enter a valid date.' };
+  if (date > today) return { error: 'Attendance cannot be marked for a future date.' };
+  if (!Array.isArray(entries) || !entries.length || entries.length > 300) return { error: 'Choose the students to mark.' };
+  const seen = new Set(); const out = [];
+  for (const e of entries) {
+    const studentId = String((e || {}).studentId || ''); const status = (e || {}).status;
+    if (!/^ST-[A-Z0-9]{6,20}$/.test(studentId) || !ATT_STATUSES.includes(status)) return { error: 'One of the rows is not valid.' };
+    if (seen.has(studentId)) return { error: 'A student is listed twice.' }; seen.add(studentId); out.push({ studentId, status });
+  }
+  return { entries: out };
+}
+// --- tuition rules end ---
+
 exports.reserveSchoolId = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const { uid } = await requirePlatformAdmin(request);
   const d = request.data || {};
@@ -1756,7 +1857,7 @@ exports.resolveMyInstitutions = onCall({ memory: '256MiB', timeoutSeconds: 30 },
     const inst = await db.doc('institutions/' + d.tenantId).get();
     if (!inst.exists) continue;
     const i = inst.data();
-    items.push({ tenantId: d.tenantId, type: i.type, role: d.role, status: i.status, name: i.name, planId: i.planId, limits: i.limits, usage: i.usage });
+    items.push({ tenantId: d.tenantId, type: i.type, role: d.role, status: i.status, name: i.name, planId: i.planId, limits: i.limits, usage: i.usage, profile: i.profile || {} });
   }
   return { institutions: items, emailVerified: request.auth.token.email_verified === true };
 });
@@ -1779,6 +1880,350 @@ exports.sendInstitutionVerification = onCall({ memory: '256MiB', timeoutSeconds:
   const status = result.ok ? 'sent' : (result.hint ? 'not-configured' : 'failed');
   await ref.update({ status, attempts: 1, ...(result.ok ? { sentAt: Timestamp.now() } : { lastError: String(result.hint || result.error || '').slice(0, 300) }) });
   return { status };
+});
+
+// ---- Tuition and coaching shared engine: students, batches, fees, payments, receipts, attendance (Phase 2) ----
+// Every function checks the signed-in account, its active membership and the institution status first. The institution id is never
+// trusted on its own: the membership record must belong to the caller. Collections live under institutions/{id}; no client rules.
+async function requireInstitution(request, data) {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const tenantId = text((data || {}).tenantId, 40);
+  if (!TENANT_ID.test(tenantId)) throw new HttpsError('invalid-argument', 'Unknown institution.');
+  const uid = request.auth.uid;
+  const [m, i] = await Promise.all([db.doc('memberships/' + uid + '_' + tenantId).get(), db.doc('institutions/' + tenantId).get()]);
+  if (!m.exists || m.data().uid !== uid || m.data().status !== 'active' || !i.exists) throw new HttpsError('permission-denied', 'You do not have access to this account.');
+  if (m.data().role !== 'owner') throw new HttpsError('permission-denied', 'Only the owner can do this.');
+  if (i.data().status !== 'active') throw new HttpsError('failed-precondition', 'This account is suspended. Your records are safe.');
+  return { uid, tenantId, inst: i.data(), ref: i.ref, col: (name) => db.collection('institutions/' + tenantId + '/' + name), doc: (path) => db.doc('institutions/' + tenantId + '/' + path) };
+}
+const newRecordId = (prefix) => prefix + '-' + Date.now().toString(36).toUpperCase() + nodeCrypto.randomBytes(2).toString('hex').toUpperCase();
+const invalid = (checked) => new HttpsError('invalid-argument', Object.values(checked.errors)[0], { errors: checked.errors });
+const STUDENT_ID = /^ST-[A-Z0-9]{6,20}$/;
+const BATCH_ID = /^BT-[A-Z0-9]{6,20}$/;
+const CYCLE = /^[0-9]{4}-(0[1-9]|1[0-2])$/;
+const studentFields = (c, now) => ({ name: c.name, nameLower: c.name.toLowerCase(), className: c.className, schoolName: c.schoolName, guardianName: c.guardianName, guardianMobile: c.guardianMobile,
+  studentMobile: c.studentMobile, address: c.address, subject: c.subject, batchId: c.batchId, joiningDate: c.joiningDate, joiningTime: c.joiningTime, joiningCycle: cycleOf(c.joiningDate),
+  monthlyFeePaise: c.monthlyFeePaise, dueDay: c.dueDay, admissionFeePaise: c.admissionFeePaise, openingBalancePaise: c.openingBalancePaise, notes: c.notes, updatedAt: now });
+
+async function ensureCharges(ctx, cycle) {
+  const students = await ctx.col('students').where('status', '==', 'active').limit(600).get();
+  await Promise.all(students.docs.filter((d) => d.data().monthlyFeePaise > 0 && d.data().joiningCycle <= cycle).map(async (d) => {
+    const s = d.data();
+    try { await ctx.doc('feeCharges/' + chargeIdFor(d.id, cycle)).create({ studentId: d.id, cycle, kind: 'monthly', dueDate: dueDateFor(cycle, s.dueDay), amountPaise: s.monthlyFeePaise, paidPaise: 0, balancePaise: s.monthlyFeePaise, createdAt: Timestamp.now() }); }
+    catch (error) { if (error.code !== 6) throw error; }
+  }));
+}
+
+exports.tuitionStudentSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const checked = checkStudent(data.values || {});
+  if (!checked.ok) throw invalid(checked);
+  const c = checked.clean;
+  const editing = text(data.studentId, 30);
+  if (editing && !STUDENT_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown student.');
+  if (c.batchId) { const b = await ctx.doc('batches/' + c.batchId).get(); if (!BATCH_ID.test(c.batchId) || !b.exists || b.data().status !== 'active') throw new HttpsError('invalid-argument', 'Choose one of your active batches.'); }
+  const now = Timestamp.now(); const cycle = cycleOf(todayIST());
+  const studentId = editing || newRecordId('ST');
+  const sRef = ctx.doc('students/' + studentId);
+  await db.runTransaction(async (tx) => {
+    const [inst, found] = await Promise.all([tx.get(ctx.ref), tx.get(sRef)]);
+    if (editing) {
+      if (!found.exists) throw new HttpsError('not-found', 'Unknown student.');
+      if (found.data().status === 'archived') throw new HttpsError('failed-precondition', 'Reactivate this student before editing.');
+      tx.update(sRef, studentFields(c, now));
+      return;
+    }
+    const u = inst.data().usage || {}; const limit = (inst.data().limits || {}).activeStudents || 0;
+    if (c.status === 'active' && (u.activeStudents || 0) + 1 > limit) throw new HttpsError('resource-exhausted', 'You have reached the free limit of ' + limit + ' active students. Archive a student or switch one to inactive first.');
+    tx.create(sRef, { ...studentFields(c, now), status: c.status, createdAt: now, createdBy: ctx.uid });
+    const base = { studentId, paidPaise: 0, createdAt: now };
+    if (c.openingBalancePaise > 0) tx.create(ctx.doc('feeCharges/' + studentId + '_OPEN'), { ...base, cycle: cycleOf(c.joiningDate), kind: 'opening', dueDate: c.joiningDate, amountPaise: c.openingBalancePaise, balancePaise: c.openingBalancePaise });
+    if (c.admissionFeePaise > 0) tx.create(ctx.doc('feeCharges/' + studentId + '_ADM'), { ...base, cycle: cycleOf(c.joiningDate), kind: 'admission', dueDate: c.joiningDate, amountPaise: c.admissionFeePaise, balancePaise: c.admissionFeePaise });
+    if (c.status === 'active' && c.monthlyFeePaise > 0 && cycleOf(c.joiningDate) <= cycle) tx.create(ctx.doc('feeCharges/' + chargeIdFor(studentId, cycle)), { ...base, cycle, kind: 'monthly', dueDate: dueDateFor(cycle, c.dueDay), amountPaise: c.monthlyFeePaise, balancePaise: c.monthlyFeePaise });
+    if (c.status === 'active') tx.update(ctx.ref, { 'usage.activeStudents': FieldValue.increment(1) });
+  });
+  return { studentId };
+});
+
+exports.tuitionStudentStatus = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const studentId = text(data.studentId, 30); const to = data.status;
+  if (!STUDENT_ID.test(studentId) || !STUDENT_STATUSES.includes(to)) throw new HttpsError('invalid-argument', 'Check the student and the status.');
+  const reason = text(data.reason, 200);
+  if (to === 'archived' && reason.length < 3) throw new HttpsError('invalid-argument', 'Write a short reason for archiving.');
+  const sRef = ctx.doc('students/' + studentId);
+  await db.runTransaction(async (tx) => {
+    const [inst, s] = await Promise.all([tx.get(ctx.ref), tx.get(sRef)]);
+    if (!s.exists) throw new HttpsError('not-found', 'Unknown student.');
+    const from = s.data().status; if (from === to) return;
+    const delta = (to === 'active' ? 1 : 0) - (from === 'active' ? 1 : 0);
+    const limit = (inst.data().limits || {}).activeStudents || 0;
+    if (delta > 0 && ((inst.data().usage || {}).activeStudents || 0) + 1 > limit) throw new HttpsError('resource-exhausted', 'You have reached the free limit of ' + limit + ' active students.');
+    tx.update(sRef, { status: to, statusReason: reason, updatedAt: Timestamp.now() });
+    if (delta !== 0) tx.update(ctx.ref, { 'usage.activeStudents': FieldValue.increment(delta) });
+    tx.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action: 'student-' + to, studentId, from, reason, at: Timestamp.now() });
+  });
+  return { ok: true };
+});
+
+exports.tuitionStudentList = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const status = ['active', 'inactive', 'archived'].includes(data.status) ? data.status : 'all';
+  let query = ctx.col('students'); if (status !== 'all') query = query.where('status', '==', status);
+  const snap = await query.limit(500).get();
+  const q = text(data.q, 60).toLowerCase(); const cls = text(data.className, 40); const batchId = text(data.batchId, 40);
+  let rows = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((s) => (!cls || s.className === cls) && (!batchId || s.batchId === batchId) && (!q || s.nameLower.includes(q) || String(s.guardianMobile).includes(q) || s.guardianName.toLowerCase().includes(q)));
+  rows.sort((a, b) => (a.nameLower < b.nameLower ? -1 : 1));
+  const size = 25; const total = rows.length; const pages = Math.max(1, Math.ceil(total / size)); const page = Math.min(Math.max(1, Math.floor(Number(data.page)) || 1), pages);
+  rows = rows.slice((page - 1) * size, page * size).map((s) => ({ id: s.id, name: s.name, className: s.className, schoolName: s.schoolName, guardianName: s.guardianName, guardianMobile: s.guardianMobile, studentMobile: s.studentMobile,
+    address: s.address, subject: s.subject, batchId: s.batchId, joiningDate: s.joiningDate, joiningTime: s.joiningTime, monthlyFeePaise: s.monthlyFeePaise, dueDay: s.dueDay, admissionFeePaise: s.admissionFeePaise,
+    openingBalancePaise: s.openingBalancePaise, status: s.status, notes: s.notes }));
+  return { items: rows, total, page, pages };
+});
+
+exports.tuitionBatchSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const checked = checkBatch(data.values || {});
+  if (!checked.ok) throw invalid(checked);
+  const editing = text(data.batchId, 30);
+  if (editing && !BATCH_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown batch.');
+  const batchId = editing || newRecordId('BT'); const ref = ctx.doc('batches/' + batchId); const now = Timestamp.now();
+  await db.runTransaction(async (tx) => {
+    const [inst, found] = await Promise.all([tx.get(ctx.ref), tx.get(ref)]);
+    if (editing) { if (!found.exists || found.data().status !== 'active') throw new HttpsError('not-found', 'Unknown batch.'); tx.update(ref, { ...checked.clean, updatedAt: now }); return; }
+    const limit = (inst.data().limits || {}).batches || 0;
+    if (((inst.data().usage || {}).batches || 0) + 1 > limit) throw new HttpsError('resource-exhausted', 'You have reached the free limit of ' + limit + ' batches. Archive a batch first.');
+    tx.create(ref, { ...checked.clean, status: 'active', createdAt: now, createdBy: ctx.uid });
+    tx.update(ctx.ref, { 'usage.batches': FieldValue.increment(1) });
+  });
+  return { batchId };
+});
+exports.tuitionBatchArchive = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const batchId = text(data.batchId, 30); if (!BATCH_ID.test(batchId)) throw new HttpsError('invalid-argument', 'Unknown batch.');
+  const ref = ctx.doc('batches/' + batchId);
+  await db.runTransaction(async (tx) => {
+    const b = await tx.get(ref); if (!b.exists || b.data().status !== 'active') throw new HttpsError('not-found', 'Unknown batch.');
+    tx.update(ref, { status: 'archived', updatedAt: Timestamp.now() }); tx.update(ctx.ref, { 'usage.batches': FieldValue.increment(-1) });
+    tx.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action: 'batch-archived', batchId, at: Timestamp.now() });
+  });
+  return { ok: true };
+});
+exports.tuitionBatchList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireInstitution(request, request.data);
+  const snap = await ctx.col('batches').limit(100).get();
+  const students = await ctx.col('students').where('status', '==', 'active').limit(600).get();
+  const counts = {}; students.docs.forEach((d) => { const b = d.data().batchId; if (b) counts[b] = (counts[b] || 0) + 1; });
+  return { items: snap.docs.map((d) => ({ id: d.id, ...d.data(), createdAt: undefined, updatedAt: undefined, createdBy: undefined, students: counts[d.id] || 0 })).sort((a, b) => (a.name < b.name ? -1 : 1)) };
+});
+
+exports.tuitionFees = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const today = todayIST(); const current = cycleOf(today);
+  const cycle = CYCLE.test(String(data.cycle || '')) ? data.cycle : current;
+  if (cycle === current) await ensureCharges(ctx, current);
+  const open = data.scope === 'due';
+  const snap = open ? await ctx.col('feeCharges').where('balancePaise', '>', 0).limit(600).get() : await ctx.col('feeCharges').where('cycle', '==', cycle).limit(600).get();
+  const ids = [...new Set(snap.docs.map((d) => d.data().studentId))];
+  const refs = ids.map((id) => ctx.doc('students/' + id)); const studs = refs.length ? await db.getAll(...refs) : [];
+  const map = {}; studs.forEach((s) => { if (s.exists) map[s.id] = s.data(); });
+  const items = snap.docs.map((d) => { const x = d.data(); const s = map[x.studentId] || {};
+    return { id: d.id, studentId: x.studentId, studentName: s.name || '', className: s.className || '', guardianMobile: s.guardianMobile || '', kind: x.kind, cycle: x.cycle, dueDate: x.dueDate, amountPaise: x.amountPaise, paidPaise: x.paidPaise, balancePaise: x.balancePaise, status: chargeStatus(x, today) }; })
+    .sort((a, b) => (a.studentName < b.studentName ? -1 : a.studentName > b.studentName ? 1 : a.dueDate < b.dueDate ? -1 : 1));
+  return { cycle, scope: open ? 'due' : 'month', items, today };
+});
+
+exports.tuitionChargeAdjust = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const chargeId = text(data.chargeId, 60); const reason = text(data.reason, 200); const amountPaise = rupeesToPaise(data.amount);
+  if (!/^ST-[A-Z0-9]{6,20}_[A-Za-z0-9-]{3,10}$/.test(chargeId)) throw new HttpsError('invalid-argument', 'Unknown charge.');
+  if (amountPaise === null) throw new HttpsError('invalid-argument', 'Enter the new amount in rupees.');
+  if (reason.length < 5) throw new HttpsError('invalid-argument', 'Write the reason for the change (at least 5 characters).');
+  const ref = ctx.doc('feeCharges/' + chargeId);
+  await db.runTransaction(async (tx) => {
+    const c = await tx.get(ref); if (!c.exists) throw new HttpsError('not-found', 'Unknown charge.');
+    if (amountPaise < c.data().paidPaise) throw new HttpsError('failed-precondition', 'The new amount is less than what is already paid. Reverse a payment first.');
+    tx.update(ref, { amountPaise, balancePaise: amountPaise - c.data().paidPaise });
+    tx.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action: 'charge-adjusted', chargeId, from: c.data().amountPaise, to: amountPaise, reason, at: Timestamp.now() });
+  });
+  return { ok: true };
+});
+
+exports.tuitionPaymentRecord = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const checked = checkPayment(data);
+  if (!checked.ok) throw invalid(checked);
+  const p = checked.clean; const studentId = text(data.studentId, 30); const target = text(data.chargeId, 60);
+  if (!STUDENT_ID.test(studentId)) throw new HttpsError('invalid-argument', 'Choose a student.');
+  const paymentId = 'P-' + nodeCrypto.createHash('sha256').update(ctx.tenantId + ':' + p.idempotencyKey).digest('hex').slice(0, 20).toUpperCase();
+  const payRef = ctx.doc('payments/' + paymentId);
+  return db.runTransaction(async (tx) => {
+    const [inst, pay, student, chargesSnap] = await Promise.all([tx.get(ctx.ref), tx.get(payRef), tx.get(ctx.doc('students/' + studentId)), tx.get(ctx.col('feeCharges').where('studentId', '==', studentId).limit(200))]);
+    if (pay.exists) return { duplicate: true, paymentId, receiptNo: pay.data().receiptNo };
+    if (!student.exists) throw new HttpsError('not-found', 'Unknown student.');
+    const charges = chargesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const alloc = allocatePayment(charges, p.amountPaise, target);
+    if (alloc.error) throw new HttpsError('failed-precondition', alloc.error);
+    const n = ((inst.data().counters || {}).receipt || 0) + 1; const receiptNo = receiptNoFor(n); const now = Timestamp.now();
+    const byId = Object.fromEntries(charges.map((c) => [c.id, c]));
+    const labelOf = (id) => { const c = byId[id]; return c.kind === 'monthly' ? 'Fee ' + c.cycle : c.kind === 'admission' ? 'Admission fee' : 'Opening balance'; };
+    for (const a of alloc.allocations) { const c = byId[a.chargeId]; tx.update(ctx.doc('feeCharges/' + c.id), { paidPaise: c.paidPaise + a.amountPaise, balancePaise: c.balancePaise - a.amountPaise }); }
+    const owedBefore = charges.reduce((sum, c) => sum + c.balancePaise, 0);
+    tx.create(payRef, { studentId, amountPaise: p.amountPaise, method: p.method, paidOn: p.paidOn, note: p.note, allocations: alloc.allocations, receiptNo, status: 'posted', recordedBy: ctx.uid, createdAt: now });
+    tx.create(ctx.doc('receipts/' + receiptNo), { paymentId, studentId, studentName: student.data().name, guardianName: student.data().guardianName, className: student.data().className, institutionName: inst.data().name,
+      amountPaise: p.amountPaise, method: p.method, paidOn: p.paidOn, note: p.note, lines: alloc.allocations.map((a) => ({ label: labelOf(a.chargeId), amountPaise: a.amountPaise })), balanceAfterPaise: owedBefore - p.amountPaise, status: 'posted', createdAt: now });
+    tx.update(ctx.ref, { 'counters.receipt': n });
+    return { duplicate: false, paymentId, receiptNo };
+  });
+});
+
+exports.tuitionPaymentReverse = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const paymentId = text(data.paymentId, 40); const reason = text(data.reason, 200);
+  if (!/^P-[A-F0-9]{20}$/.test(paymentId)) throw new HttpsError('invalid-argument', 'Unknown payment.');
+  if (reason.length < 5) throw new HttpsError('invalid-argument', 'Write the reason for the reversal (at least 5 characters).');
+  const ref = ctx.doc('payments/' + paymentId);
+  await db.runTransaction(async (tx) => {
+    const pay = await tx.get(ref); if (!pay.exists) throw new HttpsError('not-found', 'Unknown payment.');
+    if (pay.data().status !== 'posted') throw new HttpsError('failed-precondition', 'This payment is already reversed.');
+    const charges = await Promise.all(pay.data().allocations.map((a) => tx.get(ctx.doc('feeCharges/' + a.chargeId))));
+    pay.data().allocations.forEach((a, i) => { const c = charges[i]; if (c.exists) tx.update(c.ref, { paidPaise: Math.max(0, c.data().paidPaise - a.amountPaise), balancePaise: c.data().balancePaise + a.amountPaise }); });
+    const now = Timestamp.now();
+    tx.update(ref, { status: 'reversed', reversedAt: now, reversedBy: ctx.uid, reverseReason: reason });
+    tx.update(ctx.doc('receipts/' + pay.data().receiptNo), { status: 'reversed' });
+    tx.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action: 'payment-reversed', paymentId, amountPaise: pay.data().amountPaise, reason, at: now });
+  });
+  return { ok: true };
+});
+
+exports.tuitionPayments = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const studentId = text(data.studentId, 30);
+  let snap;
+  if (studentId) { if (!STUDENT_ID.test(studentId)) throw new HttpsError('invalid-argument', 'Unknown student.'); snap = await ctx.col('payments').where('studentId', '==', studentId).limit(200).get(); }
+  else { const from = validDate(data.from) ? data.from : todayIST().slice(0, 8) + '01'; const to = validDate(data.to) ? data.to : '9999-12-31'; snap = await ctx.col('payments').where('paidOn', '>=', from).where('paidOn', '<=', to).limit(500).get(); }
+  const ids = [...new Set(snap.docs.map((d) => d.data().studentId))];
+  const studs = ids.length ? await db.getAll(...ids.map((id) => ctx.doc('students/' + id))) : []; const names = {}; studs.forEach((s) => { if (s.exists) names[s.id] = s.data().name; });
+  const items = snap.docs.map((d) => { const x = d.data(); return { id: d.id, studentId: x.studentId, studentName: names[x.studentId] || '', amountPaise: x.amountPaise, method: x.method, paidOn: x.paidOn, receiptNo: x.receiptNo, status: x.status, note: x.note }; })
+    .sort((a, b) => (a.paidOn < b.paidOn ? 1 : a.paidOn > b.paidOn ? -1 : a.receiptNo < b.receiptNo ? 1 : -1));
+  return { items };
+});
+exports.tuitionReceipt = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireInstitution(request, request.data);
+  const no = text((request.data || {}).receiptNo, 20); if (!/^R-[0-9]{6,}$/.test(no)) throw new HttpsError('invalid-argument', 'Unknown receipt.');
+  const r = await ctx.doc('receipts/' + no).get(); if (!r.exists) throw new HttpsError('not-found', 'Unknown receipt.');
+  const x = r.data(); return { receiptNo: no, ...x, createdAt: x.createdAt.toMillis() };
+});
+
+exports.tuitionAttendanceGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const batchId = text(data.batchId, 30); const date = data.date;
+  if (!BATCH_ID.test(batchId) || !validDate(date)) throw new HttpsError('invalid-argument', 'Choose a batch and a date.');
+  const students = await ctx.col('students').where('status', '==', 'active').limit(600).get();
+  const mine = students.docs.filter((d) => d.data().batchId === batchId).sort((a, b) => (a.data().nameLower < b.data().nameLower ? -1 : 1));
+  const marks = mine.length ? await db.getAll(...mine.map((d) => ctx.doc('attendance/' + date + '_' + batchId + '_' + d.id))) : [];
+  return { items: mine.map((d, i) => ({ studentId: d.id, name: d.data().name, status: marks[i].exists ? marks[i].data().status : '' })) };
+});
+exports.tuitionAttendanceMark = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const batchId = text(data.batchId, 30);
+  if (!BATCH_ID.test(batchId)) throw new HttpsError('invalid-argument', 'Choose a batch.');
+  const checked = checkAttendanceEntries(data.entries, data.date);
+  if (checked.error) throw new HttpsError('invalid-argument', checked.error);
+  const batch = await ctx.doc('batches/' + batchId).get();
+  if (!batch.exists || batch.data().status !== 'active') throw new HttpsError('not-found', 'Unknown batch.');
+  const ids = checked.entries.map((e) => e.studentId);
+  const studs = await db.getAll(...ids.map((id) => ctx.doc('students/' + id)));
+  for (const s of studs) if (!s.exists || s.data().status !== 'active' || s.data().batchId !== batchId) throw new HttpsError('failed-precondition', 'Every student must be active and assigned to this batch.');
+  const refs = checked.entries.map((e) => ctx.doc('attendance/' + data.date + '_' + batchId + '_' + e.studentId));
+  const old = await db.getAll(...refs); const now = Timestamp.now(); const write = db.batch(); const changes = [];
+  checked.entries.forEach((e, i) => {
+    if (old[i].exists && old[i].data().status !== e.status) changes.push({ studentId: e.studentId, from: old[i].data().status, to: e.status });
+    write.set(refs[i], { studentId: e.studentId, batchId, date: data.date, status: e.status, markedBy: ctx.uid, createdAt: old[i].exists ? old[i].data().createdAt : now, updatedAt: now });
+  });
+  if (changes.length) write.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action: 'attendance-corrected', batchId, date: data.date, changes: changes.slice(0, 100), at: now });
+  await write.commit();
+  return { saved: checked.entries.length, corrected: changes.length };
+});
+exports.tuitionAttendanceHistory = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  if (!validDate(data.from) || !validDate(data.to) || data.to < data.from) throw new HttpsError('invalid-argument', 'Choose a start and an end date.');
+  if ((new Date(data.to) - new Date(data.from)) / 86400000 > 92) throw new HttpsError('invalid-argument', 'Choose a range of at most 92 days.');
+  const batchId = text(data.batchId, 30); const studentId = text(data.studentId, 30);
+  const snap = await ctx.col('attendance').where('date', '>=', data.from).where('date', '<=', data.to).limit(3000).get();
+  const rows = snap.docs.map((d) => d.data()).filter((x) => (!batchId || x.batchId === batchId) && (!studentId || x.studentId === studentId));
+  const ids = [...new Set(rows.map((x) => x.studentId))].slice(0, 400);
+  const studs = ids.length ? await db.getAll(...ids.map((id) => ctx.doc('students/' + id))) : []; const names = {}; studs.forEach((s) => { if (s.exists) names[s.id] = s.data().name; });
+  const per = {};
+  for (const x of rows) { const r = per[x.studentId] || (per[x.studentId] = { studentId: x.studentId, name: names[x.studentId] || '', present: 0, absent: 0, late: 0, excused: 0 }); r[x.status] += 1; }
+  return { students: Object.values(per).sort((a, b) => (a.name < b.name ? -1 : 1)), records: rows.length, days: [...new Set(rows.map((x) => x.date))].length,
+    items: rows.sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 300).map((x) => ({ date: x.date, studentId: x.studentId, name: names[x.studentId] || '', batchId: x.batchId, status: x.status })) };
+});
+
+exports.tuitionDashboard = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const ctx = await requireInstitution(request, request.data);
+  const today = todayIST(); const cycle = cycleOf(today);
+  await ensureCharges(ctx, cycle);
+  const [month, open, pays] = await Promise.all([ctx.col('feeCharges').where('cycle', '==', cycle).limit(600).get(), ctx.col('feeCharges').where('balancePaise', '>', 0).limit(900).get(),
+    ctx.col('payments').where('paidOn', '>=', cycle + '-01').where('paidOn', '<=', cycle + '-31').limit(900).get()]);
+  const sum = (docs, f) => docs.reduce((t, d) => t + f(d.data()), 0);
+  const u = ctx.inst.usage || {};
+  return { activeStudents: u.activeStudents || 0, batches: u.batches || 0, limits: ctx.inst.limits, cycle,
+    expectedPaise: sum(month.docs, (x) => (x.kind === 'monthly' ? x.amountPaise : 0)), collectedPaise: sum(pays.docs, (x) => (x.status === 'posted' ? x.amountPaise : 0)),
+    pendingPaise: sum(open.docs, (x) => x.balancePaise), overdueCount: open.docs.filter((d) => chargeStatus(d.data(), today) === 'overdue').length };
+});
+exports.tuitionReport = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const cycle = CYCLE.test(String(data.cycle || '')) ? data.cycle : cycleOf(todayIST());
+  const [month, open, pays] = await Promise.all([ctx.col('feeCharges').where('cycle', '==', cycle).limit(900).get(), ctx.col('feeCharges').where('balancePaise', '>', 0).limit(900).get(),
+    ctx.col('payments').where('paidOn', '>=', cycle + '-01').where('paidOn', '<=', cycle + '-31').limit(900).get()]);
+  const posted = pays.docs.map((d) => d.data()).filter((x) => x.status === 'posted');
+  const byMethod = { cash: 0, upi: 0, bank: 0 }; posted.forEach((x) => { byMethod[x.method] += x.amountPaise; });
+  const billed = month.docs.reduce((t, d) => t + d.data().amountPaise, 0);
+  const arrears = open.docs.filter((d) => d.data().dueDate < cycle + '-01').reduce((t, d) => t + d.data().balancePaise, 0);
+  const outstanding = open.docs.filter((d) => d.data().dueDate <= cycle + '-31').reduce((t, d) => t + d.data().balancePaise, 0);
+  return { cycle, billedPaise: billed, receiptsPaise: posted.reduce((t, x) => t + x.amountPaise, 0), receiptCount: posted.length, arrearsPaise: arrears, outstandingPaise: outstanding, byMethod };
+});
+
+exports.institutionProfileSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {};
+  const ctx = await requireInstitution(request, data);
+  const merged = { ...(ctx.inst.profile || {}), ...(data.values || {}), email: ctx.inst.ownerEmail, termsAccepted: true };
+  const checked = checkInstitution(ctx.inst.type, merged);
+  if (!checked.ok) throw new HttpsError('invalid-argument', Object.values(checked.errors)[0], { errors: checked.errors });
+  const profile = { ...checked.clean }; delete profile.termsAccepted;
+  await ctx.ref.update({ profile, name: checked.clean.displayName });
+  return { ok: true, name: checked.clean.displayName };
+});
+
+// Every night (Indian time) the month's fee charge is created for each active student. One charge per student per month, with a fixed id,
+// so a repeat run or a manual open of the Fees page never creates a second one.
+exports.generateInstitutionCharges = onSchedule({ schedule: '30 1 * * *', timeZone: 'Asia/Kolkata', memory: '512MiB', timeoutSeconds: 540 }, async () => {
+  const cycle = cycleOf(todayIST()); let last = null; let count = 0;
+  for (;;) {
+    let q = db.collection('institutions').where('status', '==', 'active').orderBy('__name__').limit(100); if (last) q = q.startAfter(last);
+    const page = await q.get(); if (page.empty) break;
+    for (const d of page.docs) {
+      try { await ensureCharges({ col: (n) => db.collection('institutions/' + d.id + '/' + n), doc: (p) => db.doc('institutions/' + d.id + '/' + p) }, cycle); count += 1; }
+      catch (error) { logger.error('Could not create charges for ' + d.id, error); }
+    }
+    last = page.docs[page.docs.length - 1];
+  }
+  logger.info('Fee charges ensured for ' + count + ' institutions, cycle ' + cycle);
 });
 
 exports.getOnboardingFlag = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => { await requirePlatformAdmin(request); return { enabled: await onboardingEnabled() }; });
