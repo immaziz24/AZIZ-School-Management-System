@@ -71,7 +71,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     const form = (b) => {
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.');
-        const values = { name: fd.get('name'), className: fd.get('className'), subject: fd.get('subject'), days: fd.getAll('days'), startTime: fd.get('startTime'), endTime: fd.get('endTime') };
+        const values = withOther({ name: fd.get('name'), className: fd.get('className'), classNameOther: fd.get('classNameOther'), subject: fd.get('subject'), subjectOther: fd.get('subjectOther'), days: fd.getAll('days'), startTime: fd.get('startTime'), endTime: fd.get('endTime') });
         try { await api('tuitionBatchSave', { batchId: b ? b.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, b ? 'Edit batch' : 'New batch'),
         field('Batch name', inp('name', 'text', b?.name, { maxlength: 60, placeholder: 'Class 10 Maths – Morning' }), 'name'),
@@ -85,7 +85,16 @@ export function mountTuition({ section, inst, call, h, body, go }) {
   }
   const datalists = () => [];
   // The teacher's own classes and subjects (chosen in Settings) are the choices in the forms; a value already saved on a record is always kept in its list.
-  const choiceSelect = (name, kind, current, blank) => { const list = [...new Set([...(profile[kind] || []), ...(current ? [current] : [])])]; return sel(name, list, current || '', blank); };
+  const choiceSelect = (name, kind, current, blank) => {
+    const all = kind === 'classes' ? ALL_CLASSES : ALL_SUBJECTS; const mine = [...new Set([...(profile[kind] || []), ...(current ? [current] : [])])];
+    const more = [...(kind === 'subjects' ? ['All subjects'] : []), ...all].filter((x) => !mine.includes(x));
+    const opt = (o) => h('option', { value: o, selected: o === current ? true : undefined }, o);
+    const other = h('input', { type: 'text', name: name + 'Other', maxlength: 80, placeholder: 'Type it here', 'aria-label': 'Other ' + name, style: 'display:none' });
+    const select = h('select', { name, onchange: () => { other.style.display = select.value === '__other' ? 'block' : 'none'; } }, h('option', { value: '' }, blank),
+      mine.length ? h('optgroup', { label: 'Your ' + kind }, mine.map(opt)) : null, h('optgroup', { label: 'More ' + kind }, more.map(opt)), h('option', { value: '__other' }, 'Other (type your own)'));
+    return h('span', {}, select, other);
+  };
+  const withOther = (values) => { for (const k of ['className', 'subject']) { if (values[k] === '__other') values[k] = String(values[k + 'Other'] || '').trim(); delete values[k + 'Other']; } return values; };
   const settingsHint = (what) => h('span', { class: 'hint' }, 'Missing one? Add more ' + what + ' in ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); go('Settings'); } }, 'Settings'), '.');
 
   // ---------- Students ----------
@@ -121,7 +130,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     };
     const form = (s) => {
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
-        e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = Object.fromEntries(fd.entries());
+        e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = withOther(Object.fromEntries(fd.entries()));
         try { await api('tuitionStudentSave', { studentId: s ? s.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, s ? 'Edit student' : 'New student'),
         h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', choiceSelect('className', 'classes', s?.className, 'Choose a class'), 'className')),
