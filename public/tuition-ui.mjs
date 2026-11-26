@@ -7,6 +7,8 @@ const dmy = (s) => (s ? s.split('-').reverse().join('-') : '');
 const monthLabel = (c) => new Date(c + '-01T00:00:00Z').toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const ALL_CLASSES = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12', 'College / Other'];
+const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Mathematics', 'Science', 'Social Science', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge'];
 const STATUS_LABEL = { paid: 'Paid', unpaid: 'Unpaid', overdue: 'Overdue' };
 
 export function mountTuition({ section, inst, call, h, body, go }) {
@@ -73,7 +75,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
         try { await api('tuitionBatchSave', { batchId: b ? b.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, b ? 'Edit batch' : 'New batch'),
         field('Batch name', inp('name', 'text', b?.name, { maxlength: 60, placeholder: 'Class 10 Maths – Morning' }), 'name'),
-        field('Class', inp('className', 'text', b?.className, { list: 'classes', maxlength: 40 }), 'className'), field('Subject', inp('subject', 'text', b?.subject, { list: 'subjects', maxlength: 40 }), 'subject'),
+        field('Class', choiceSelect('className', 'classes', b?.className, 'Choose a class'), 'className'), field('Subject', choiceSelect('subject', 'subjects', b?.subject, 'Choose a subject'), 'subject'), settingsHint('classes or subjects'),
         h('fieldset', {}, h('legend', {}, 'Days'), WEEKDAYS.map((d) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'days', value: d, checked: b?.days?.includes(d) ? true : undefined }), d)), h('span', { class: 'ferr', 'data-err': 'days' })),
         h('div', { class: 'two' }, field('Starts', inp('startTime', 'time', b?.startTime), 'startTime'), field('Ends', inp('endTime', 'time', b?.endTime), 'endTime')),
         h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save batch'), h('button', { type: 'button', onclick: draw }, 'Cancel')));
@@ -81,7 +83,10 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     };
     draw();
   }
-  const datalists = () => [h('datalist', { id: 'classes' }, (profile.classes || []).map((c) => h('option', { value: c }))), h('datalist', { id: 'subjects' }, (profile.subjects || []).map((c) => h('option', { value: c })))];
+  const datalists = () => [];
+  // The teacher's own classes and subjects (chosen in Settings) are the choices in the forms; a value already saved on a record is always kept in its list.
+  const choiceSelect = (name, kind, current, blank) => { const list = [...new Set([...(profile[kind] || []), ...(current ? [current] : [])])]; return sel(name, list, current || '', blank); };
+  const settingsHint = (what) => h('span', { class: 'hint' }, 'Missing one? Add more ' + what + ' in ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); go('Settings'); } }, 'Settings'), '.');
 
   // ---------- Students ----------
   async function students(startAdd) {
@@ -119,8 +124,8 @@ export function mountTuition({ section, inst, call, h, body, go }) {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = Object.fromEntries(fd.entries());
         try { await api('tuitionStudentSave', { studentId: s ? s.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, s ? 'Edit student' : 'New student'),
-        h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', inp('className', 'text', s?.className, { list: 'classes', maxlength: 40 }), 'className')),
-        h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Subject', inp('subject', 'text', s?.subject, { list: 'subjects', maxlength: 80 }), 'subject')),
+        h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', choiceSelect('className', 'classes', s?.className, 'Choose a class'), 'className')),
+        h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Subject', choiceSelect('subject', 'subjects', s?.subject, 'Choose a subject'), 'subject')),
         h('div', { class: 'two' }, field('Guardian name', inp('guardianName', 'text', s?.guardianName, { maxlength: 80 }), 'guardianName'), field('Guardian mobile', inp('guardianMobile', 'tel', s?.guardianMobile, { placeholder: '+91 98300 12345' }), 'guardianMobile')),
         h('div', { class: 'two' }, field('Student mobile (optional)', inp('studentMobile', 'tel', s?.studentMobile), 'studentMobile'), field('Batch', sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), s?.batchId || '', 'No batch yet'), 'batchId')),
         field('Address (optional)', inp('address', 'text', s?.address, { maxlength: 200 }), 'address'),
@@ -129,7 +134,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
         s ? h('p', { class: 'hint' }, 'Changing the monthly fee affects new months only. To fix a charge already created, use Fees → Adjust.') : h('div', { class: 'two' },
           field('Admission fee (₹, optional)', inp('admissionFee', 'text', '', { inputmode: 'decimal' }), 'admissionFee'), field('Opening balance (₹, optional)', inp('openingBalance', 'text', '', { inputmode: 'decimal' }), 'openingBalance')),
         field('Notes (optional)', inp('notes', 'text', s?.notes, { maxlength: 300 }), 'notes'),
-        h('p', { class: 'hint' }, 'The first month is charged in full by default. If you want a different amount, record it later from Fees → Adjust with a reason.'),
+        settingsHint('classes or subjects'), h('p', { class: 'hint' }, 'The first month is charged in full by default. If you want a different amount, record it later from Fees → Adjust with a reason.'),
         h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save student'), h('button', { type: 'button', onclick: draw }, 'Cancel')));
       box.replaceChildren(f, ...datalists());
     };
@@ -251,16 +256,24 @@ export function mountTuition({ section, inst, call, h, body, go }) {
   }
 
   // ---------- Settings ----------
+  // Tick the classes or subjects from the full list, and type any others. Whatever is ticked becomes the choices in the student and batch forms.
+  function picker(kind, label, all, otherHint) {
+    const have = profile[kind] || []; const extra = have.filter((x) => !all.includes(x));
+    return h('fieldset', { 'data-field': kind }, h('legend', {}, label), h('div', { class: 'checks' }, all.map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: kind + '[]', value: o, checked: have.includes(o) ? true : undefined }), o))),
+      h('input', { type: 'text', name: kind + '-other', value: extra.join(', '), placeholder: otherHint, 'aria-label': otherHint }), h('span', { class: 'ferr', 'data-err': kind }));
+  }
   function settings() {
     const tuition = inst.type === 'tuition';
     const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
       e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = Object.fromEntries(fd.entries());
-      try { const r = await api('institutionProfileSave', { values }); inst.name = r.name; Object.assign(profile, values, { classes: String(values.classes).split(',').map((x) => x.trim()).filter(Boolean), subjects: String(values.subjects).split(',').map((x) => x.trim()).filter(Boolean) }); say(msg, 'Saved.', true); }
+      for (const kind of ['classes', 'subjects']) values[kind] = [...fd.getAll(kind + '[]'), ...String(fd.get(kind + '-other') || '').split(',')].map((x) => x.trim().slice(0, 40)).filter((x, i, a) => x && a.indexOf(x) === i).slice(0, kind === 'classes' ? 20 : 25);
+      delete values['classes-other']; delete values['subjects-other'];
+      try { const r = await api('institutionProfileSave', { values }); inst.name = r.name; Object.assign(profile, values); say(msg, 'Saved.', true); }
       catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
       h('h2', {}, 'Profile'), h('p', { class: 'hint' }, 'Sign-in email: ' + (profile.email || '')),
       ...(tuition ? [field('Tuition name', inp('tuitionName', 'text', profile.tuitionName), 'tuitionName'), field('Your name', inp('fullName', 'text', profile.fullName), 'fullName'), field('Address or locality', inp('locality', 'text', profile.locality), 'locality')]
         : [field('Centre name', inp('centreName', 'text', profile.centreName), 'centreName'), field('Owner name', inp('ownerName', 'text', profile.ownerName), 'ownerName'), field('Address', inp('address', 'text', profile.address), 'address'), field('PIN code', inp('pin', 'text', profile.pin), 'pin')]),
-      field('Mobile', inp('mobile', 'tel', profile.mobile), 'mobile'), field('Classes (comma separated)', inp('classes', 'text', (profile.classes || []).join(', ')), 'classes'), field('Subjects (comma separated)', inp('subjects', 'text', (profile.subjects || []).join(', ')), 'subjects'),
+      field('Mobile', inp('mobile', 'tel', profile.mobile), 'mobile'), picker('classes', 'Classes you teach', ALL_CLASSES, 'Other classes, separated by commas'), picker('subjects', 'Subjects you teach', ALL_SUBJECTS, 'Other subjects, separated by commas'),
       field('Teaching mode', sel('teachingMode', ['offline', 'online', 'hybrid'], profile.teachingMode), 'teachingMode'),
       h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save profile')),
       h('p', { class: 'hint' }, 'To export or delete your data, write to support@azizschoolmanagementsystem.com from your registered email.'));
