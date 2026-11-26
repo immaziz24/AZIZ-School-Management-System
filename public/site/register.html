@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Free Registration | AZIZ Tuition &amp; Coaching Manager</title>
+<meta name="description" content="Register free as a tuition teacher or a coaching centre: students, batches, fees, attendance and receipts in one place.">
+<meta name="theme-color" content="#060a14">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css?v=batch-57">
+<style>
+.reg{padding:7rem 0 4rem;min-height:70vh}
+.reg h1{font-size:clamp(2.2rem,5vw,3.6rem)}
+.pick{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:2rem}
+.pick .card{cursor:pointer;text-align:left;font:inherit;color:inherit}
+.pick .card:focus-visible,.reg button:focus-visible,.reg input:focus-visible,.reg select:focus-visible{outline:2px solid var(--gold2);outline-offset:2px}
+.pick .tag{display:inline-block;font-size:.75rem;letter-spacing:.2em;text-transform:uppercase;color:var(--gold2);margin-bottom:.6rem}
+.pick ul{margin:1rem 0 0;padding-left:1.1rem;color:var(--mut)}
+.formcard{max-width:720px;margin:1.5rem 0}
+.steps-ind{display:flex;gap:.5rem;margin:0 0 1.2rem;padding:0;list-style:none;color:var(--mut);font-size:.85rem;flex-wrap:wrap}
+.steps-ind li{padding:.3rem .8rem;border:1px solid var(--line);border-radius:99px}
+.steps-ind li.on{color:#120d02;background:var(--gold2);border-color:var(--gold2)}
+.reg label{display:block;margin-bottom:1.1rem;color:var(--mut);font-size:.85rem;letter-spacing:.04em}
+.reg label .req{color:var(--gold2)}
+.reg input[type=text],.reg input[type=email],.reg input[type=tel],.reg input[type=password],.reg input[type=number],.reg select{width:100%;margin-top:.4rem;background:rgba(6,10,20,.7);border:1px solid var(--line);border-radius:12px;padding:.85rem 1rem;color:var(--ink);font:inherit}
+.reg .err{color:#ff9a8a;font-size:.82rem;margin:.3rem 0 0;min-height:1em}
+.reg .help{color:var(--mut);font-size:.8rem;margin:.3rem 0 0}
+.checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:.4rem .8rem;margin-top:.5rem}
+.checks label{display:flex;gap:.5rem;align-items:center;margin:0;color:var(--ink);font-size:.9rem;letter-spacing:0}
+.pwrow{display:flex;gap:.5rem;align-items:center}
+.pwrow button{margin-top:.4rem;white-space:nowrap}
+.actions{display:flex;gap:.8rem;flex-wrap:wrap;margin-top:1.4rem}
+.notice{border:1px solid var(--line);background:rgba(201,162,74,.06);border-radius:14px;padding:1rem 1.2rem;color:var(--ink);margin:1rem 0}
+.prog{list-style:none;padding:0;margin:1rem 0}.prog li{padding:.4rem 0;color:var(--mut)}.prog li.done{color:var(--ink)}.prog li.done::before{content:"✓ ";color:var(--gold2)}.prog li.now::before{content:"… "}
+@media(max-width:720px){.pick{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header><nav class="top"><div class="wrap">
+<a class="logo" href="/"><i>A</i><span><b>AZIZ</b><small>School Management System</small></span></a>
+<div class="links" id="site-links"><a href="/features">Features</a><a href="/pricing">Pricing</a><a href="/security">Security</a><a href="/about">About</a><a href="/contact">Contact</a><a class="btn" href="/app">Sign in</a><a class="btn" href="/register">Registration</a><a class="btn gold-bg" href="/app#signup">Start free trial</a></div>
+<button class="burger" aria-label="Menu" aria-expanded="false" aria-controls="site-links">☰</button>
+</div></nav></header>
+<main id="main"><section class="reg"><div class="wrap">
+<span class="eyebrow">Free registration</span>
+<h1>Tuition &amp; Coaching <span class="gold">Manager</span></h1>
+<p class="lead">Free forever for small tuition teachers and coaching centres. No card, no trial expiry. This is separate from the school trial.</p>
+<div id="app" aria-live="polite"><noscript><p class="notice">Please turn on JavaScript to register.</p></noscript></div>
+</div></section></main>
+<footer class="site"><div class="wrap"><div class="legal"><span>© 2026 AZIZ School Management System. All rights reserved.</span><span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span></div></div></footer>
+<script>(function(){var b=document.querySelector('.burger'),l=document.querySelector('.links');if(b&&l)b.addEventListener('click',function(){var o=!l.classList.contains('open');l.classList.toggle('open',o);b.setAttribute('aria-expanded',String(o));});})();</script>
+<script type="module" src="/register.mjs?v=tc-1"></script>
+</body></html>

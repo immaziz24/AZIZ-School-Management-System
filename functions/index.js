@@ -1443,6 +1443,80 @@ function buildAcademicPlan(v) {
 }
 // --- registration rules end ---
 
+// --- institution rules begin (Tuition & Coaching registration: pure code, no database access) ---
+// Free tuition and coaching accounts live in their own collections (institutions, memberships), apart from schools. The plan,
+// role and limits are chosen here from an allowlist; nothing about them is ever taken from the browser.
+const INSTITUTION_TYPES = ['tuition', 'coaching'];
+const ENTITLEMENT_VERSION = 1;
+const FREE_PLANS = {
+  tuition: { planId: 'tuition_free', featureCount: 20, limits: { activeStudents: 100, owners: 1, extraTeachers: 0, batches: 10, storageBytes: 10 * 1024 * 1024 } },
+  coaching: { planId: 'coaching_free', featureCount: 30, limits: { activeStudents: 250, owners: 1, extraTeachers: 5, batches: 20, storageBytes: 50 * 1024 * 1024 } },
+};
+const TEACHING_MODES = ['offline', 'online', 'hybrid'];
+const INSTITUTION_EXCLUDED = ['student and parent portals', 'online exams', 'online payment gateway', 'QR, selfie, biometric or GPS attendance', 'study material uploads', 'payroll', 'custom website or domain', 'AI features', 'automated SMS and WhatsApp'];
+function institutionEntitlements(type) {
+  const plan = FREE_PLANS[type];
+  if (!plan) throw new HttpsError('invalid-argument', 'Choose Tuition or Coaching.');
+  return { planId: plan.planId, version: ENTITLEMENT_VERSION, featureIds: Array.from({ length: plan.featureCount }, (_, i) => i + 1), limits: { ...plan.limits },
+    manualFeesAndAttendance: true, brandingRequired: true, subscriptionInr: 0, trialExpiry: false, excluded: INSTITUTION_EXCLUDED };
+}
+function tenantIdFor(uid) { return 'ins-' + nodeCrypto.createHash('sha256').update('institution:' + String(uid)).digest('hex').slice(0, 20); }
+const TENANT_ID = /^ins-[0-9a-f]{20}$/;
+const listOf = (value, max, each) => (Array.isArray(value) ? value : String(value ?? '').split(','))
+  .map((x) => String(x).trim().slice(0, each)).filter(Boolean).filter((x, i, all) => all.indexOf(x) === i).slice(0, max);
+const INST_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const INST_PHONE = /^\+?[0-9][0-9 -]{6,17}$/;
+// Checks a tuition or coaching form. Returns { ok, errors: {field: message}, clean }. The email always comes from the signed-in account.
+function checkInstitution(type, values, nowYear = new Date().getUTCFullYear()) {
+  const v = values || {};
+  const errors = {};
+  const clean = {};
+  const req = (key, label, min, max) => { const t = typeof v[key] === 'string' ? v[key].trim().replace(/\s+/g, ' ') : ''; if (t.length < min) errors[key] = label + ' is required.'; else if (t.length > max) errors[key] = label + ' is too long.'; clean[key] = t.slice(0, max); };
+  const opt = (key, max) => { clean[key] = typeof v[key] === 'string' ? v[key].trim().replace(/\s+/g, ' ').slice(0, max) : ''; };
+  const email = typeof v.email === 'string' ? v.email.trim().toLowerCase() : '';
+  if (!INST_EMAIL.test(email) || email.length > 120) errors.email = 'Enter a valid email address.'; clean.email = email.slice(0, 120);
+  const mobile = typeof v.mobile === 'string' ? v.mobile.trim() : '';
+  if (!INST_PHONE.test(mobile)) errors.mobile = 'Enter a mobile number with country code, for example +91 98300 12345.'; clean.mobile = mobile.slice(0, 20);
+  const classes = listOf(v.classes, 20, 40); const subjects = listOf(v.subjects, 25, 40);
+  if (!classes.length) errors.classes = 'Choose at least one class.'; clean.classes = classes;
+  if (!subjects.length) errors.subjects = 'Choose at least one subject.'; clean.subjects = subjects;
+  if (!TEACHING_MODES.includes(v.teachingMode)) errors.teachingMode = 'Choose offline, online or hybrid.'; clean.teachingMode = TEACHING_MODES.includes(v.teachingMode) ? v.teachingMode : '';
+  if (v.termsAccepted !== true) errors.termsAccepted = 'Accept the terms and privacy policy to continue.'; clean.termsAccepted = v.termsAccepted === true;
+  if (type === 'tuition') {
+    req('fullName', 'Full name', 2, 80); opt('tuitionName', 80); req('locality', 'Address or locality', 3, 120);
+    if (!clean.tuitionName) clean.tuitionName = clean.fullName;
+    clean.displayName = clean.tuitionName;
+  } else if (type === 'coaching') {
+    req('centreName', 'Coaching centre name', 2, 100); req('ownerName', 'Owner name', 2, 80); req('address', 'Complete business address', 10, 240);
+    const pin = typeof v.pin === 'string' ? v.pin.trim() : '';
+    if (!/^[1-9][0-9]{5}$/.test(pin)) errors.pin = 'Enter a six-digit PIN code.'; clean.pin = pin;
+    const year = v.establishmentYear === '' || v.establishmentYear == null ? null : Number(v.establishmentYear);
+    if (year !== null && (!Number.isInteger(year) || year < 1900 || year > nowYear)) errors.establishmentYear = 'Enter a year from 1900 to ' + nowYear + '.'; clean.establishmentYear = year !== null && Number.isInteger(year) ? year : null;
+    for (const [key, label, max] of [['teacherEstimate', 'Number of teachers', 5000], ['studentEstimate', 'Number of students', 100000]]) {
+      const n = v[key] === '' || v[key] == null ? null : Number(v[key]);
+      if (n !== null && (!Number.isInteger(n) || n < 0 || n > max)) errors[key] = label + ' must be a whole number from 0 to ' + max + '.';
+      clean[key] = n !== null && Number.isInteger(n) ? n : null;
+    }
+    clean.displayName = clean.centreName;
+  } else {
+    errors.type = 'Choose Tuition or Coaching.';
+  }
+  return { ok: Object.keys(errors).length === 0, errors, clean };
+}
+// The records written for a new institution. role, plan, status and limits come from here, never from the request.
+function buildInstitutionRecords(type, clean, { uid, tenantId, terms, privacy, now }) {
+  const ent = institutionEntitlements(type);
+  const profile = { ...clean }; delete profile.termsAccepted;
+  return {
+    institution: { type, planId: ent.planId, status: 'active', ownerUid: uid, ownerEmail: clean.email, name: clean.displayName, timezone: 'Asia/Kolkata', entitlementVersion: ent.version,
+      profile, limits: ent.limits, usage: { activeStudents: 0, batches: 0, extraTeachers: 0, storageBytes: 0 }, consent: { terms, privacy, acceptedAt: now },
+      createdAt: now, verifiedAt: now },
+    membership: { uid, tenantId, role: 'owner', status: 'active', type, assignedBatchIds: [], createdAt: now },
+    entitlements: { ...ent, setAt: now },
+  };
+}
+// --- institution rules end ---
+
 exports.reserveSchoolId = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const { uid } = await requirePlatformAdmin(request);
   const d = request.data || {};
@@ -1639,6 +1713,73 @@ async function queueWelcome(schoolId, { draftId = '', manual = false } = {}) {
   await regRef.set({ welcomeEmail: { status, at: Timestamp.now(), outboxId, note } }, { merge: true });
   return { status, outboxId, note };
 }
+
+// ---- Tuition & Coaching free registration (Phase 1) ----
+// Creates the institution after the email address is verified. Safe to repeat: the id comes from the account, so a retry returns the
+// original record. One institution per account at launch.
+exports.registerInstitution = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  if (request.auth.token.email_verified !== true) throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  const data = request.data || {};
+  const type = text(data.type, 10);
+  if (!INSTITUTION_TYPES.includes(type)) throw new HttpsError('invalid-argument', 'Choose Tuition or Coaching.');
+  const uid = request.auth.uid;
+  const email = String(request.auth.token.email || '').toLowerCase();
+  const checked = checkInstitution(type, { ...(data.values || {}), email });
+  if (!checked.ok) throw new HttpsError('invalid-argument', Object.values(checked.errors)[0], { errors: checked.errors });
+  const tenantId = tenantIdFor(uid);
+  const instRef = db.doc('institutions/' + tenantId);
+  const memRef = db.doc('memberships/' + uid + '_' + tenantId);
+  const now = Timestamp.now();
+  const recs = buildInstitutionRecords(type, checked.clean, { uid, tenantId, terms: LEGAL_VERSIONS.terms, privacy: LEGAL_VERSIONS.privacy, now });
+  const outcome = await db.runTransaction(async (tx) => {
+    const found = await tx.get(instRef);
+    if (found.exists) return { created: false, type: found.data().type };
+    tx.create(instRef, recs.institution);
+    tx.create(memRef, recs.membership);
+    tx.create(db.doc('institutions/' + tenantId + '/config/entitlements'), recs.entitlements);
+    tx.create(db.doc('institutions/' + tenantId + '/audit/' + newEventId('A')), { actor: uid, action: 'institution-registered', type, planId: recs.institution.planId, at: now });
+    return { created: true, type };
+  });
+  if (outcome.type !== type) throw new HttpsError('already-exists', 'This account already has a ' + outcome.type + ' account. Use that one.');
+  return { tenantId, type, created: outcome.created };
+});
+
+// The institutions this account may open. Suspended ones are returned with their status so the page can show the restricted screen.
+exports.resolveMyInstitutions = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const memberships = await db.collection('memberships').where('uid', '==', request.auth.uid).limit(10).get();
+  const items = [];
+  for (const m of memberships.docs) {
+    const d = m.data();
+    if (d.status !== 'active' || !TENANT_ID.test(String(d.tenantId || ''))) continue;
+    const inst = await db.doc('institutions/' + d.tenantId).get();
+    if (!inst.exists) continue;
+    const i = inst.data();
+    items.push({ tenantId: d.tenantId, type: i.type, role: d.role, status: i.status, name: i.name, planId: i.planId, limits: i.limits, usage: i.usage });
+  }
+  return { institutions: items, emailVerified: request.auth.token.email_verified === true };
+});
+
+// Sends the branded verification email through Resend, at most once every ten minutes per account. When Resend is not set up it says so,
+// and the page falls back to the built-in Firebase email.
+exports.sendInstitutionVerification = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const email = String(request.auth.token.email || '').toLowerCase();
+  if (request.auth.token.email_verified === true) return { status: 'verified' };
+  if (!email) throw new HttpsError('failed-precondition', 'Your account has no email address.');
+  const ref = db.doc('emailOutbox/EM-verify-' + request.auth.uid + '-' + Math.floor(Date.now() / 600000));
+  try { await ref.create({ to: email, template: 'institution-verify', status: 'queued', attempts: 0, createdAt: Timestamp.now() }); }
+  catch (error) { return { status: 'recently-sent' }; }
+  let result;
+  try {
+    const link = await getAuth().generateEmailVerificationLink(email, { url: 'https://azizschoolmanagementsystem.com/register' });
+    result = await sendEmail({ to: email, subject: 'Confirm your email for AZIZ', text: 'Welcome to AZIZ.\n\nConfirm your email address to finish creating your free account:\n' + link + '\n\nIf you did not ask for this, you can ignore this email.' });
+  } catch (error) { result = { ok: false, error: String(error?.message || error).slice(0, 200) }; }
+  const status = result.ok ? 'sent' : (result.hint ? 'not-configured' : 'failed');
+  await ref.update({ status, attempts: 1, ...(result.ok ? { sentAt: Timestamp.now() } : { lastError: String(result.hint || result.error || '').slice(0, 300) }) });
+  return { status };
+});
 
 exports.getOnboardingFlag = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => { await requirePlatformAdmin(request); return { enabled: await onboardingEnabled() }; });
 exports.setOnboardingFlag = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
