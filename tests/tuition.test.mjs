@@ -117,3 +117,9 @@ test('registration confirms the email with a code, not a link, and verifies on t
   const v = bodyOf('verifyInstitutionOtp'); assert.match(v, /runTransaction/); assert.match(v, /resource-exhausted/); assert.match(v, /emailVerified: true/); assert.match(v, /expired/);
   assert.doesNotMatch(bodyOf('sendInstitutionVerification'), /generateEmailVerificationLink/);
 });
+
+test('students and batches choose class and subject from the teacher\'s own lists, set in Settings from the full lists', () => {
+  const ui = read('public/tuition-ui.mjs');
+  assert.doesNotMatch(ui, /list: 'classes'|list: 'subjects'/); assert.match(ui, /choiceSelect\('className'/); assert.match(ui, /choiceSelect\('subject'/);
+  assert.match(ui, /const ALL_CLASSES/); assert.match(ui, /const ALL_SUBJECTS/); assert.match(ui, /picker\('classes'/); assert.match(ui, /picker\('subjects'/);
+});
