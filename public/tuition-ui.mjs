@@ -18,6 +18,8 @@ const STATUS_LABEL = { paid: 'Paid', unpaid: 'Unpaid', overdue: 'Overdue' };
 
 export function mountTuition({ section, inst, call, h, body, go }) {
   const tenantId = inst.tenantId;
+  // Open the calendar or clock when the date, time or month box is clicked anywhere, not only on its small icon.
+  body.addEventListener('click', (e) => { const t = e.target; if (t && t.matches && t.matches('input[type=date],input[type=time],input[type=month]')) { try { t.showPicker(); } catch { /* the browser opens it itself */ } } });
   const api = (name, data) => call(name, { tenantId, ...(data || {}) });
   const profile = inst.profile || {};
   const say = (el, text, ok) => { el.textContent = text; el.style.color = ok ? '#8fe0a5' : ''; };
@@ -59,6 +61,8 @@ export function mountTuition({ section, inst, call, h, body, go }) {
       if (!d.activeStudents) box.append(h('h2', {}, 'Get started'), h('ol', { class: 'todo' }, h('li', {}, 'Create a batch'), h('li', {}, 'Add your first student'), h('li', {}, 'Record the first fee payment')));
     } catch (e) { box.replaceChildren(h('p', { class: 'err' }, failText(e))); }
   }
+  const nextMonth = () => { const d = new Date(Date.now() + 330 * 60000); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1); return d.toISOString().slice(0, 7); };
+  const upcomingFee = (s) => { const f = (s.feePlan || []).filter((x) => x.from > today().slice(0, 7)); return f.length ? ' Scheduled: ' + money(f[f.length - 1].monthlyFeePaise) + ' from ' + monthLabel(f[f.length - 1].from) + '.' : ''; };
   const card = (label, value) => h('div', { class: 'card' }, h('small', {}, label), h('b', {}, value));
 
   // ---------- Batches ----------
@@ -132,7 +136,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
         const r = await api('tuitionStudentList', state); const bname = Object.fromEntries(bl.map((b) => [b.id, b.name]));
         list.replaceChildren(table(['Student', 'Class', 'Guardian', 'Batch', 'Fee / month', 'Status', ''], r.items.map((s) => h('tr', {}, h('td', {}, h('b', {}, s.name), h('br'), h('small', {}, subjectSummary(s))), h('td', {}, s.className), h('td', {}, s.guardianName, h('br'), h('small', {}, s.guardianMobile)),
           h('td', {}, bname[s.batchId] || '–'), h('td', {}, money(s.monthlyFeePaise)), h('td', {}, h('span', { class: 'pill ' + s.status }, s.status)),
-          h('td', { class: 'row-actions' }, s.status !== 'archived' ? h('button', { type: 'button', onclick: () => form(s) }, 'Edit') : null, s.status === 'active' ? h('button', { type: 'button', onclick: () => change(s, 'inactive') }, 'Pause') : null,
+          h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => ledger(s) }, 'History'), s.status !== 'archived' ? h('button', { type: 'button', onclick: () => form(s) }, 'Edit') : null, s.status === 'active' ? h('button', { type: 'button', onclick: () => change(s, 'inactive') }, 'Pause') : null,
             s.status !== 'active' ? h('button', { type: 'button', onclick: () => change(s, 'active') }, 'Activate') : null, s.status !== 'archived' ? h('button', { type: 'button', onclick: () => change(s, 'archived') }, 'Archive') : null))),
           'No students match. Try another search or add a student.'),
           r.pages > 1 ? h('div', { class: 'actions' }, h('button', { type: 'button', disabled: r.page <= 1, onclick: () => { state.page = r.page - 1; draw(); } }, 'Previous'), h('span', {}, 'Page ' + r.page + ' of ' + r.pages + ' · ' + r.total + ' students'),
@@ -145,10 +149,23 @@ export function mountTuition({ section, inst, call, h, body, go }) {
       else if (!window.confirm((to === 'active' ? 'Activate ' : 'Pause ') + s.name + '?')) return;
       api('tuitionStudentStatus', { studentId: s.id, status: to, reason }).then(draw).catch((e) => window.alert(failText(e)));
     };
+    // One student's money history: every charge, every payment (with receipts), and what is still due.
+    const ledger = async (s) => {
+      const out = h('div', {}, loading()); box.replaceChildren(out);
+      try {
+        const [c, p] = await Promise.all([api('tuitionFees', { studentId: s.id }), api('tuitionPayments', { studentId: s.id })]);
+        const charges = [...c.items].sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)); const due = charges.reduce((t, x) => t + x.balancePaise, 0); const paid = p.items.filter((x) => x.status === 'posted').reduce((t, x) => t + x.amountPaise, 0);
+        out.replaceChildren(h('div', { class: 'actions' }, h('button', { type: 'button', onclick: draw }, '← Back to students')), h('h2', {}, s.name + ' · fee history'),
+          h('div', { class: 'grid' }, card('Total paid', money(paid)), card('Still due', money(due))),
+          h('h2', {}, 'Charges'), table(['For', 'Due date', 'Amount', 'Paid', 'Balance', 'Status'], charges.map((x) => h('tr', {}, h('td', {}, x.kind === 'monthly' ? monthLabel(x.cycle) : x.kind === 'admission' ? 'Admission fee' : 'Opening balance'), h('td', {}, dmy(x.dueDate)), h('td', {}, money(x.amountPaise)), h('td', {}, money(x.paidPaise)), h('td', {}, money(x.balancePaise)), h('td', {}, h('span', { class: 'pill ' + x.status }, STATUS_LABEL[x.status])))), 'No charges yet.'),
+          h('h2', {}, 'Payments'), table(['Date', 'Receipt', 'Amount', 'Method', 'Status', ''], p.items.map((x) => h('tr', {}, h('td', {}, dmy(x.paidOn)), h('td', {}, x.receiptNo), h('td', {}, money(x.amountPaise)), h('td', {}, x.method.toUpperCase()), h('td', {}, h('span', { class: 'pill ' + (x.status === 'posted' ? 'active' : 'archived') }, x.status)),
+            h('td', {}, h('button', { type: 'button', onclick: () => showReceipt(x.receiptNo).catch((e) => window.alert(failText(e))) }, 'Receipt')))), 'No payments yet.'));
+      } catch (e) { out.replaceChildren(h('div', { class: 'actions' }, h('button', { type: 'button', onclick: draw }, '← Back')), h('p', { class: 'err' }, failText(e))); }
+    };
     const form = (s) => {
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = collectSubjects(fd, withOther(Object.fromEntries(fd.entries())));
-        try { await api('tuitionStudentSave', { studentId: s ? s.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
+        try { await api('tuitionStudentSave', { studentId: s ? s.id : '', values, feeEffectiveFrom: values.feeEffectiveFrom || '' }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, s ? 'Edit student' : 'New student'),
         h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', choiceSelect('className', 'classes', s?.className, 'Choose a class'), 'className')),
         h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Batch', sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), s?.batchId || '', 'No batch yet'), 'batchId')),
@@ -158,7 +175,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
         field('Address (optional)', inp('address', 'text', s?.address, { maxlength: 200 }), 'address'),
         h('div', { class: 'two' }, field('Joining date', inp('joiningDate', 'date', s?.joiningDate || today(), { max: '9999-12-31' }), 'joiningDate'), field('Joining time (optional)', inp('joiningTime', 'time', s?.joiningTime), 'joiningTime')),
         h('div', { class: 'two' }, field('Monthly fee (₹)', inp('monthlyFee', 'text', s ? rupees(s.monthlyFeePaise) : '', { inputmode: 'decimal', placeholder: '500' }), 'monthlyFee'), field('Fee due day of month (1–31)', inp('dueDay', 'number', s?.dueDay ?? 5, { min: 1, max: 31 }), 'dueDay')),
-        s ? h('p', { class: 'hint' }, 'Changing the monthly fee affects new months only. To fix a charge already created, use Fees → Adjust.') : h('div', { class: 'two' },
+        s ? h('div', {}, field('If you change the fee or due day, it starts from (month)', inp('feeEffectiveFrom', 'month', nextMonth(), { min: today().slice(0, 7) }), 'feeEffectiveFrom'), h('p', { class: 'hint' }, 'Months before this keep their old fee. To fix a charge already created, use Fees → Adjust.' + upcomingFee(s))) : h('div', { class: 'two' },
           field('Admission fee (₹, optional)', inp('admissionFee', 'text', '', { inputmode: 'decimal' }), 'admissionFee'), field('Opening balance (₹, optional)', inp('openingBalance', 'text', '', { inputmode: 'decimal' }), 'openingBalance')),
         field('Notes (optional)', inp('notes', 'text', s?.notes, { maxlength: 300 }), 'notes'),
         settingsHint('classes or subjects'), h('p', { class: 'hint' }, 'The first month is charged in full by default. If you want a different amount, record it later from Fees → Adjust with a reason.'),
@@ -234,7 +251,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     let bl = []; try { bl = (await loadBatches(true)).filter((b) => b.status === 'active'); } catch (e) { box.replaceChildren(h('p', { class: 'err' }, failText(e))); return; }
     if (!bl.length) { box.replaceChildren(h('p', { class: 'empty' }, 'Create a batch and assign students to it first. Attendance is taken batch by batch.')); return; }
     const state = { tab: 'mark', batchId: bl[0].id, date: today(), from: today().slice(0, 8) + '01', to: today() };
-    const batchSel = () => { const s = sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), state.batchId); s.addEventListener('change', () => { state.batchId = s.value; draw(); }); return s; };
+    const batchSel = () => { const s = sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), state.batchId); s.addEventListener('change', () => { state.batchId = s.value; state.studentId = ''; draw(); }); return s; };
     const draw = async () => {
       const out = h('div', {}, loading());
       box.replaceChildren(h('div', { class: 'tabs' }, [['mark', 'Mark attendance'], ['history', 'History']].map(([k, l]) => h('button', { type: 'button', ...(state.tab === k ? { 'aria-current': 'true' } : {}), onclick: () => { state.tab = k; draw(); } }, l))), out);
@@ -254,9 +271,12 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     };
     const history = async (out) => {
       const from = inp('from', 'date', state.from); const to = inp('to', 'date', state.to, { max: today() });
-      const r = await api('tuitionAttendanceHistory', { batchId: state.batchId, from: state.from, to: state.to });
+      const roster = (await api('tuitionAttendanceGet', { batchId: state.batchId, date: today() })).items;
+      const pick = sel('studentId', roster.map((x) => ({ value: x.studentId, label: x.name })), state.studentId || '', 'All students'); pick.addEventListener('change', () => { state.studentId = pick.value; draw(); });
+      const r = await api('tuitionAttendanceHistory', { batchId: state.batchId, studentId: state.studentId || '', from: state.from, to: state.to });
       const apply = () => { if (from.value && to.value) { state.from = from.value; state.to = to.value; draw(); } };
-      out.replaceChildren(h('div', { class: 'toolbar' }, batchSel(), h('label', {}, 'From', from), h('label', {}, 'To', to), h('button', { type: 'button', onclick: apply }, 'Show'), h('b', {}, r.days + ' class days')),
+      out.replaceChildren(h('div', { class: 'toolbar' }, batchSel(), pick, h('label', {}, 'From', from), h('label', {}, 'To', to), h('button', { type: 'button', onclick: apply }, 'Show'), h('b', {}, r.days + ' class days')),
+        state.studentId ? table(['Date', 'Status'], r.items.map((x) => h('tr', {}, h('td', {}, dmy(x.date)), h('td', {}, h('span', { class: 'pill ' + (x.status === 'present' ? 'active' : x.status === 'absent' ? 'overdue' : 'unpaid') }, x.status)))), 'No attendance was marked for this student in this period.') : null,
         table(['Student', 'Present', 'Absent', 'Late', 'Excused'], r.students.map((s) => h('tr', {}, h('td', {}, s.name), h('td', {}, String(s.present)), h('td', {}, String(s.absent)), h('td', {}, String(s.late)), h('td', {}, String(s.excused)))), 'No attendance was marked in this period.'));
     };
     draw();
