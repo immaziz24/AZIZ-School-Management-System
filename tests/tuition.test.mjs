@@ -95,7 +95,7 @@ test('the client never sends plan, role, status or limits; no secret or rules ch
 test('screens, routing and cache are wired', () => {
   const ui = read('public/tuition-ui.mjs'); for (const n of CALLABLES.filter((x) => x !== 'tuitionBatchList' || true)) assert.ok(ui.includes("'" + n + "'") || n === 'tuitionStudentList' || ui.includes(n), n);
   const inst = read('public/institution.mjs'); assert.match(inst, /mountTuition/); assert.match(inst, /tuition-ui\.mjs/);
-  assert.match(read('.htaccess'), /tuition-ui\\\.mjs/); assert.match(read('public/institution.html'), /institution\.mjs\?v=tc-2/); assert.match(read('public/institution.html'), /@media print/);
+  assert.match(read('.htaccess'), /tuition-ui\\\.mjs/); assert.match(read('public/institution.html'), /institution\.mjs\?v=tc-3/); assert.match(read('public/institution.html'), /@media print/);
 });
 
 const otpBlock = src.match(/\/\/ --- email code rules begin ---[\s\S]*?\/\/ --- email code rules end ---/);
@@ -132,4 +132,9 @@ test('a student or batch can have many subjects; a batch needs at least one', ()
   assert.equal(lib.checkStudent(student, '2026-11-26').ok, true);
   const b = { name: 'Class 5 All', className: 'Class 5', days: ['Mon'], startTime: '16:00', endTime: '17:00' };
   assert.ok(lib.checkBatch(b).errors.subjects); assert.equal(lib.checkBatch({ ...b, subjects: ['Maths', 'English'] }).ok, true);
+});
+
+test('a tuition or coaching owner who opens the school sign-in is sent to their own dashboard; the portal has Home links', () => {
+  const si = read('public/sign-in.mjs'); assert.match(si, /resolveMyInstitutions/); assert.match(si, /location\.replace\('\/' \+ mine\[0\]\.type\)/); assert.match(si, /sign in at \/tuition or \/coaching/);
+  const portal = read('public/institution.mjs'); assert.ok((portal.match(/Back to home/g) || []).length >= 2); assert.match(portal, /'Home'/);
 });

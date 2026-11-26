@@ -36,7 +36,8 @@ function signInPanel(note = '') {
       h('label', {}, 'Email', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'email' })),
       h('label', {}, 'Password', h('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' })),
       h('p', { class: 'err', role: 'alert' }, note), h('button', { class: 'gold', type: 'submit' }, 'Sign in')),
-    h('p', { style: 'color:var(--mut)' }, 'New here? ', h('a', { href: '/register' }, 'Register free'), '. School staff sign in at ', h('a', { href: '/app' }, '/app'), '.')));
+    h('p', { style: 'color:var(--mut)' }, 'New here? ', h('a', { href: '/register' }, 'Register free'), '. School staff sign in at ', h('a', { href: '/app' }, '/app'), '.'),
+    h('p', {}, h('a', { href: '/' }, '← Back to home'))));
 }
 
 function restricted(inst) {
@@ -62,7 +63,7 @@ function render(mode) {
   const bar = h('header', { class: 'bar' }, h('div', { class: 'brand' }, h('i', {}, 'A'), h('span', {}, 'AZIZ'), h('span', { class: 'tag' }, inst.type)),
     h('div', { style: 'display:flex;gap:.6rem;align-items:center;flex-wrap:wrap' },
       list.length > 1 ? h('select', { 'aria-label': 'Switch institution', onchange: (e) => { chosen = Number(e.target.value); current = 'Dashboard'; render(); } }, list.map((x, i) => h('option', { value: i, selected: i === chosen ? true : undefined }, x.name))) : null,
-      h('button', { type: 'button', onclick: () => signOut(auth) }, 'Sign out')));
+      h('a', { class: 'btn', href: '/' }, 'Home'), h('button', { type: 'button', onclick: () => signOut(auth) }, 'Sign out')));
   layout.append(side, body);
   root.replaceChildren(bar, layout);
 }
@@ -73,7 +74,7 @@ onAuthStateChanged(auth, async (user) => {
   try {
     const r = await call('resolveMyInstitutions');
     list = r.institutions || [];
-    if (!list.length) { root.replaceChildren(h('div', { class: 'panel' }, h('h1', {}, 'No account found'), h('p', {}, 'This email has no tuition or coaching account yet.'), h('a', { class: 'btn', href: '/register' }, 'Register free'), ' ', h('button', { onclick: () => signOut(auth) }, 'Sign out'))); return; }
+    if (!list.length) { root.replaceChildren(h('div', { class: 'panel' }, h('h1', {}, 'No account found'), h('p', {}, 'This email has no tuition or coaching account yet.'), h('a', { class: 'btn', href: '/register' }, 'Register free'), ' ', h('button', { onclick: () => signOut(auth) }, 'Sign out'), h('p', {}, h('a', { href: '/' }, '← Back to home')))); return; }
     const match = list.findIndex((x) => x.type === pathType);
     if (match < 0) { location.replace('/' + list[0].type); return; }
     chosen = match;

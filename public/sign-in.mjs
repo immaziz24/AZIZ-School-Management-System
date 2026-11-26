@@ -11487,6 +11487,14 @@ onAuthStateChanged(auth, async (user) => {
     schoolStatus.textContent = error.code === 'permission-denied'
       ? 'School access has not been granted to this account.'
       : 'School access could not be checked. Refresh to try again.';
+    // A tuition or coaching owner has no school access, but does have their own dashboard: send them there instead of leaving them on this message.
+    if (error.code === 'permission-denied') {
+      try {
+        const mine = (await restoreCall('resolveMyInstitutions', {})).institutions || [];
+        if (request === schoolRequest && mine.length) { schoolStatus.textContent = 'This is a ' + mine[0].type + ' account. Opening your dashboard.'; location.replace('/' + mine[0].type); return; }
+      } catch { /* not a tuition or coaching account */ }
+      if (request === schoolRequest) schoolStatus.textContent = 'School access has not been granted to this account. If you registered as a tuition teacher or coaching centre, sign in at /tuition or /coaching.';
+    }
   }
 });
 
