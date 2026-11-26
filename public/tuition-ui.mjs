@@ -22,6 +22,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
   body.addEventListener('click', (e) => { const t = e.target; if (t && t.matches && t.matches('input[type=date],input[type=time],input[type=month]')) { try { t.showPicker(); } catch { /* the browser opens it itself */ } } });
   const api = (name, data) => call(name, { tenantId, ...(data || {}) });
   const profile = inst.profile || {};
+  const isTeacher = inst.role === 'teacher'; const isCoaching = inst.type === 'coaching';
   const say = (el, text, ok) => { el.textContent = text; el.style.color = ok ? '#8fe0a5' : ''; };
   const failText = (e) => (e && e.message && !/^internal$/i.test(e.message) ? e.message.replace(/^.*?: /, '') : 'Something went wrong. Check the internet and try again.');
   const fieldErrors = (e) => (e && e.details && e.details.errors) || {};
@@ -37,7 +38,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
   async function showReceipt(receiptNo) {
     const r = await api('tuitionReceipt', { receiptNo });
     const sheet = h('div', { class: 'receipt-sheet' },
-      h('div', { class: 'rc' }, h('p', { class: 'rc-brand' }, r.institutionName), h('h2', {}, 'Fee receipt' + (r.status === 'reversed' ? ' (REVERSED)' : '')),
+      h('div', { class: 'rc' }, r.logo ? h('img', { src: r.logo, alt: '', style: 'max-height:64px;max-width:160px;display:block;margin:0 auto .4rem' }) : null, h('p', { class: 'rc-brand' }, r.institutionName), h('h2', {}, 'Fee receipt' + (r.status === 'reversed' ? ' (REVERSED)' : '')),
         h('p', {}, 'Receipt no. ', h('b', {}, r.receiptNo), ' · Date ', h('b', {}, dmy(r.paidOn))),
         h('p', {}, 'Student: ', h('b', {}, r.studentName), ' · ', /^class\b/i.test(r.className) ? r.className : 'Class ' + r.className), h('p', {}, 'Guardian: ' + r.guardianName),
         table(['For', 'Amount'], r.lines.map((l) => h('tr', {}, h('td', {}, String(l.label).replace(/^Fee (\d{4}-\d{2})$/, (m, c) => 'Fee for ' + monthLabel(c))), h('td', {}, money(l.amountPaise)))), 'No lines.'),
@@ -58,6 +59,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
           card('Expected this month', money(d.expectedPaise)), card('Collected this month', money(d.collectedPaise)), card('Total pending', money(d.pendingPaise)), card('Overdue charges', String(d.overdueCount))),
         h('h2', {}, 'Quick actions'), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'button', onclick: () => go('Students', 'add') }, 'Add student'),
           h('button', { type: 'button', onclick: () => go('Fees') }, 'Record payment'), h('button', { type: 'button', onclick: () => go('Attendance') }, 'Mark attendance')));
+      if (d.batchOverview) box.append(h('h2', {}, 'Batches at a glance' + (d.teachers !== undefined ? ' · ' + d.teachers + ' teacher' + (d.teachers === 1 ? '' : 's') : '')), table(['Batch', 'Class', 'Students', 'Teachers'], d.batchOverview.map((b) => h('tr', {}, h('td', {}, b.name), h('td', {}, b.className), h('td', {}, String(b.students)), h('td', {}, String(b.teachers)))), 'No batches yet.'));
       if (!d.activeStudents) box.append(h('h2', {}, 'Get started'), h('ol', { class: 'todo' }, h('li', {}, 'Create a batch'), h('li', {}, 'Add your first student'), h('li', {}, 'Record the first fee payment')));
     } catch (e) { box.replaceChildren(h('p', { class: 'err' }, failText(e))); }
   }
@@ -72,15 +74,16 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     const box = h('div', {}, loading()); body.append(box);
     const draw = async () => {
       let items; try { items = (await loadBatches(true)).filter((b) => b.status === 'active'); } catch (e) { box.replaceChildren(h('p', { class: 'err' }, failText(e))); return; }
-      box.replaceChildren(h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'button', onclick: () => form(null) }, 'Add batch')),
-        table(['Batch', 'Class', 'Subject', 'Days', 'Time', 'Students', ''], items.map((b) => h('tr', {}, h('td', {}, b.name), h('td', {}, b.className), h('td', {}, subjectSummary(b)), h('td', {}, b.days.join(', ')), h('td', {}, b.startTime + ' – ' + b.endTime), h('td', {}, String(b.students)),
-          h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(b) }, 'Edit'), h('button', { type: 'button', onclick: () => confirmBox('Archive "' + b.name + '"? Students keep their records, but the batch closes.', async () => { try { await api('tuitionBatchArchive', { batchId: b.id }); draw(); } catch (e) { window.alert(failText(e)); } }) }, 'Archive')))),
+      const showFee = isCoaching && !isTeacher;
+      box.replaceChildren(isTeacher ? h('p', { class: 'hint' }, 'These are the batches your centre assigned to you.') : h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'button', onclick: () => form(null) }, 'Add batch')),
+        table(['Batch', 'Class', 'Subject', 'Days', 'Time', 'Students', ...(showFee ? ['Monthly fee'] : []), ...(isTeacher ? [] : [''])], items.map((b) => h('tr', {}, h('td', {}, b.name), h('td', {}, b.className), h('td', {}, subjectSummary(b)), h('td', {}, b.days.join(', ')), h('td', {}, b.startTime + ' – ' + b.endTime), h('td', {}, String(b.students)), showFee ? h('td', {}, b.feePaise ? money(b.feePaise) : '-') : null,
+          isTeacher ? null : h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(b) }, 'Edit'), h('button', { type: 'button', onclick: () => confirmBox('Archive "' + b.name + '"? Students keep their records, but the batch closes.', async () => { try { await api('tuitionBatchArchive', { batchId: b.id }); draw(); } catch (e) { window.alert(failText(e)); } }) }, 'Archive')))),
           'No batches yet. Add your first batch.'));
     };
     const form = (b) => {
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.');
-        const values = withOther({ name: fd.get('name'), className: fd.get('className'), classNameOther: fd.get('classNameOther'), subjects: [...fd.getAll('subjects[]'), ...String(fd.get('subjectsOther') || '').split(',')].map((x) => x.trim()).filter(Boolean), days: fd.getAll('days'), startTime: fd.get('startTime'), endTime: fd.get('endTime') });
+        const values = withOther({ name: fd.get('name'), className: fd.get('className'), classNameOther: fd.get('classNameOther'), subjects: [...fd.getAll('subjects[]'), ...String(fd.get('subjectsOther') || '').split(',')].map((x) => x.trim()).filter(Boolean), days: fd.getAll('days'), startTime: fd.get('startTime'), endTime: fd.get('endTime'), fee: fd.get('fee') });
         try { await api('tuitionBatchSave', { batchId: b ? b.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, b ? 'Edit batch' : 'New batch'),
         field('Batch name', inp('name', 'text', b?.name, { maxlength: 60, placeholder: 'Class 10 Maths – Morning' }), 'name'),
@@ -88,6 +91,8 @@ export function mountTuition({ section, inst, call, h, body, go }) {
         subjectPicker(subjectsOf(b), true),
         h('fieldset', {}, h('legend', {}, 'Days'), WEEKDAYS.map((d) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'days', value: d, checked: b?.days?.includes(d) ? true : undefined }), d)), h('span', { class: 'ferr', 'data-err': 'days' })),
         h('div', { class: 'two' }, field('Starts', inp('startTime', 'time', b?.startTime), 'startTime'), field('Ends', inp('endTime', 'time', b?.endTime), 'endTime')),
+        isCoaching ? field('Monthly fee for this batch (₹, optional)', inp('fee', 'text', b?.feePaise ? rupees(b.feePaise) : '', { inputmode: 'decimal', placeholder: 'For example 1500' }), 'fee') : null,
+        isCoaching ? h('p', { class: 'hint' }, 'New students added to this batch get this fee unless you type a different one. Existing students are not changed.') : null,
         h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save batch'), h('button', { type: 'button', onclick: draw }, 'Cancel')));
       box.replaceChildren(f);
     };
@@ -327,7 +332,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     body.append(f);
   }
 
-  const screens = { Dashboard: dashboard, Students: () => students(false), Batches: batches, Fees: fees, Attendance: attendance, Reports: reports, Settings: settings };
+  const screens = isTeacher ? { Batches: batches, Attendance: attendance } : { Dashboard: dashboard, Students: () => students(false), Batches: batches, Fees: fees, Attendance: attendance, Reports: reports, Settings: settings };
   if (section === 'Students+add') { students(true); return true; }
   if (!screens[section]) return false;
   screens[section](); return true;
