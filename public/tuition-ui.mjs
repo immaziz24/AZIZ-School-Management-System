@@ -37,8 +37,8 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     const sheet = h('div', { class: 'receipt-sheet' },
       h('div', { class: 'rc' }, h('p', { class: 'rc-brand' }, r.institutionName), h('h2', {}, 'Fee receipt' + (r.status === 'reversed' ? ' (REVERSED)' : '')),
         h('p', {}, 'Receipt no. ', h('b', {}, r.receiptNo), ' · Date ', h('b', {}, dmy(r.paidOn))),
-        h('p', {}, 'Student: ', h('b', {}, r.studentName), ' · Class ', r.className), h('p', {}, 'Guardian: ' + r.guardianName),
-        table(['For', 'Amount'], r.lines.map((l) => h('tr', {}, h('td', {}, l.label), h('td', {}, money(l.amountPaise)))), 'No lines.'),
+        h('p', {}, 'Student: ', h('b', {}, r.studentName), ' · ', /^class\b/i.test(r.className) ? r.className : 'Class ' + r.className), h('p', {}, 'Guardian: ' + r.guardianName),
+        table(['For', 'Amount'], r.lines.map((l) => h('tr', {}, h('td', {}, String(l.label).replace(/^Fee (\d{4}-\d{2})$/, (m, c) => 'Fee for ' + monthLabel(c))), h('td', {}, money(l.amountPaise)))), 'No lines.'),
         h('p', {}, 'Paid ', h('b', {}, money(r.amountPaise)), ' by ' + r.method.toUpperCase() + (r.note ? ' · ' + r.note : '')),
         h('p', {}, 'Balance still due: ', h('b', {}, money(r.balanceAfterPaise))), h('p', { class: 'rc-foot' }, 'Powered by AZIZ School Management System')),
       h('div', { class: 'rc-actions' }, h('button', { class: 'gold', type: 'button', onclick: () => window.print() }, 'Print'), h('button', { type: 'button', onclick: () => sheet.remove() }, 'Close')));
