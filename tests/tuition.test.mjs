@@ -72,10 +72,14 @@ const CALLABLES = ['tuitionStudentSave', 'tuitionStudentStatus', 'tuitionStudent
   'tuitionAttendanceGet', 'tuitionAttendanceMark', 'tuitionAttendanceHistory', 'tuitionDashboard', 'tuitionReport', 'institutionProfileSave'];
 const bodyOf = (name) => { const i = src.indexOf('exports.' + name + ' = '); assert.ok(i > 0, name + ' missing'); const j = src.indexOf('\nexports.', i + 10); return src.slice(i, j > 0 ? j : undefined); };
 
-test('every Phase 2 function is owner-only and tenant-checked through requireInstitution', () => {
-  for (const n of CALLABLES) assert.match(bodyOf(n), /requireInstitution\(request/, n);
-  const g = src.slice(src.indexOf('async function requireInstitution'), src.indexOf('const newRecordId'));
-  assert.match(g, /unauthenticated/); assert.match(g, /memberships\/' \+ uid \+ '_' \+ tenantId/); assert.match(g, /role !== 'owner'/); assert.match(g, /status !== 'active'/); assert.match(g, /TENANT_ID\.test/);
+const TEACHER_OK = ['tuitionBatchList', 'tuitionAttendanceGet', 'tuitionAttendanceMark', 'tuitionAttendanceHistory'];
+test('every Phase 2 function is tenant-checked; only the four attendance and batch-view functions admit a teacher', () => {
+  for (const n of CALLABLES.filter((x) => !TEACHER_OK.includes(x))) assert.match(bodyOf(n), /requireInstitution\(request/, n);
+  for (const n of TEACHER_OK) { assert.match(bodyOf(n), /requireMember\(request, [a-z.]+, \['owner', 'teacher'\]\)/, n); assert.match(bodyOf(n), /canReachBatch/, n); }
+  const g = src.slice(src.indexOf('async function requireMember'), src.indexOf('const requireInstitution'));
+  assert.match(g, /unauthenticated/); assert.match(g, /memberships\/' \+ uid \+ '_' \+ tenantId/); assert.match(g, /roles\.includes\(m\.data\(\)\.role\)/); assert.match(g, /status !== 'active'/); assert.match(g, /TENANT_ID\.test/);
+  assert.match(src, /const requireInstitution = \(request, data\) => requireMember\(request, data, \['owner'\]\)/);
+  assert.match(g, /role === 'teacher' && i\.data\(\)\.type !== 'coaching'/);
 });
 
 test('quotas, receipts and payments are written in transactions with safe keys', () => {
@@ -95,7 +99,7 @@ test('the client never sends plan, role, status or limits; no secret or rules ch
 test('screens, routing and cache are wired', () => {
   const ui = read('public/tuition-ui.mjs'); for (const n of CALLABLES.filter((x) => x !== 'tuitionBatchList' || true)) assert.ok(ui.includes("'" + n + "'") || n === 'tuitionStudentList' || ui.includes(n), n);
   const inst = read('public/institution.mjs'); assert.match(inst, /mountTuition/); assert.match(inst, /tuition-ui\.mjs/);
-  assert.match(read('.htaccess'), /tuition-ui\\\.mjs/); assert.match(read('public/institution.html'), /institution\.mjs\?v=tc-3/); assert.match(read('public/institution.html'), /@media print/);
+  assert.match(read('.htaccess'), /tuition-ui\\\.mjs/); assert.match(read('public/institution.html'), /institution\.mjs\?v=tc-\d+/); assert.match(read('public/institution.html'), /@media print/);
 });
 
 const otpBlock = src.match(/\/\/ --- email code rules begin ---[\s\S]*?\/\/ --- email code rules end ---/);

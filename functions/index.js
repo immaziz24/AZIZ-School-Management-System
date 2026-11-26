@@ -1602,6 +1602,7 @@ function checkBatch(v) {
   c.startTime = String(v.startTime || ''); c.endTime = String(v.endTime || '');
   if (!validTime(c.startTime)) errors.startTime = 'Enter the start time.'; if (!validTime(c.endTime)) errors.endTime = 'Enter the end time.';
   if (!errors.startTime && !errors.endTime && c.endTime <= c.startTime) errors.endTime = 'The end time must be after the start time.';
+  const feeRaw = v.fee === '' || v.fee == null ? '0' : v.fee; const fp = rupeesToPaise(feeRaw); if (fp === null) errors.fee = 'Fee must be an amount in rupees.'; c.feePaise = fp === null ? 0 : fp;
   return { ok: Object.keys(errors).length === 0, errors, clean: c };
 }
 function checkPayment(v, today = todayIST()) {
@@ -1627,6 +1628,89 @@ function checkAttendanceEntries(entries, date, today = todayIST()) {
   return { entries: out };
 }
 // --- tuition rules end ---
+
+// --- coaching rules begin (coaching extras: teachers, subjects, timetable, exams, notices, logo; pure code) ---
+const TEACHER_ID = /^TC-[A-Z0-9]{6,20}$/; const SUBJECT_ID = /^SB-[A-Z0-9]{6,20}$/; const SESSION_ID = /^SS-[A-Z0-9]{6,20}$/; const EXAM_ID = /^EX-[A-Z0-9]{6,20}$/; const NOTICE_ID = /^AN-[A-Z0-9]{6,20}$/;
+const MAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/; const PHONE_OK = /^\+?[0-9][0-9 -]{6,17}$/;
+function checkTeacher(v) {
+  const errors = {}; const c = {};
+  cleanText(v, 'name', 'Teacher name', 2, 80, errors, c); cleanText(v, 'notes', 'Notes', 0, 200, errors, c);
+  const email = typeof v.email === 'string' ? v.email.trim().toLowerCase() : '';
+  if (!MAIL.test(email) || email.length > 120) errors.email = 'Enter a valid email address. The teacher logs in with it.'; c.email = email.slice(0, 120);
+  const mobile = typeof v.mobile === 'string' ? v.mobile.trim() : '';
+  if (mobile && !PHONE_OK.test(mobile)) errors.mobile = 'Mobile must be a valid number.'; c.mobile = mobile.slice(0, 20);
+  c.subjects = subjectList(v);
+  return { ok: Object.keys(errors).length === 0, errors, clean: c };
+}
+function checkSubject(v) {
+  const errors = {}; const c = {};
+  cleanText(v, 'name', 'Subject name', 2, 40, errors, c); cleanText(v, 'code', 'Code', 0, 10, errors, c); c.code = c.code.toUpperCase();
+  return { ok: Object.keys(errors).length === 0, errors, clean: c };
+}
+const toMinutes = (t) => { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; };
+function checkSession(v) {
+  const errors = {}; const c = {};
+  c.batchId = String(v.batchId || '').trim(); c.teacherId = String(v.teacherId || '').trim();
+  if (!/^BT-[A-Z0-9]{6,20}$/.test(c.batchId)) errors.batchId = 'Choose a batch.'; if (!TEACHER_ID.test(c.teacherId)) errors.teacherId = 'Choose a teacher.';
+  if (!WEEKDAYS.includes(v.weekday)) errors.weekday = 'Choose a day.'; c.weekday = v.weekday;
+  c.startTime = String(v.startTime || ''); c.endTime = String(v.endTime || '');
+  if (!validTime(c.startTime)) errors.startTime = 'Enter the start time.'; if (!validTime(c.endTime)) errors.endTime = 'Enter the end time.';
+  if (!errors.startTime && !errors.endTime && c.endTime <= c.startTime) errors.endTime = 'The end time must be after the start time.';
+  cleanText(v, 'room', 'Room', 0, 30, errors, c); cleanText(v, 'subject', 'Subject', 0, 40, errors, c);
+  return { ok: Object.keys(errors).length === 0, errors, clean: c };
+}
+// Conflicts a new session would cause: the same teacher, or the same room, at an overlapping time on the same day.
+function findSessionConflicts(s, existing, ownId = '') {
+  const out = [];
+  for (const e of existing) {
+    if (e.id === ownId || e.weekday !== s.weekday) continue;
+    if (!(toMinutes(s.startTime) < toMinutes(e.endTime) && toMinutes(e.startTime) < toMinutes(s.endTime))) continue;
+    if (e.teacherId === s.teacherId) out.push({ type: 'teacher', sessionId: e.id, startTime: e.startTime, endTime: e.endTime });
+    else if (s.room && e.room && e.room.toLowerCase() === s.room.toLowerCase()) out.push({ type: 'room', sessionId: e.id, startTime: e.startTime, endTime: e.endTime });
+  }
+  return out;
+}
+function checkExam(v) {
+  const errors = {}; const c = {};
+  cleanText(v, 'name', 'Exam name', 2, 80, errors, c); cleanText(v, 'subject', 'Subject', 0, 40, errors, c);
+  c.batchId = String(v.batchId || '').trim(); if (!/^BT-[A-Z0-9]{6,20}$/.test(c.batchId)) errors.batchId = 'Choose a batch.';
+  if (!validDate(v.date)) errors.date = 'Enter the exam date.'; c.date = String(v.date || '');
+  const max = Number(v.maxMarks); if (!Number.isInteger(max) || max < 1 || max > 1000) errors.maxMarks = 'Maximum marks must be a whole number from 1 to 1000.'; c.maxMarks = Number.isInteger(max) ? max : 0;
+  return { ok: Object.keys(errors).length === 0, errors, clean: c };
+}
+// Marks must be between 0 and the exam maximum. A blank mark means absent.
+function checkMarks(entries, max) {
+  if (!Array.isArray(entries) || !entries.length || entries.length > 300) return { error: 'Choose the students to mark.' };
+  const seen = new Set(); const out = [];
+  for (const e of entries) {
+    const studentId = String((e || {}).studentId || ''); if (!STUDENT_ID_RE.test(studentId)) return { error: 'One of the rows is not valid.' };
+    if (seen.has(studentId)) return { error: 'A student is listed twice.' }; seen.add(studentId);
+    const raw = (e || {}).marks === null || (e || {}).marks === undefined ? '' : String((e || {}).marks).trim();
+    if (raw === '') { out.push({ studentId, marks: null }); continue; }
+    if (!/^[0-9]{1,4}(\.[0-9]{1,2})?$/.test(raw)) return { error: 'Marks must be a number, for example 42 or 42.5.' };
+    const n = Number(raw); if (n < 0 || n > max) return { error: 'Marks must be from 0 to ' + max + '.' };
+    out.push({ studentId, marks: n });
+  }
+  return { entries: out };
+}
+const STUDENT_ID_RE = /^ST-[A-Z0-9]{6,20}$/;
+function checkNotice(v) {
+  const errors = {}; const c = {};
+  cleanText(v, 'title', 'Title', 3, 100, errors, c); cleanText(v, 'body', 'Message', 3, 1000, errors, c); c.pinned = v.pinned === true || v.pinned === 'on';
+  return { ok: Object.keys(errors).length === 0, errors, clean: c };
+}
+// The centre logo is a small picture stored with the centre record (no file storage needed). PNG, JPEG or WebP, at most 100 KB.
+function checkLogo(dataUrl) {
+  const m = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
+  if (!m) return { error: 'Choose a PNG, JPEG or WebP picture.' };
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length < 100 || buf.length > 100 * 1024) return { error: 'The logo must be under 100 KB. Try a smaller picture.' };
+  const head = buf.subarray(0, 12);
+  const okMagic = m[1] === 'png' ? head.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])) : m[1] === 'jpeg' ? head.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) : (head.subarray(0, 4).toString() === 'RIFF' && head.subarray(8, 12).toString() === 'WEBP');
+  if (!okMagic) return { error: 'That file is not a real ' + m[1].toUpperCase() + ' picture.' };
+  return { ok: true, mime: 'image/' + m[1], bytes: buf.length, dataUrl: String(dataUrl) };
+}
+// --- coaching rules end ---
 
 exports.reserveSchoolId = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const { uid } = await requirePlatformAdmin(request);
@@ -1867,7 +1951,7 @@ exports.resolveMyInstitutions = onCall({ memory: '256MiB', timeoutSeconds: 30 },
     const inst = await db.doc('institutions/' + d.tenantId).get();
     if (!inst.exists) continue;
     const i = inst.data();
-    items.push({ tenantId: d.tenantId, type: i.type, role: d.role, status: i.status, name: i.name, planId: i.planId, limits: i.limits, usage: i.usage, profile: i.profile || {} });
+    items.push(d.role === 'owner' ? { tenantId: d.tenantId, type: i.type, role: d.role, status: i.status, name: i.name, planId: i.planId, limits: i.limits, usage: i.usage, profile: i.profile || {} } : { tenantId: d.tenantId, type: i.type, role: d.role, status: i.status, name: i.name, teacherId: d.teacherId || '' });
   }
   return { institutions: items, emailVerified: request.auth.token.email_verified === true };
 });
@@ -1932,17 +2016,27 @@ exports.verifyInstitutionOtp = onCall({ memory: '256MiB', timeoutSeconds: 60 }, 
 // ---- Tuition and coaching shared engine: students, batches, fees, payments, receipts, attendance (Phase 2) ----
 // Every function checks the signed-in account, its active membership and the institution status first. The institution id is never
 // trusted on its own: the membership record must belong to the caller. Collections live under institutions/{id}; no client rules.
-async function requireInstitution(request, data) {
+async function requireMember(request, data, roles) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
   const tenantId = text((data || {}).tenantId, 40);
   if (!TENANT_ID.test(tenantId)) throw new HttpsError('invalid-argument', 'Unknown institution.');
   const uid = request.auth.uid;
   const [m, i] = await Promise.all([db.doc('memberships/' + uid + '_' + tenantId).get(), db.doc('institutions/' + tenantId).get()]);
   if (!m.exists || m.data().uid !== uid || m.data().status !== 'active' || !i.exists) throw new HttpsError('permission-denied', 'You do not have access to this account.');
-  if (m.data().role !== 'owner') throw new HttpsError('permission-denied', 'Only the owner can do this.');
+  if (!roles.includes(m.data().role)) throw new HttpsError('permission-denied', m.data().role === 'owner' ? 'You cannot do this.' : 'Only the owner can do this.');
+  if (m.data().role === 'teacher' && i.data().type !== 'coaching') throw new HttpsError('permission-denied', 'You do not have access to this account.');
   if (i.data().status !== 'active') throw new HttpsError('failed-precondition', 'This account is suspended. Your records are safe.');
-  return { uid, tenantId, inst: i.data(), ref: i.ref, col: (name) => db.collection('institutions/' + tenantId + '/' + name), doc: (path) => db.doc('institutions/' + tenantId + '/' + path) };
+  return { uid, tenantId, role: m.data().role, teacherId: m.data().teacherId || '', inst: i.data(), ref: i.ref, col: (name) => db.collection('institutions/' + tenantId + '/' + name), doc: (path) => db.doc('institutions/' + tenantId + '/' + path) };
 }
+const requireInstitution = (request, data) => requireMember(request, data, ['owner']);
+// Coaching only: the owner, or a teacher where the function allows it.
+async function requireCoaching(request, data, roles = ['owner']) {
+  const ctx = await requireMember(request, data, roles);
+  if (ctx.inst.type !== 'coaching') throw new HttpsError('failed-precondition', 'This feature is for coaching centres.');
+  return ctx;
+}
+// A teacher reaches a batch only if the owner assigned them to it. The owner reaches every batch.
+const canReachBatch = (ctx, batch) => ctx.role === 'owner' || (ctx.role === 'teacher' && Array.isArray(batch.teacherIds) && batch.teacherIds.includes(ctx.teacherId));
 const newRecordId = (prefix) => prefix + '-' + Date.now().toString(36).toUpperCase() + nodeCrypto.randomBytes(2).toString('hex').toUpperCase();
 const invalid = (checked) => new HttpsError('invalid-argument', Object.values(checked.errors)[0], { errors: checked.errors });
 const STUDENT_ID = /^ST-[A-Z0-9]{6,20}$/;
@@ -1969,7 +2063,8 @@ exports.tuitionStudentSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, as
   const c = checked.clean;
   const editing = text(data.studentId, 30);
   if (editing && !STUDENT_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown student.');
-  if (c.batchId) { const b = await ctx.doc('batches/' + c.batchId).get(); if (!BATCH_ID.test(c.batchId) || !b.exists || b.data().status !== 'active') throw new HttpsError('invalid-argument', 'Choose one of your active batches.'); }
+  if (c.batchId) { const b = await ctx.doc('batches/' + c.batchId).get(); if (!BATCH_ID.test(c.batchId) || !b.exists || b.data().status !== 'active') throw new HttpsError('invalid-argument', 'Choose one of your active batches.');
+    if (String((data.values || {}).monthlyFee ?? '').trim() === '' && b.data().feePaise > 0) c.monthlyFeePaise = b.data().feePaise; }
   const now = Timestamp.now(); const cycle = cycleOf(todayIST());
   const studentId = editing || newRecordId('ST');
   const sRef = ctx.doc('students/' + studentId);
@@ -2071,11 +2166,12 @@ exports.tuitionBatchArchive = onCall({ memory: '256MiB', timeoutSeconds: 60 }, a
   return { ok: true };
 });
 exports.tuitionBatchList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const ctx = await requireInstitution(request, request.data);
+  const ctx = await requireMember(request, request.data, ['owner', 'teacher']);
   const snap = await ctx.col('batches').limit(100).get();
   const students = await ctx.col('students').where('status', '==', 'active').limit(600).get();
   const counts = {}; students.docs.forEach((d) => { const b = d.data().batchId; if (b) counts[b] = (counts[b] || 0) + 1; });
-  return { items: snap.docs.map((d) => ({ id: d.id, ...d.data(), createdAt: undefined, updatedAt: undefined, createdBy: undefined, students: counts[d.id] || 0 })).sort((a, b) => (a.name < b.name ? -1 : 1)) };
+  const items = snap.docs.filter((d) => canReachBatch(ctx, d.data())).map((d) => { const x = { id: d.id, ...d.data(), createdAt: undefined, updatedAt: undefined, createdBy: undefined, students: counts[d.id] || 0 }; if (ctx.role !== 'owner') delete x.feePaise; return x; });
+  return { items: items.sort((a, b) => (a.name < b.name ? -1 : 1)) };
 });
 
 exports.tuitionFees = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
@@ -2179,14 +2275,16 @@ exports.tuitionReceipt = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async 
   const ctx = await requireInstitution(request, request.data);
   const no = text((request.data || {}).receiptNo, 20); if (!/^R-[0-9]{6,}$/.test(no)) throw new HttpsError('invalid-argument', 'Unknown receipt.');
   const r = await ctx.doc('receipts/' + no).get(); if (!r.exists) throw new HttpsError('not-found', 'Unknown receipt.');
-  const x = r.data(); return { receiptNo: no, ...x, createdAt: x.createdAt.toMillis() };
+  const x = r.data(); const logo = ctx.inst.type === 'coaching' ? await ctx.doc('config/logo').get() : null;
+  return { receiptNo: no, ...x, createdAt: x.createdAt.toMillis(), logo: logo && logo.exists ? logo.data().dataUrl : '' };
 });
 
 exports.tuitionAttendanceGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
   const data = request.data || {};
-  const ctx = await requireInstitution(request, data);
+  const ctx = await requireMember(request, data, ['owner', 'teacher']);
   const batchId = text(data.batchId, 30); const date = data.date;
   if (!BATCH_ID.test(batchId) || !validDate(date)) throw new HttpsError('invalid-argument', 'Choose a batch and a date.');
+  const theBatch = await ctx.doc('batches/' + batchId).get(); if (!theBatch.exists || !canReachBatch(ctx, theBatch.data())) throw new HttpsError('permission-denied', 'This batch is not assigned to you.');
   const students = await ctx.col('students').where('status', '==', 'active').limit(600).get();
   const mine = students.docs.filter((d) => d.data().batchId === batchId).sort((a, b) => (a.data().nameLower < b.data().nameLower ? -1 : 1));
   const marks = mine.length ? await db.getAll(...mine.map((d) => ctx.doc('attendance/' + date + '_' + batchId + '_' + d.id))) : [];
@@ -2194,13 +2292,14 @@ exports.tuitionAttendanceGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, 
 });
 exports.tuitionAttendanceMark = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const data = request.data || {};
-  const ctx = await requireInstitution(request, data);
+  const ctx = await requireMember(request, data, ['owner', 'teacher']);
   const batchId = text(data.batchId, 30);
   if (!BATCH_ID.test(batchId)) throw new HttpsError('invalid-argument', 'Choose a batch.');
   const checked = checkAttendanceEntries(data.entries, data.date);
   if (checked.error) throw new HttpsError('invalid-argument', checked.error);
   const batch = await ctx.doc('batches/' + batchId).get();
   if (!batch.exists || batch.data().status !== 'active') throw new HttpsError('not-found', 'Unknown batch.');
+  if (!canReachBatch(ctx, batch.data())) throw new HttpsError('permission-denied', 'This batch is not assigned to you.');
   const ids = checked.entries.map((e) => e.studentId);
   const studs = await db.getAll(...ids.map((id) => ctx.doc('students/' + id)));
   for (const s of studs) if (!s.exists || s.data().status !== 'active' || s.data().batchId !== batchId) throw new HttpsError('failed-precondition', 'Every student must be active and assigned to this batch.');
@@ -2216,10 +2315,11 @@ exports.tuitionAttendanceMark = onCall({ memory: '256MiB', timeoutSeconds: 60 },
 });
 exports.tuitionAttendanceHistory = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const data = request.data || {};
-  const ctx = await requireInstitution(request, data);
+  const ctx = await requireMember(request, data, ['owner', 'teacher']);
   if (!validDate(data.from) || !validDate(data.to) || data.to < data.from) throw new HttpsError('invalid-argument', 'Choose a start and an end date.');
   if ((new Date(data.to) - new Date(data.from)) / 86400000 > 92) throw new HttpsError('invalid-argument', 'Choose a range of at most 92 days.');
   const batchId = text(data.batchId, 30); const studentId = text(data.studentId, 30);
+  if (ctx.role === 'teacher') { if (!BATCH_ID.test(batchId)) throw new HttpsError('invalid-argument', 'Choose a batch.'); const tb = await ctx.doc('batches/' + batchId).get(); if (!tb.exists || !canReachBatch(ctx, tb.data())) throw new HttpsError('permission-denied', 'This batch is not assigned to you.'); }
   const snap = await ctx.col('attendance').where('date', '>=', data.from).where('date', '<=', data.to).limit(3000).get();
   const rows = snap.docs.map((d) => d.data()).filter((x) => (!batchId || x.batchId === batchId) && (!studentId || x.studentId === studentId));
   const ids = [...new Set(rows.map((x) => x.studentId))].slice(0, 400);
@@ -2240,8 +2340,15 @@ exports.tuitionDashboard = onCall({ memory: '256MiB', timeoutSeconds: 60 }, asyn
   const u = ctx.inst.usage || {};
   return { activeStudents: u.activeStudents || 0, batches: u.batches || 0, limits: ctx.inst.limits, cycle,
     expectedPaise: sum(month.docs, (x) => (x.kind === 'monthly' ? x.amountPaise : 0)), collectedPaise: sum(pays.docs, (x) => (x.status === 'posted' ? x.amountPaise : 0)),
-    pendingPaise: sum(open.docs, (x) => x.balancePaise), overdueCount: open.docs.filter((d) => chargeStatus(d.data(), today) === 'overdue').length };
+    pendingPaise: sum(open.docs, (x) => x.balancePaise), overdueCount: open.docs.filter((d) => chargeStatus(d.data(), today) === 'overdue').length, ...(await coachingDashboardExtra(ctx)) };
 });
+// Coaching dashboard extras: team size and a quick look at every active batch.
+async function coachingDashboardExtra(ctx) {
+  if (ctx.inst.type !== 'coaching') return {};
+  const [teachers, batches, students] = await Promise.all([ctx.col('teachers').where('status', '==', 'active').limit(100).get(), ctx.col('batches').where('status', '==', 'active').limit(100).get(), ctx.col('students').where('status', '==', 'active').limit(600).get()]);
+  const counts = {}; students.docs.forEach((d) => { const b = d.data().batchId; if (b) counts[b] = (counts[b] || 0) + 1; });
+  return { teachers: teachers.size, batchOverview: batches.docs.map((d) => ({ id: d.id, name: d.data().name, className: d.data().className, students: counts[d.id] || 0, teachers: (d.data().teacherIds || []).length })).sort((a, b) => (a.name < b.name ? -1 : 1)) };
+}
 exports.tuitionReport = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const data = request.data || {};
   const ctx = await requireInstitution(request, data);
@@ -2281,6 +2388,275 @@ exports.generateInstitutionCharges = onSchedule({ schedule: '30 1 * * *', timeZo
     last = page.docs[page.docs.length - 1];
   }
   logger.info('Fee charges ensured for ' + count + ' institutions, cycle ' + cycle);
+});
+
+// ---- Coaching centre extras (Phase 3): teachers, subjects, timetable, exams and marks, announcements, logo, batch reports ----
+// Same rules as the shared engine: every call checks the signed-in account and its active membership. A teacher reaches only the batches
+// the owner assigned to them, and never sees fees.
+const inviteIdFor = (email) => nodeCrypto.createHash('sha256').update('teacher-invite:' + String(email).toLowerCase()).digest('hex').slice(0, 40);
+const weekdayOf = (date) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(date + 'T00:00:00Z').getUTCDay()];
+const audit = (tx, ctx, action, extra) => tx.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action, ...(extra || {}), at: Timestamp.now() });
+
+exports.coachingTeacherSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const editing = text(data.teacherId, 30); if (editing && !TEACHER_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown teacher.');
+  const values = { ...(data.values || {}) };
+  if (editing) { const old = await ctx.doc('teachers/' + editing).get(); if (!old.exists) throw new HttpsError('not-found', 'Unknown teacher.'); values.email = old.data().email; }
+  const checked = checkTeacher(values); if (!checked.ok) throw invalid(checked);
+  if (checked.clean.email === String(ctx.inst.ownerEmail || '').toLowerCase()) throw new HttpsError('invalid-argument', 'That is your own email. Use the email address the teacher will log in with.', { errors: { email: 'That is your own email. Use the teacher\'s email.' } });
+  const now = Timestamp.now();
+  if (editing) { const { email, ...rest } = checked.clean; await ctx.doc('teachers/' + editing).update({ ...rest, nameLower: rest.name.toLowerCase(), updatedAt: now }); return { teacherId: editing }; }
+  const teacherId = newRecordId('TC'); const inviteRef = db.doc('teacherInvites/' + inviteIdFor(checked.clean.email));
+  await db.runTransaction(async (tx) => {
+    const [inst, inv] = await Promise.all([tx.get(ctx.ref), tx.get(inviteRef)]);
+    const limit = (inst.data().limits || {}).extraTeachers || 0;
+    if (((inst.data().usage || {}).extraTeachers || 0) + 1 > limit) throw new HttpsError('resource-exhausted', 'You have reached the free limit of ' + limit + ' teachers. Remove a teacher first.');
+    if (inv.exists && inv.data().status !== 'cancelled') throw new HttpsError('already-exists', 'That email is already used for a teacher account.', { errors: { email: 'That email is already used for a teacher account.' } });
+    tx.create(ctx.doc('teachers/' + teacherId), { ...checked.clean, nameLower: checked.clean.name.toLowerCase(), status: 'invited', createdAt: now, createdBy: ctx.uid });
+    if (inv.exists) tx.update(inviteRef, { tenantId: ctx.tenantId, teacherId, status: 'pending', updatedAt: now });
+    else tx.create(inviteRef, { tenantId: ctx.tenantId, teacherId, email: checked.clean.email, status: 'pending', createdAt: now });
+    tx.update(ctx.ref, { 'usage.extraTeachers': FieldValue.increment(1) });
+    audit(tx, ctx, 'teacher-invited', { teacherId });
+  });
+  return { teacherId };
+});
+
+// Switch a teacher off (login stops, records stay) or back on. An invite that was never used is cancelled.
+exports.coachingTeacherStatus = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const teacherId = text(data.teacherId, 30); if (!TEACHER_ID.test(teacherId)) throw new HttpsError('invalid-argument', 'Unknown teacher.');
+  const want = data.status === 'active' ? 'active' : 'inactive';
+  const ref = ctx.doc('teachers/' + teacherId);
+  await db.runTransaction(async (tx) => {
+    const [t, inst] = await Promise.all([tx.get(ref), tx.get(ctx.ref)]); if (!t.exists) throw new HttpsError('not-found', 'Unknown teacher.');
+    const d = t.data(); const wasOn = d.status !== 'inactive'; const now = Timestamp.now();
+    const inviteRef = db.doc('teacherInvites/' + inviteIdFor(d.email)); const memRef = d.uid ? db.doc('memberships/' + d.uid + '_' + ctx.tenantId) : null;
+    if (want === 'inactive' && wasOn) {
+      tx.update(ref, { status: 'inactive', updatedAt: now }); tx.update(ctx.ref, { 'usage.extraTeachers': FieldValue.increment(-1) });
+      if (memRef) tx.update(memRef, { status: 'inactive' }); else tx.update(inviteRef, { status: 'cancelled', updatedAt: now });
+    } else if (want === 'active' && !wasOn) {
+      const limit = (inst.data().limits || {}).extraTeachers || 0; if (((inst.data().usage || {}).extraTeachers || 0) + 1 > limit) throw new HttpsError('resource-exhausted', 'You have reached the free limit of ' + limit + ' teachers.');
+      if (!memRef) throw new HttpsError('failed-precondition', 'This invite was cancelled. Add the teacher again.');
+      tx.update(ref, { status: 'active', updatedAt: now }); tx.update(ctx.ref, { 'usage.extraTeachers': FieldValue.increment(1) }); tx.update(memRef, { status: 'active' });
+    }
+    audit(tx, ctx, 'teacher-' + want, { teacherId });
+  });
+  return { ok: true };
+});
+
+exports.coachingTeacherList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireCoaching(request, request.data);
+  const [t, b] = await Promise.all([ctx.col('teachers').limit(100).get(), ctx.col('batches').where('status', '==', 'active').limit(100).get()]);
+  const assigned = {}; b.docs.forEach((d) => (d.data().teacherIds || []).forEach((id) => { (assigned[id] = assigned[id] || []).push({ id: d.id, name: d.data().name }); }));
+  return { items: t.docs.map((d) => ({ id: d.id, name: d.data().name, email: d.data().email, mobile: d.data().mobile, subjects: d.data().subjects || [], notes: d.data().notes || '', status: d.data().status, batches: assigned[d.id] || [] })).sort((x, y) => (x.name < y.name ? -1 : 1)) };
+});
+
+// Called by a teacher after their email is verified. If the owner invited that email, the account becomes a teacher of that centre.
+exports.acceptTeacherInvite = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  if (request.auth.token.email_verified !== true) throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  const uid = request.auth.uid; const email = String(request.auth.token.email || '').toLowerCase(); if (!email) return { accepted: false };
+  const mine = await db.collection('memberships').where('uid', '==', uid).limit(1).get(); if (!mine.empty) return { accepted: false, reason: 'already-member' };
+  const inviteRef = db.doc('teacherInvites/' + inviteIdFor(email)); const inv = await inviteRef.get();
+  if (!inv.exists || inv.data().status !== 'pending' || inv.data().email !== email) return { accepted: false };
+  const { tenantId, teacherId } = inv.data();
+  const out = await db.runTransaction(async (tx) => {
+    const tRef = db.doc('institutions/' + tenantId + '/teachers/' + teacherId);
+    const [i, t, again] = await Promise.all([tx.get(db.doc('institutions/' + tenantId)), tx.get(tRef), tx.get(inviteRef)]);
+    if (!i.exists || i.data().type !== 'coaching' || !t.exists || t.data().status !== 'invited' || again.data().status !== 'pending') return { accepted: false };
+    const now = Timestamp.now();
+    tx.create(db.doc('memberships/' + uid + '_' + tenantId), { uid, tenantId, role: 'teacher', teacherId, status: 'active', createdAt: now });
+    tx.update(tRef, { status: 'active', uid, acceptedAt: now }); tx.update(inviteRef, { status: 'accepted', uid, updatedAt: now });
+    tx.create(db.doc('institutions/' + tenantId + '/audit/' + newEventId('A')), { actor: uid, action: 'teacher-joined', teacherId, at: now });
+    return { accepted: true, type: 'coaching' };
+  });
+  return out;
+});
+
+// Choose which teachers teach a batch (the owner only). Teachers then see that batch, its students and its attendance.
+exports.coachingAssign = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const batchId = text(data.batchId, 30); if (!BATCH_ID.test(batchId)) throw new HttpsError('invalid-argument', 'Unknown batch.');
+  const ids = [...new Set(Array.isArray(data.teacherIds) ? data.teacherIds.map((x) => String(x)) : [])]; if (ids.length > 10 || ids.some((x) => !TEACHER_ID.test(x))) throw new HttpsError('invalid-argument', 'Choose up to 10 teachers.');
+  const [b, ts] = await Promise.all([ctx.doc('batches/' + batchId).get(), ids.length ? db.getAll(...ids.map((id) => ctx.doc('teachers/' + id))) : []]);
+  if (!b.exists || b.data().status !== 'active') throw new HttpsError('not-found', 'Unknown batch.');
+  if (ts.some((t) => !t.exists || t.data().status === 'inactive')) throw new HttpsError('invalid-argument', 'One of the teachers is not available.');
+  await db.runTransaction(async (tx) => { tx.update(ctx.doc('batches/' + batchId), { teacherIds: ids, updatedAt: Timestamp.now() }); audit(tx, ctx, 'batch-teachers-set', { batchId, count: ids.length }); });
+  return { ok: true };
+});
+
+exports.coachingSubjectSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const checked = checkSubject(data.values || {}); if (!checked.ok) throw invalid(checked);
+  const editing = text(data.subjectId, 30); if (editing && !SUBJECT_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown subject.');
+  const all = await ctx.col('subjects').limit(80).get(); const lower = checked.clean.name.toLowerCase();
+  if (all.docs.some((d) => d.id !== editing && d.data().status === 'active' && d.data().nameLower === lower)) throw new HttpsError('already-exists', 'That subject already exists.', { errors: { name: 'That subject already exists.' } });
+  if (!editing && all.size >= 60) throw new HttpsError('resource-exhausted', 'You have reached 60 subjects. Archive one first.');
+  const subjectId = editing || newRecordId('SB'); const ref = ctx.doc('subjects/' + subjectId);
+  if (editing) { if (!(await ref.get()).exists) throw new HttpsError('not-found', 'Unknown subject.'); await ref.update({ ...checked.clean, nameLower: lower, updatedAt: Timestamp.now() }); }
+  else await ref.create({ ...checked.clean, nameLower: lower, status: 'active', createdAt: Timestamp.now(), createdBy: ctx.uid });
+  return { subjectId };
+});
+exports.coachingSubjectArchive = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data); const id = text(data.subjectId, 30); if (!SUBJECT_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown subject.');
+  const ref = ctx.doc('subjects/' + id); if (!(await ref.get()).exists) throw new HttpsError('not-found', 'Unknown subject.');
+  await ref.update({ status: data.restore === true ? 'active' : 'archived', updatedAt: Timestamp.now() }); return { ok: true };
+});
+exports.coachingSubjectList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher']);
+  const snap = await ctx.col('subjects').limit(80).get();
+  return { items: snap.docs.map((d) => ({ id: d.id, name: d.data().name, code: d.data().code || '', status: d.data().status })).sort((a, b) => (a.name < b.name ? -1 : 1)) };
+});
+
+// Timetable. A save that would put one teacher, or one room, in two places at once is not saved; the page shows the clash and the owner may save anyway.
+exports.coachingSessionSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const checked = checkSession(data.values || {}); if (!checked.ok) throw invalid(checked);
+  const editing = text(data.sessionId, 30); if (editing && !SESSION_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown class.');
+  const [b, t, all] = await Promise.all([ctx.doc('batches/' + checked.clean.batchId).get(), ctx.doc('teachers/' + checked.clean.teacherId).get(), ctx.col('sessions').limit(300).get()]);
+  if (!b.exists || b.data().status !== 'active') throw new HttpsError('invalid-argument', 'Choose one of your active batches.');
+  if (!t.exists || t.data().status === 'inactive') throw new HttpsError('invalid-argument', 'Choose one of your active teachers.');
+  const clashes = findSessionConflicts(checked.clean, all.docs.map((d) => ({ id: d.id, ...d.data() })), editing);
+  if (clashes.length && data.force !== true) return { saved: false, conflicts: clashes };
+  if (!editing && all.size >= 200) throw new HttpsError('resource-exhausted', 'You have reached 200 timetable entries.');
+  const sessionId = editing || newRecordId('SS'); const ref = ctx.doc('sessions/' + sessionId);
+  if (editing) { if (!(await ref.get()).exists) throw new HttpsError('not-found', 'Unknown class.'); await ref.update({ ...checked.clean, updatedAt: Timestamp.now() }); }
+  else await ref.create({ ...checked.clean, createdAt: Timestamp.now(), createdBy: ctx.uid });
+  return { saved: true, sessionId };
+});
+exports.coachingSessionDelete = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data); const id = text(data.sessionId, 30); if (!SESSION_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown class.');
+  await ctx.doc('sessions/' + id).delete(); return { ok: true };
+});
+exports.coachingSessionList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher']);
+  const [s, b, t] = await Promise.all([ctx.col('sessions').limit(300).get(), ctx.col('batches').limit(100).get(), ctx.col('teachers').limit(100).get()]);
+  const bn = {}; b.docs.forEach((d) => { bn[d.id] = d.data().name; }); const tn = {}; t.docs.forEach((d) => { tn[d.id] = d.data().name; });
+  let rows = s.docs.map((d) => ({ id: d.id, ...d.data(), createdAt: undefined, updatedAt: undefined, createdBy: undefined, batchName: bn[d.data().batchId] || '', teacherName: tn[d.data().teacherId] || '' }));
+  if (ctx.role === 'teacher') rows = rows.filter((x) => x.teacherId === ctx.teacherId);
+  const order = (x) => WEEKDAYS.indexOf(x.weekday) * 10000 + toMinutes(x.startTime);
+  return { items: rows.sort((a, b2) => order(a) - order(b2)) };
+});
+
+// Exams and marks. The owner reaches every batch; a teacher only the batches assigned to them.
+exports.coachingExamSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher']);
+  const checked = checkExam(data.values || {}); if (!checked.ok) throw invalid(checked);
+  const b = await ctx.doc('batches/' + checked.clean.batchId).get(); if (!b.exists || b.data().status !== 'active' || !canReachBatch(ctx, b.data())) throw new HttpsError('permission-denied', 'This batch is not assigned to you.');
+  const editing = text(data.examId, 30); if (editing && !EXAM_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown exam.');
+  const examId = editing || newRecordId('EX'); const ref = ctx.doc('exams/' + examId);
+  if (editing) {
+    const old = await ref.get(); if (!old.exists || old.data().batchId !== checked.clean.batchId) throw new HttpsError('not-found', 'Unknown exam.');
+    if (old.data().marksEntered && old.data().maxMarks !== checked.clean.maxMarks) throw new HttpsError('failed-precondition', 'Marks are already entered, so the maximum marks cannot change.', { errors: { maxMarks: 'Marks are already entered.' } });
+    await ref.update({ ...checked.clean, updatedAt: Timestamp.now() });
+  } else {
+    const n = await ctx.col('exams').limit(500).get(); if (n.size >= 400) throw new HttpsError('resource-exhausted', 'You have reached 400 exams.');
+    await ref.create({ ...checked.clean, marksEntered: false, createdAt: Timestamp.now(), createdBy: ctx.uid });
+  }
+  return { examId };
+});
+exports.coachingExamList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher']);
+  const [e, b] = await Promise.all([ctx.col('exams').limit(500).get(), ctx.col('batches').limit(100).get()]);
+  const reach = {}; b.docs.forEach((d) => { if (canReachBatch(ctx, d.data())) reach[d.id] = d.data().name; });
+  const batchId = text(data.batchId, 30);
+  const items = e.docs.map((d) => ({ id: d.id, ...d.data(), createdAt: undefined, updatedAt: undefined, createdBy: undefined, batchName: reach[d.data().batchId] })).filter((x) => x.batchName && (!batchId || x.batchId === batchId));
+  return { items: items.sort((a, c) => (a.date < c.date ? 1 : -1)).slice(0, 200) };
+});
+async function examForMarks(ctx, data) {
+  const examId = text(data.examId, 30); if (!EXAM_ID.test(examId)) throw new HttpsError('invalid-argument', 'Unknown exam.');
+  const ex = await ctx.doc('exams/' + examId).get(); if (!ex.exists) throw new HttpsError('not-found', 'Unknown exam.');
+  const b = await ctx.doc('batches/' + ex.data().batchId).get(); if (!b.exists || !canReachBatch(ctx, b.data())) throw new HttpsError('permission-denied', 'This batch is not assigned to you.');
+  return { examId, exam: ex.data(), ref: ex.ref };
+}
+exports.coachingMarksGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher']); const { examId, exam } = await examForMarks(ctx, data);
+  const [studs, marks] = await Promise.all([ctx.col('students').where('batchId', '==', exam.batchId).where('status', '==', 'active').limit(300).get(), ctx.col('marks').where('examId', '==', examId).limit(400).get()]);
+  const got = {}; marks.docs.forEach((d) => { got[d.data().studentId] = d.data().marks; });
+  const items = studs.docs.map((d) => ({ studentId: d.id, name: d.data().name, marks: got[d.id] === undefined ? null : got[d.id], entered: got[d.id] !== undefined })).sort((a, b) => (a.name < b.name ? -1 : 1));
+  const scored = items.filter((x) => x.marks !== null).map((x) => x.marks);
+  return { exam: { id: examId, name: exam.name, subject: exam.subject, date: exam.date, maxMarks: exam.maxMarks }, items,
+    summary: { students: items.length, absent: items.filter((x) => x.entered && x.marks === null).length, highest: scored.length ? Math.max(...scored) : null, average: scored.length ? Math.round((scored.reduce((t, x) => t + x, 0) / scored.length) * 100) / 100 : null } };
+});
+exports.coachingMarksSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher']); const { examId, exam, ref } = await examForMarks(ctx, data);
+  const checked = checkMarks(data.entries, exam.maxMarks); if (checked.error) throw new HttpsError('invalid-argument', checked.error);
+  const studs = await db.getAll(...checked.entries.map((e) => ctx.doc('students/' + e.studentId)));
+  if (studs.some((s) => !s.exists || s.data().batchId !== exam.batchId)) throw new HttpsError('invalid-argument', 'One of the students is not in this batch.');
+  const now = Timestamp.now(); const batch = db.batch();
+  for (const e of checked.entries) batch.set(ctx.doc('marks/' + examId + '_' + e.studentId), { examId, studentId: e.studentId, batchId: exam.batchId, marks: e.marks, by: ctx.uid, at: now });
+  batch.update(ref, { marksEntered: true, updatedAt: now }); batch.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action: 'marks-saved', examId, count: checked.entries.length, at: now });
+  await batch.commit(); return { saved: checked.entries.length };
+});
+
+exports.coachingNoticeSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const checked = checkNotice(data.values || {}); if (!checked.ok) throw invalid(checked);
+  const editing = text(data.noticeId, 30); if (editing && !NOTICE_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown announcement.');
+  const noticeId = editing || newRecordId('AN'); const ref = ctx.doc('notices/' + noticeId);
+  if (editing) { if (!(await ref.get()).exists) throw new HttpsError('not-found', 'Unknown announcement.'); await ref.update({ ...checked.clean, updatedAt: Timestamp.now() }); }
+  else { const n = await ctx.col('notices').limit(150).get(); if (n.size >= 100) throw new HttpsError('resource-exhausted', 'You have 100 announcements. Delete old ones first.'); await ref.create({ ...checked.clean, createdAt: Timestamp.now(), createdBy: ctx.uid }); }
+  return { noticeId };
+});
+exports.coachingNoticeDelete = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data); const id = text(data.noticeId, 30); if (!NOTICE_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown announcement.');
+  await ctx.doc('notices/' + id).delete(); return { ok: true };
+});
+exports.coachingNoticeList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher']);
+  const snap = await ctx.col('notices').limit(120).get();
+  const items = snap.docs.map((d) => ({ id: d.id, title: d.data().title, body: d.data().body, pinned: d.data().pinned === true, createdAt: d.data().createdAt.toMillis() }));
+  return { items: items.sort((a, b) => (a.pinned === b.pinned ? b.createdAt - a.createdAt : a.pinned ? -1 : 1)) };
+});
+
+// Fee structure by batch: what each batch bills, collects and still owes for a month (owner only).
+exports.coachingFeesByBatch = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const cycle = CYCLE.test(String(data.cycle || '')) ? data.cycle : cycleOf(todayIST());
+  await ensureCharges(ctx, cycle);
+  const [b, s, c] = await Promise.all([ctx.col('batches').where('status', '==', 'active').limit(100).get(), ctx.col('students').where('status', '==', 'active').limit(600).get(), ctx.col('feeCharges').where('cycle', '==', cycle).limit(900).get()]);
+  const batchOf = {}; s.docs.forEach((d) => { batchOf[d.id] = d.data().batchId || ''; });
+  const rows = {}; const row = (id, name, fee) => rows[id] || (rows[id] = { batchId: id, name, feePaise: fee, students: 0, billedPaise: 0, collectedPaise: 0, pendingPaise: 0 });
+  b.docs.forEach((d) => row(d.id, d.data().name, d.data().feePaise || 0)); const none = row('', 'No batch', 0);
+  s.docs.forEach((d) => { (rows[d.data().batchId] || none).students += 1; });
+  c.docs.forEach((d) => { const x = d.data(); const r = rows[batchOf[x.studentId]] || none; r.billedPaise += x.amountPaise; r.pendingPaise += x.balancePaise; r.collectedPaise += x.amountPaise - x.balancePaise; });
+  return { cycle, items: Object.values(rows).filter((r) => r.batchId || r.students || r.billedPaise).sort((x, y) => (x.name < y.name ? -1 : 1)) };
+});
+
+// Attendance percentage per batch for a date range (owner only).
+exports.coachingAttendanceReport = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  if (!validDate(data.from) || !validDate(data.to) || data.to < data.from) throw new HttpsError('invalid-argument', 'Choose a start and an end date.');
+  if ((new Date(data.to) - new Date(data.from)) / 86400000 > 92) throw new HttpsError('invalid-argument', 'Choose a range of at most 92 days.');
+  const [b, a] = await Promise.all([ctx.col('batches').limit(100).get(), ctx.col('attendance').where('date', '>=', data.from).where('date', '<=', data.to).limit(5000).get()]);
+  const rows = {}; b.docs.forEach((d) => { rows[d.id] = { batchId: d.id, name: d.data().name, present: 0, absent: 0, late: 0, excused: 0, days: new Set() }; });
+  a.docs.forEach((d) => { const x = d.data(); const r = rows[x.batchId]; if (r && r[x.status] !== undefined) { r[x.status] += 1; r.days.add(x.date); } });
+  return { items: Object.values(rows).map((r) => { const total = r.present + r.absent + r.late + r.excused; return { batchId: r.batchId, name: r.name, present: r.present, absent: r.absent, late: r.late, excused: r.excused, days: r.days.size, total, percent: total ? Math.round(((r.present + r.late) / total) * 1000) / 10 : null }; }).filter((r) => r.total).sort((x, y) => (x.name < y.name ? -1 : 1)), truncated: a.size >= 5000 };
+});
+
+// What a teacher sees first: their batches, today's classes and the latest announcements. No fees.
+exports.coachingTeacherHome = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireCoaching(request, request.data, ['teacher']);
+  const [b, st, s, n] = await Promise.all([ctx.col('batches').where('status', '==', 'active').limit(100).get(), ctx.col('students').where('status', '==', 'active').limit(600).get(), ctx.col('sessions').where('teacherId', '==', ctx.teacherId).limit(100).get(), ctx.col('notices').limit(120).get()]);
+  const counts = {}; st.docs.forEach((d) => { if (d.data().batchId) counts[d.data().batchId] = (counts[d.data().batchId] || 0) + 1; });
+  const mine = b.docs.filter((d) => canReachBatch(ctx, d.data())); const names = {}; b.docs.forEach((d) => { names[d.id] = d.data().name; });
+  const today = todayIST(); const wd = weekdayOf(today);
+  return { today, batches: mine.map((d) => ({ id: d.id, name: d.data().name, className: d.data().className, students: counts[d.id] || 0 })),
+    classesToday: s.docs.map((d) => ({ ...d.data(), id: d.id, batchName: names[d.data().batchId] || '' })).filter((x) => x.weekday === wd).sort((a, c) => toMinutes(a.startTime) - toMinutes(c.startTime)).map((x) => ({ id: x.id, batchName: x.batchName, startTime: x.startTime, endTime: x.endTime, room: x.room, subject: x.subject })),
+    notices: n.docs.map((d) => ({ id: d.id, title: d.data().title, body: d.data().body, pinned: d.data().pinned === true, createdAt: d.data().createdAt.toMillis() })).sort((a, c) => (a.pinned === c.pinned ? c.createdAt - a.createdAt : a.pinned ? -1 : 1)).slice(0, 5) };
+});
+
+// Centre logo for receipts: a small picture kept with the centre record.
+exports.institutionLogoSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  if (data.remove === true) { await ctx.doc('config/logo').delete(); await ctx.ref.update({ 'usage.storageBytes': 0 }); return { ok: true, removed: true }; }
+  const checked = checkLogo(data.dataUrl); if (checked.error) throw new HttpsError('invalid-argument', checked.error);
+  await ctx.doc('config/logo').set({ dataUrl: checked.dataUrl, mime: checked.mime, bytes: checked.bytes, updatedAt: Timestamp.now(), by: ctx.uid });
+  await ctx.ref.update({ 'usage.storageBytes': checked.bytes }); return { ok: true, bytes: checked.bytes };
+});
+exports.institutionLogoGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher']); const l = await ctx.doc('config/logo').get();
+  return { dataUrl: l.exists ? l.data().dataUrl : '' };
 });
 
 exports.getOnboardingFlag = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => { await requirePlatformAdmin(request); return { enabled: await onboardingEnabled() }; });
