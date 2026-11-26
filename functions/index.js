@@ -1864,22 +1864,59 @@ exports.resolveMyInstitutions = onCall({ memory: '256MiB', timeoutSeconds: 30 },
 
 // Sends the branded verification email through Resend, at most once every ten minutes per account. When Resend is not set up it says so,
 // and the page falls back to the built-in Firebase email.
+// --- email code rules begin ---
+const OTP_MINUTES = 10; const OTP_MAX_WRONG = 5; const OTP_RESEND_SECONDS = 60; const OTP_MAX_PER_HOUR = 5;
+const newOtpCode = () => String(nodeCrypto.randomInt(0, 1000000)).padStart(6, '0');
+const hashOtp = (uid, code) => nodeCrypto.createHmac('sha256', 'otp:' + String(uid)).update(String(code)).digest('hex');
+const sameHash = (a, b) => { const x = Buffer.from(String(a), 'hex'); const y = Buffer.from(String(b), 'hex'); return x.length === y.length && x.length > 0 && nodeCrypto.timingSafeEqual(x, y); };
+// Decides whether a new code may be sent now. "sends" holds the times (ms) of earlier codes.
+function otpSendDecision(sends, nowMs) {
+  const recent = (sends || []).filter((t) => nowMs - t < 3600000);
+  const last = recent.length ? Math.max(...recent) : 0;
+  if (last && nowMs - last < OTP_RESEND_SECONDS * 1000) return { ok: false, status: 'wait', seconds: Math.ceil((OTP_RESEND_SECONDS * 1000 - (nowMs - last)) / 1000), sends: recent };
+  if (recent.length >= OTP_MAX_PER_HOUR) return { ok: false, status: 'limit', sends: recent };
+  return { ok: true, sends: [...recent, nowMs] };
+}
+// --- email code rules end ---
+
+// Sends a 6-digit code to the signed-in account's own email address. The code is stored only as a hash, lasts 10 minutes and allows 5 wrong tries.
 exports.sendInstitutionVerification = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
   const email = String(request.auth.token.email || '').toLowerCase();
   if (request.auth.token.email_verified === true) return { status: 'verified' };
   if (!email) throw new HttpsError('failed-precondition', 'Your account has no email address.');
-  const ref = db.doc('emailOutbox/EM-verify-' + request.auth.uid + '-' + Math.floor(Date.now() / 600000));
-  try { await ref.create({ to: email, template: 'institution-verify', status: 'queued', attempts: 0, createdAt: Timestamp.now() }); }
-  catch (error) { return { status: 'recently-sent' }; }
-  let result;
-  try {
-    const link = await getAuth().generateEmailVerificationLink(email, { url: 'https://azizschoolmanagementsystem.com/register' });
-    result = await sendEmail({ to: email, subject: 'Confirm your email for AZIZ', text: 'Welcome to AZIZ.\n\nConfirm your email address to finish creating your free account:\n' + link + '\n\nIf you did not ask for this, you can ignore this email.' });
-  } catch (error) { result = { ok: false, error: String(error?.message || error).slice(0, 200) }; }
-  const status = result.ok ? 'sent' : (result.hint ? 'not-configured' : 'failed');
-  await ref.update({ status, attempts: 1, ...(result.ok ? { sentAt: Timestamp.now() } : { lastError: String(result.hint || result.error || '').slice(0, 300) }) });
-  return { status };
+  const uid = request.auth.uid; const ref = db.doc('emailCodes/' + uid); const code = newOtpCode(); const now = Date.now();
+  const decision = await db.runTransaction(async (tx) => {
+    const old = await tx.get(ref); const d = otpSendDecision(old.exists ? old.data().sends : [], now);
+    if (!d.ok) return d;
+    tx.set(ref, { hash: hashOtp(uid, code), email, expiresAt: Timestamp.fromMillis(now + OTP_MINUTES * 60000), wrong: 0, sends: d.sends, updatedAt: Timestamp.now() });
+    return d;
+  });
+  if (!decision.ok) return { status: decision.status, seconds: decision.seconds || 0 };
+  const result = await sendEmail({ to: email, subject: code + ' is your AZIZ verification code',
+    text: 'Your AZIZ verification code is ' + code + '\n\nIt works for ' + OTP_MINUTES + ' minutes. Enter it on the registration page to finish creating your free account.\n\nIf you did not ask for this, ignore this email. Nobody at AZIZ will ever ask you for this code.' });
+  if (!result.ok) { logger.error('Verification email failed: ' + (result.hint || result.error)); await ref.delete().catch(() => {}); return { status: 'failed' }; }
+  return { status: 'sent', seconds: OTP_RESEND_SECONDS };
+});
+
+exports.verifyInstitutionOtp = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const uid = request.auth.uid; const code = String((request.data || {}).code || '').trim();
+  if (!/^[0-9]{6}$/.test(code)) throw new HttpsError('invalid-argument', 'Enter the 6-digit code from the email.');
+  const ref = db.doc('emailCodes/' + uid);
+  const outcome = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists || snap.data().expiresAt.toMillis() < Date.now()) return 'expired';
+    const d = snap.data();
+    if (d.wrong >= OTP_MAX_WRONG) return 'locked';
+    if (!sameHash(d.hash, hashOtp(uid, code))) { tx.update(ref, { wrong: d.wrong + 1 }); return d.wrong + 1 >= OTP_MAX_WRONG ? 'locked' : 'wrong'; }
+    tx.delete(ref); return 'ok';
+  });
+  if (outcome === 'expired') throw new HttpsError('failed-precondition', 'That code has expired. Ask for a new one.');
+  if (outcome === 'locked') throw new HttpsError('resource-exhausted', 'Too many wrong codes. Ask for a new code.');
+  if (outcome === 'wrong') throw new HttpsError('invalid-argument', 'That code is not right. Check the email and try again.');
+  await getAuth().updateUser(uid, { emailVerified: true });
+  return { verified: true };
 });
 
 // ---- Tuition and coaching shared engine: students, batches, fees, payments, receipts, attendance (Phase 2) ----

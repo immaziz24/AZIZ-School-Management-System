@@ -2,7 +2,7 @@
 // the plan and role, and writes the records. Passwords go to Firebase Authentication only: they are never saved in the browser
 // storage or in the database.
 import { app } from './firebase-client.mjs';
-import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, updateProfile, signOut }
+import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, signOut }
   from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
@@ -205,34 +205,43 @@ async function createAccount() {
 }
 
 async function sendVerification(user) {
-  S.note = '';
+  S.note = ''; S.codeError = '';
   try {
     const r = await call('sendInstitutionVerification');
     if (r.status === 'verified') { await provision(user); return; }
-    if (r.status === 'sent' || r.status === 'recently-sent') { S.note = 'We sent a confirmation link to ' + user.email + '. Check Spam too.'; }
-    else { await sendEmailVerification(user, { url: location.origin + '/register' }); S.note = 'We sent a confirmation link to ' + user.email + '. Check Spam too.'; }
-  } catch (error) {
-    try { await sendEmailVerification(user, { url: location.origin + '/register' }); S.note = 'We sent a confirmation link to ' + user.email + '. Check Spam too.'; }
-    catch (second) { S.note = friendly(second); }
-  }
-  S.cool = 60; draw();
-  const timer = setInterval(() => { S.cool -= 1; if (S.cool <= 0) { clearInterval(timer); S.cool = 0; } if (S.view === 'verify') draw(); else clearInterval(timer); }, 1000);
+    if (r.status === 'sent') S.note = 'We emailed a 6-digit code to ' + user.email + '. It works for 10 minutes. Check Spam too.';
+    else if (r.status === 'wait') S.note = 'A code was just sent to ' + user.email + '. Please check your inbox and Spam. You can ask again in ' + (r.seconds || 60) + ' seconds.';
+    else if (r.status === 'limit') S.note = 'Too many codes were requested. Please wait an hour, or write to support@azizschoolmanagementsystem.com.';
+    else S.note = 'We could not send the email just now. Press "Send a new code" in a minute. If it keeps failing, write to support@azizschoolmanagementsystem.com.';
+    S.cool = r.status === 'sent' ? 60 : Math.min(60, r.seconds || 30);
+  } catch (error) { S.note = friendly(error); S.cool = 20; }
+  draw();
+  const timer = setInterval(() => { S.cool -= 1; if (S.cool <= 0) { clearInterval(timer); S.cool = 0; } const b = document.querySelector('#resend-code'); if (S.view !== 'verify' || !b) { clearInterval(timer); return; } b.disabled = S.cool > 0; b.textContent = S.cool > 0 ? 'Send a new code in ' + S.cool + 's' : 'Send a new code'; }, 1000);
+}
+
+async function checkCode(user, code) {
+  S.busy = true; S.codeError = ''; draw();
+  try {
+    await call('verifyInstitutionOtp', { code });
+    await user.reload(); await user.getIdToken(true);
+    S.busy = false; await provision(auth.currentUser); return;
+  } catch (error) { S.codeError = friendly(error); }
+  S.busy = false; draw();
 }
 
 function drawVerify() {
   const user = auth.currentUser;
+  const code = h('input', { name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6, pattern: '[0-9]{6}', placeholder: '6-digit code', 'aria-label': 'Verification code', style: 'font-size:1.4rem;letter-spacing:.35em;text-align:center;max-width:14rem' });
   root.append(h('div', { class: 'card formcard' },
-    h('h3', {}, 'Confirm your email'),
-    h('p', {}, 'Open the link we emailed to ', h('b', {}, user?.email || 'your email address'), ', then come back and press the button below.'),
+    h('h3', {}, 'Enter the code from your email'),
+    h('p', {}, 'We sent a 6-digit code to ', h('b', {}, user?.email || 'your email address'), '. Type it here to confirm your email.'),
     S.note ? h('p', { class: 'notice' }, S.note) : null,
-    h('div', { class: 'actions' },
-      h('button', { type: 'button', class: 'btn gold-bg', disabled: S.busy, onclick: async () => {
-        S.busy = true; S.note = ''; draw();
-        try { await user.reload(); await user.getIdToken(true); if (auth.currentUser.emailVerified) { await provision(auth.currentUser); S.busy = false; return; } S.note = 'Not confirmed yet. Open the link in the email first.'; }
-        catch (error) { S.note = friendly(error); }
-        S.busy = false; draw(); } }, 'I have confirmed my email'),
-      h('button', { type: 'button', class: 'btn', disabled: S.cool > 0, onclick: () => user && sendVerification(user) }, S.cool > 0 ? 'Send again in ' + S.cool + 's' : 'Send the email again'),
-      h('button', { type: 'button', class: 'btn', onclick: async () => { await signOut(auth); clearValues(); S.view = 'choose'; S.values = {}; draw(); } }, 'Use a different email'))));
+    h('form', { onsubmit: (e) => { e.preventDefault(); const v = code.value.trim(); if (!/^[0-9]{6}$/.test(v)) { S.codeError = 'Enter the 6-digit code.'; draw(); return; } checkCode(user, v); } },
+      code, S.codeError ? h('p', { class: 'err', role: 'alert' }, S.codeError) : null,
+      h('div', { class: 'actions' },
+        h('button', { type: 'submit', class: 'btn gold-bg', disabled: S.busy }, S.busy ? 'Checking.' : 'Verify and continue'),
+        h('button', { type: 'button', id: 'resend-code', class: 'btn', disabled: S.cool > 0 || S.busy, onclick: () => user && sendVerification(user) }, S.cool > 0 ? 'Send a new code in ' + S.cool + 's' : 'Send a new code'),
+        h('button', { type: 'button', class: 'btn', onclick: async () => { await signOut(auth); clearValues(); S.view = 'choose'; S.values = {}; draw(); } }, 'Use a different email')))));
 }
 
 async function provision(user) {
@@ -266,7 +275,7 @@ onAuthStateChanged(auth, async (user) => {
     await user.reload();
     const saved = loadValues(user.uid);
     if (user.emailVerified && saved) { await provision(user); return; }
-    if (!user.emailVerified && saved) { S.type = saved.type; S.values = saved.values; S.view = 'verify'; draw(); return; }
+    if (!user.emailVerified && saved) { S.type = saved.type; S.values = saved.values; S.view = 'verify'; draw(); sendVerification(user); return; }
     const mine = await call('resolveMyInstitutions');
     if (mine.institutions?.length) { location.replace('/' + mine.institutions[0].type); return; }
   } catch { /* stay on the first screen */ }

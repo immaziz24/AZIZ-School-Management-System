@@ -97,3 +97,23 @@ test('screens, routing and cache are wired', () => {
   const inst = read('public/institution.mjs'); assert.match(inst, /mountTuition/); assert.match(inst, /tuition-ui\.mjs/);
   assert.match(read('.htaccess'), /tuition-ui\\\.mjs/); assert.match(read('public/institution.html'), /institution\.mjs\?v=tc-2/); assert.match(read('public/institution.html'), /@media print/);
 });
+
+const otpBlock = src.match(/\/\/ --- email code rules begin ---[\s\S]*?\/\/ --- email code rules end ---/);
+test('email codes: six digits, hashed, limited resends, constant-time compare', async () => {
+  assert.ok(otpBlock);
+  const nodeCrypto = (await import('node:crypto')).default;
+  const o = new Function('nodeCrypto', otpBlock[0] + '\n; return { newOtpCode, hashOtp, sameHash, otpSendDecision };')(nodeCrypto);
+  for (let i = 0; i < 50; i++) assert.match(o.newOtpCode(), /^[0-9]{6}$/);
+  const h = o.hashOtp('uid1', '123456'); assert.notEqual(h, o.hashOtp('uid2', '123456')); assert.equal(o.sameHash(h, o.hashOtp('uid1', '123456')), true); assert.equal(o.sameHash(h, o.hashOtp('uid1', '123457')), false); assert.equal(o.sameHash('', ''), false);
+  const t = 1e12; assert.equal(o.otpSendDecision([], t).ok, true);
+  assert.equal(o.otpSendDecision([t - 30000], t).status, 'wait');
+  assert.equal(o.otpSendDecision([t - 70000], t).ok, true);
+  assert.equal(o.otpSendDecision([t - 3000000, t - 2500000, t - 2000000, t - 1500000, t - 1000000], t).status, 'limit');
+  assert.equal(o.otpSendDecision([t - 4000000], t).ok, true);
+});
+
+test('registration confirms the email with a code, not a link, and verifies on the server', () => {
+  const reg = read('public/register.mjs'); assert.doesNotMatch(reg, /sendEmailVerification/); assert.match(reg, /verifyInstitutionOtp/); assert.match(reg, /6-digit/);
+  const v = bodyOf('verifyInstitutionOtp'); assert.match(v, /runTransaction/); assert.match(v, /resource-exhausted/); assert.match(v, /emailVerified: true/); assert.match(v, /expired/);
+  assert.doesNotMatch(bodyOf('sendInstitutionVerification'), /generateEmailVerificationLink/);
+});
