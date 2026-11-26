@@ -104,8 +104,8 @@ export function mountTuition({ section, inst, call, h, body, go }) {
   const subjectPicker = (current, required) => {
     const mine = profile.subjects || []; const options = [...new Set([...mine, ...ALL_SUBJECTS, ...current])];
     const boxes = options.map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'subjects[]', value: o, checked: current.includes(o) ? true : undefined }), o));
-    const wrap = h('fieldset', { 'data-field': 'subjects' }, h('legend', {}, required ? 'Subjects (tick one or more)' : 'Subjects (optional, tick any)'),
-      h('div', { class: 'actions' }, GROUPS.map(([label, list]) => h('button', { type: 'button', onclick: () => wrap.querySelectorAll('input[type=checkbox]').forEach((c) => { c.checked = list === null || list.includes(c.value); }) }, label)),
+    const wrap = h('fieldset', { 'data-field': 'subjects' }, h('legend', {}, (required ? 'Subjects (tick one or more)' : 'Subjects (optional, tick any)') + (mine.length ? ' · "All my subjects" ticks the subjects saved in your Settings' : '')),
+      h('div', { class: 'actions' }, GROUPS.map(([label, list]) => h('button', { type: 'button', onclick: () => wrap.querySelectorAll('input[type=checkbox]').forEach((c) => { c.checked = list === null ? (mine.length ? mine.includes(c.value) : true) : list.includes(c.value); }) }, label === 'All subjects' && mine.length ? 'All my subjects' : label)),
         h('button', { type: 'button', onclick: () => wrap.querySelectorAll('input[type=checkbox]').forEach((c) => { c.checked = false; }) }, 'Clear')),
       h('div', { class: 'checks' }, boxes), h('input', { type: 'text', name: 'subjectsOther', maxlength: 120, placeholder: 'Other subjects, separated by commas', 'aria-label': 'Other subjects' }), h('span', { class: 'ferr', 'data-err': 'subjects' }));
     return wrap;
