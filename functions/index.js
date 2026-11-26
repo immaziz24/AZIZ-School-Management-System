@@ -1564,10 +1564,15 @@ function cleanText(v, key, label, min, max, errors, out) {
   if (t.length < min) errors[key] = label + (min ? ' is required.' : ' is invalid.'); else if (t.length > max) errors[key] = label + ' is too long.';
   out[key] = t.slice(0, max);
 }
+// A student or batch may have many subjects. Accepts a list, or the older single text, and returns up to 25 clean names.
+function subjectList(v) {
+  const raw = Array.isArray(v.subjects) ? v.subjects : String(v.subject || '').split(',');
+  return raw.map((x) => String(x ?? '').trim().replace(/\s+/g, ' ').slice(0, 40)).filter((x, i, a) => x && a.indexOf(x) === i).slice(0, 25);
+}
 function checkStudent(v, today = todayIST()) {
   const errors = {}; const c = {};
   cleanText(v, 'name', 'Student name', 2, 80, errors, c); cleanText(v, 'className', 'Class', 1, 40, errors, c); cleanText(v, 'schoolName', 'School name', 0, 100, errors, c);
-  cleanText(v, 'guardianName', 'Guardian name', 2, 80, errors, c); cleanText(v, 'subject', 'Subject', 0, 80, errors, c); cleanText(v, 'address', 'Address', 0, 200, errors, c); cleanText(v, 'notes', 'Notes', 0, 300, errors, c);
+  cleanText(v, 'guardianName', 'Guardian name', 2, 80, errors, c); c.subjects = subjectList(v); c.subject = c.subjects.join(', ').slice(0, 300); cleanText(v, 'address', 'Address', 0, 200, errors, c); cleanText(v, 'notes', 'Notes', 0, 300, errors, c);
   for (const [key, label, req] of [['guardianMobile', 'Guardian mobile', true], ['studentMobile', 'Student mobile', false]]) {
     const t = typeof v[key] === 'string' ? v[key].trim() : '';
     if ((req || t) && !/^\+?[0-9][0-9 -]{6,17}$/.test(t)) errors[key] = label + ' must be a valid number.'; c[key] = t.slice(0, 20);
@@ -1586,7 +1591,8 @@ function checkStudent(v, today = todayIST()) {
 }
 function checkBatch(v) {
   const errors = {}; const c = {};
-  cleanText(v, 'name', 'Batch name', 2, 60, errors, c); cleanText(v, 'className', 'Class', 1, 40, errors, c); cleanText(v, 'subject', 'Subject', 1, 40, errors, c);
+  cleanText(v, 'name', 'Batch name', 2, 60, errors, c); cleanText(v, 'className', 'Class', 1, 40, errors, c);
+  c.subjects = subjectList(v); c.subject = c.subjects.join(', ').slice(0, 300); if (!c.subjects.length) errors.subjects = 'Choose at least one subject.';
   const days = (Array.isArray(v.days) ? v.days : []).filter((d, i, a) => WEEKDAYS.includes(d) && a.indexOf(d) === i);
   if (!days.length) errors.days = 'Choose at least one day.'; c.days = days;
   c.startTime = String(v.startTime || ''); c.endTime = String(v.endTime || '');
@@ -1939,7 +1945,7 @@ const STUDENT_ID = /^ST-[A-Z0-9]{6,20}$/;
 const BATCH_ID = /^BT-[A-Z0-9]{6,20}$/;
 const CYCLE = /^[0-9]{4}-(0[1-9]|1[0-2])$/;
 const studentFields = (c, now) => ({ name: c.name, nameLower: c.name.toLowerCase(), className: c.className, schoolName: c.schoolName, guardianName: c.guardianName, guardianMobile: c.guardianMobile,
-  studentMobile: c.studentMobile, address: c.address, subject: c.subject, batchId: c.batchId, joiningDate: c.joiningDate, joiningTime: c.joiningTime, joiningCycle: cycleOf(c.joiningDate),
+  studentMobile: c.studentMobile, address: c.address, subject: c.subject, subjects: c.subjects, batchId: c.batchId, joiningDate: c.joiningDate, joiningTime: c.joiningTime, joiningCycle: cycleOf(c.joiningDate),
   monthlyFeePaise: c.monthlyFeePaise, dueDay: c.dueDay, admissionFeePaise: c.admissionFeePaise, openingBalancePaise: c.openingBalancePaise, notes: c.notes, updatedAt: now });
 
 async function ensureCharges(ctx, cycle) {
@@ -2016,7 +2022,7 @@ exports.tuitionStudentList = onCall({ memory: '256MiB', timeoutSeconds: 60 }, as
   rows.sort((a, b) => (a.nameLower < b.nameLower ? -1 : 1));
   const size = 25; const total = rows.length; const pages = Math.max(1, Math.ceil(total / size)); const page = Math.min(Math.max(1, Math.floor(Number(data.page)) || 1), pages);
   rows = rows.slice((page - 1) * size, page * size).map((s) => ({ id: s.id, name: s.name, className: s.className, schoolName: s.schoolName, guardianName: s.guardianName, guardianMobile: s.guardianMobile, studentMobile: s.studentMobile,
-    address: s.address, subject: s.subject, batchId: s.batchId, joiningDate: s.joiningDate, joiningTime: s.joiningTime, monthlyFeePaise: s.monthlyFeePaise, dueDay: s.dueDay, admissionFeePaise: s.admissionFeePaise,
+    address: s.address, subject: s.subject, subjects: s.subjects || [], batchId: s.batchId, joiningDate: s.joiningDate, joiningTime: s.joiningTime, monthlyFeePaise: s.monthlyFeePaise, dueDay: s.dueDay, admissionFeePaise: s.admissionFeePaise,
     openingBalancePaise: s.openingBalancePaise, status: s.status, notes: s.notes }));
   return { items: rows, total, page, pages };
 });

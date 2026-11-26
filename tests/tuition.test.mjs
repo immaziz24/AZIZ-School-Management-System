@@ -7,7 +7,7 @@ const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 const src = read('functions/index.js');
 const block = src.match(/\/\/ --- tuition rules begin[\s\S]*?\/\/ --- tuition rules end ---/);
 assert.ok(block, 'tuition rules block is missing');
-const lib = new Function(block[0] + '\n; return { rupeesToPaise, validDate, validTime, todayIST, cycleOf, daysInMonth, dueDateFor, chargeIdFor, chargeStatus, allocatePayment, receiptNoFor, checkStudent, checkBatch, checkPayment, checkAttendanceEntries };')();
+const lib = new Function(block[0] + '\n; return { subjectList, rupeesToPaise, validDate, validTime, todayIST, cycleOf, daysInMonth, dueDateFor, chargeIdFor, chargeStatus, allocatePayment, receiptNoFor, checkStudent, checkBatch, checkPayment, checkAttendanceEntries };')();
 
 const student = { name: 'Anika Sen', className: 'Class 9', guardianName: 'Ravi Sen', guardianMobile: '+91 98300 12345', joiningDate: '2026-11-03', monthlyFee: '500', dueDay: 5 };
 const charge = (id, due, amount, paid = 0) => ({ id, dueDate: due, amountPaise: amount, paidPaise: paid });
@@ -120,6 +120,16 @@ test('registration confirms the email with a code, not a link, and verifies on t
 
 test('students and batches choose class and subject from the teacher\'s own lists, set in Settings from the full lists', () => {
   const ui = read('public/tuition-ui.mjs');
-  assert.doesNotMatch(ui, /list: 'classes'|list: 'subjects'/); assert.match(ui, /choiceSelect\('className'/); assert.match(ui, /choiceSelect\('subject'/);
+  assert.doesNotMatch(ui, /list: 'classes'|list: 'subjects'/); assert.match(ui, /choiceSelect\('className'/); assert.match(ui, /subjectPicker\(/); assert.match(ui, /Science group/); assert.match(ui, /Arts group/); assert.match(ui, /Commerce group/); assert.match(ui, /All subjects/);
   assert.match(ui, /const ALL_CLASSES/); assert.match(ui, /const ALL_SUBJECTS/); assert.match(ui, /picker\('classes'/); assert.match(ui, /picker\('subjects'/);
+});
+
+test('a student or batch can have many subjects; a batch needs at least one', () => {
+  const l = lib.subjectList({ subjects: ['Maths', ' English ', 'Maths', '', 'Art'] }); assert.deepEqual(l, ['Maths', 'English', 'Art']);
+  assert.deepEqual(lib.subjectList({ subject: 'Maths, Art' }), ['Maths', 'Art']);
+  assert.equal(lib.subjectList({ subjects: Array.from({ length: 40 }, (_, i) => 'S' + i) }).length, 25);
+  const st = lib.checkStudent({ ...student, subjects: ['Mathematics', 'Science', 'Art'] }, '2026-11-26'); assert.equal(st.ok, true); assert.deepEqual(st.clean.subjects, ['Mathematics', 'Science', 'Art']); assert.equal(st.clean.subject, 'Mathematics, Science, Art');
+  assert.equal(lib.checkStudent(student, '2026-11-26').ok, true);
+  const b = { name: 'Class 5 All', className: 'Class 5', days: ['Mon'], startTime: '16:00', endTime: '17:00' };
+  assert.ok(lib.checkBatch(b).errors.subjects); assert.equal(lib.checkBatch({ ...b, subjects: ['Maths', 'English'] }).ok, true);
 });
