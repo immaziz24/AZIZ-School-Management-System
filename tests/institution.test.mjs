@@ -141,5 +141,5 @@ test('the Settings workspace and the student form are wired to the academic modu
   const ui = read('public/tuition-ui.mjs'); const ac = read('public/academic-ui.mjs'); const portal = read('public/institution.mjs');
   assert.match(ui, /academic-ui\.mjs\?v=ac-\d+/); assert.match(ui, /mountSettings\(/); assert.match(ui, /subjectsCard\(/); assert.match(ui, /card\.useClass/);
   for (const t of ['Centre Profile', 'Academic Setup', 'Fee Settings', 'Branding & Logo', 'Account & Security', 'Data & Privacy', 'Classes offered', 'Subject library', 'Class-subject mapping', 'Curriculum templates', 'Admission preferences', 'Copy to classes', 'Save as template']) assert.ok(ac.includes(t), t);
-  assert.ok(read('.htaccess').match(/RewriteRule \^\(sign-in[^\n]*/)[0].includes('academic-ui\\.mjs'), 'academic-ui.mjs is whitelisted'); assert.match(portal, /brandingMount/); assert.match(portal, /tuition-ui\.mjs\?v=tc-\d+/);
+  assert.ok(read('.htaccess').match(/RewriteRule \^\(sign-in[^\n]*/)[0].includes('academic-ui\\.mjs'), 'academic-ui.mjs is whitelisted'); assert.match(portal, /location\.hash/); assert.match(portal, /history\.replaceState/); assert.ok(ac.includes("'Physical Science', 'Life Science'"), 'West Bengal science subjects'); assert.match(portal, /brandingMount/); assert.match(portal, /tuition-ui\.mjs\?v=tc-\d+/);
 });

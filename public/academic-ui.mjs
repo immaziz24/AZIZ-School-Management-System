@@ -3,7 +3,7 @@
 // Principle: configure once, reuse automatically, customise whenever necessary. Everything is kept in the institution profile that is already loaded,
 // so switching classes or opening the student form needs no extra database reads, and saving is one server call that checks the signed-in owner.
 export const ALL_CLASSES = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12', 'College / Other'];
-export const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Sanskrit', 'Mathematics', 'Science', 'Environmental Studies', 'Social Science', 'History', 'Geography', 'Civics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge', 'Spoken English', 'Handwriting', 'Drawing', 'Art', 'Music', 'Dance'];
+export const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Sanskrit', 'Mathematics', 'Science', 'Physical Science', 'Life Science', 'Environmental Studies', 'Social Science', 'History', 'Geography', 'Civics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge', 'Spoken English', 'Handwriting', 'Drawing', 'Art', 'Music', 'Dance'];
 export const PREF_DEFAULTS = { autoAssign: true, allowCustomise: true, showAssigned: true, warnUnconfigured: true, autoDate: true, autoTime: false };
 export const prefsOf = (profile) => ({ ...PREF_DEFAULTS, ...((profile && profile.admissionPrefs) || {}) });
 
@@ -53,6 +53,10 @@ export function mountSettings({ inst, profile, api, h, body, go, say, failText, 
   for (const [k, v] of Object.entries(profile.classSubjects || {})) S.map[k] = [...v];
   const view = { sec: 'profile', sub: 'overview', cls: null };
   if (pendingJump) { Object.assign(view, pendingJump); pendingJump = null; }
+  // Keep the place in Settings across a refresh (the address carries it, for example #Settings/academic/mapping).
+  const SECS = ['profile', 'academic', 'fees', 'branding', 'account', 'privacy']; const SUBS = ['overview', 'classes', 'library', 'mapping', 'templates', 'prefs'];
+  try { const parts = String((globalThis.location && globalThis.location.hash) || '').slice(1).split('/'); if (parts[0] === 'Settings') { if (SECS.includes(parts[1])) view.sec = parts[1]; if (view.sec === 'academic' && SUBS.includes(parts[2])) view.sub = parts[2]; } } catch { /* start at the top */ }
+  const remember = () => { try { if (globalThis.history && globalThis.location) globalThis.history.replaceState(null, '', '#Settings/' + view.sec + (view.sec === 'academic' && view.sub !== 'overview' ? '/' + view.sub : '')); } catch { /* the address stays as it is */ } };
   let dirty = false;
 
   // One server call per save. The server merges it into the stored profile and checks every field again.
@@ -70,6 +74,7 @@ export function mountSettings({ inst, profile, api, h, body, go, say, failText, 
   const SECTIONS = [['profile', 'Centre Profile', 'user'], ['academic', 'Academic Setup', 'cap'], ['fees', 'Fee Settings', 'wallet'], ['branding', 'Branding & Logo', 'image'], ['account', 'Account & Security', 'lock'], ['privacy', 'Data & Privacy', 'shield']];
   const draw = () => {
     nav.replaceChildren(...SECTIONS.map(([k, label, ic]) => h('button', { type: 'button', ...(view.sec === k ? { 'aria-current': 'page' } : {}), onclick: () => guard(() => { view.sec = k; view.sub = 'overview'; draw(); }) }, icon(ic), h('span', {}, label))));
+    remember();
     const secs = { profile: profileSec, academic: academicSec, fees: feesSec, branding: brandingSec, account: accountSec, privacy: privacySec };
     pane.replaceChildren(secs[view.sec]());
   };

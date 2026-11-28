@@ -126,3 +126,11 @@ test('preferences save sends all six switches', async () => {
   const { body, calls } = setup(); press(body, 'button', 'Academic Setup'); press(body, 'button', 'Admission preferences'); press(body, 'button', 'Save preferences'); await tick();
   const save = calls.filter((c) => c.fn === 'institutionProfileSave').pop(); assert.deepEqual(Object.keys(save.data.values.admissionPrefs).sort(), ['allowCustomise', 'autoAssign', 'autoDate', 'autoTime', 'showAssigned', 'warnUnconfigured']);
 });
+
+test('Settings remembers where you were across a refresh, and West Bengal science subjects are in the library', () => {
+  const saved = []; globalThis.location = { hash: '#Settings/academic/mapping' }; globalThis.history = { replaceState: (a, b, url) => { saved.push(url); } };
+  const { body } = setup(); assert.match(body.textContent, /Class-subject mapping/); assert.match(body.textContent, /Class 5/); assert.ok(saved.includes('#Settings/academic/mapping'));
+  press(body, 'button', 'Fee Settings'); assert.equal(saved.at(-1), '#Settings/fees');
+  assert.ok(ui.ALL_SUBJECTS.includes('Physical Science') && ui.ALL_SUBJECTS.includes('Life Science'));
+  delete globalThis.location; delete globalThis.history;
+});
