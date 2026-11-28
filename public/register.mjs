@@ -7,7 +7,8 @@ import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWith
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
 const auth = getAuth(app);
-const call = async (name, data) => (await httpsCallable(getFunctions(app, 'asia-south1'), name)(data || {})).data;
+const gateway = httpsCallable(getFunctions(app, 'asia-south1'), 'institutionApi');
+const call = async (name, data) => (await gateway({ fn: name, args: data || {} })).data;
 const root = document.querySelector('#app');
 const STORE = 'aziz-free-registration';
 const CLASSES = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12', 'College / Other'];

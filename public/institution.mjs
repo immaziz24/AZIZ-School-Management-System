@@ -2,18 +2,18 @@
 // the restricted screen for a suspended account. The records themselves are read through server functions only.
 import { app } from './firebase-client.mjs';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { mountTuition } from './tuition-ui.mjs?v=tc-10';
+import { mountTuition } from './tuition-ui.mjs?v=tc-11';
 import { mountCoaching, coachingExtras } from './coaching-ui.mjs?v=tc-1';
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
 const auth = getAuth(app);
 const fns = getFunctions(app, 'asia-south1');
-// Speed (Batch 120). 1) Each server function sleeps when unused and takes seconds to wake. We wake the ones this page uses in the background
-// (the calls fail at once with "sign in" or "unknown institution", so nothing is read or changed). 2) Read results are kept for 45 seconds, so
+// Speed (Batch 120/121). 1) All calls go through one always-awake server function (institutionApi), so no screen waits for a cold start. 2) Read results are kept for 45 seconds, so
 // going back to a screen is instant; any save, payment or other change clears the kept results so nothing stale is shown after your own edit.
 const READ = /(List|Get|Dashboard|Report|Receipt|History|Home|ByBatch)$|^tuition(Fees|Payments)$/;
 const kept = new Map(); const KEEP_MS = 45000;
-const rawCall = async (name, data) => (await httpsCallable(fns, name)(data || {})).data;
+const gateway = httpsCallable(fns, 'institutionApi');
+const rawCall = async (name, data) => (await gateway({ fn: name, args: data || {} })).data;
 const call = async (name, data) => {
   if (!READ.test(name)) { kept.clear(); return rawCall(name, data); }
   const key = name + '|' + JSON.stringify(data || {}); const hit = kept.get(key);
@@ -22,10 +22,6 @@ const call = async (name, data) => {
   promise.catch(() => kept.delete(key));
   return promise;
 };
-const WARM = { tuition: ['tuitionDashboard', 'tuitionStudentList', 'tuitionBatchList', 'tuitionFees', 'tuitionPayments', 'tuitionAttendanceGet', 'tuitionReport', 'tuitionReceipt', 'tuitionPaymentRecord', 'tuitionStudentSave', 'tuitionAttendanceMark'],
-  coaching: ['tuitionDashboard', 'tuitionStudentList', 'tuitionBatchList', 'tuitionFees', 'tuitionPayments', 'tuitionAttendanceGet', 'tuitionReport', 'coachingTeacherList', 'coachingSubjectList', 'coachingSessionList', 'coachingExamList', 'coachingNoticeList', 'coachingFeesByBatch', 'coachingAttendanceReport', 'coachingTeacherHome'] };
-const warm = (names) => { for (const n of names) rawCall(n, {}).catch(() => {}); };
-warm(['resolveMyInstitutions', 'tuitionDashboard']);
 const root = document.querySelector('#root');
 const h = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag);
@@ -137,7 +133,6 @@ onAuthStateChanged(auth, async (user) => {
   try {
     const r = await call('resolveMyInstitutions');
     list = r.institutions || [];
-    { const t = list[0] && list[0].type; if (t) warm(WARM[t] || WARM.tuition); }
     if (!list.length && r.emailVerified) { try { const a = await call('acceptTeacherInvite'); if (a.accepted) { location.replace('/coaching'); return; } } catch { /* no invitation */ } }
     if (!list.length) { root.replaceChildren(h('div', { class: 'panel' }, h('h1', {}, 'No account found'), h('p', {}, 'This email has no tuition or coaching account yet.'), h('a', { class: 'btn', href: '/register' }, 'Register free'), ' ', h('button', { onclick: () => signOut(auth) }, 'Sign out'), h('p', {}, h('a', { href: '/' }, '← Back to home')))); return; }
     const match = list.findIndex((x) => x.type === pathType);
