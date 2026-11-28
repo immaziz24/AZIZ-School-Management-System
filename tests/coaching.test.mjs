@@ -129,3 +129,43 @@ test('teacher profile PDF: a valid one-page file around one picture; the photo i
   assert.ok(offs.length === 5 && offs.every((o, i) => out.slice(o, o + String(i + 1).length + 7) === (i + 1) + ' 0 obj' + String.fromCharCode(10)));
   const ui = readFileSync(new URL('../public/coaching-ui.mjs', import.meta.url), 'utf8'); assert.ok(ui.includes('py, img.width * k, img.height * k')); assert.ok(ui.includes('object-position:center top'));
 });
+
+// ---- The premium teacher card: drawn with a recording stand-in for the canvas ----
+function fakeCanvasEnv() {
+  const calls = []; const made = [];
+  const ctxOf = (cv) => { const state = { font: '10px x' }; return new Proxy(state, {
+    get(t, k) { if (k in t) return t[k]; if (k === 'measureText') return (txt) => ({ width: String(txt).length * (Number(/(\d+(?:\.\d+)?)px/.exec(t.font || '')?.[1]) || 10) * 0.52 });
+      if (k === 'fillText') return (txt, x, y) => { calls.push({ txt: String(txt), x, y, canvas: cv }); };
+      if (k === 'createLinearGradient' || k === 'createRadialGradient') return () => ({ addColorStop() {} });
+      if (k === 'roundRect' || k === 'filter' || k === 'letterSpacing') return undefined; return () => {}; },
+    has(t, k) { return k in t; }, set(t, k, v) { t[k] = v; return true; } }); };
+  globalThis.document = { fonts: { ready: Promise.resolve() }, createElement: () => { const cv = { width: 0, height: 0, style: {} }; cv.getContext = () => ctxOf(cv); made.push(cv); return cv; } };
+  globalThis.Image = class { set src(v) { setTimeout(() => this.onerror && this.onerror(), 0); } };
+  return { calls, made };
+}
+test('teacher card: shows the centre name it is given, every saved field, and nothing empty', async () => {
+  const { paintTeacherCard, cardRows, designationOf } = await import('../public/teacher-card.mjs');
+  const env = fakeCanvasEnv();
+  const full = { name: 'Munna Aziz', email: 'munna@example.com', mobile: '9126430090', highestQualification: 'Graduate (B.A.)', qualificationSubject: 'English', bed: true, deled: false, subjects: ['English'], classes: ['Class 7'], experienceYears: 6, joiningDate: '2026-11-28' };
+  const cv = await paintTeacherCard({ teacher: full, centreName: 'Sunrise Tutorials', photo: '', logo: '', scale: 1 });
+  assert.equal(cv.width, 1920); assert.equal(cv.height, 1080);
+  const text = env.calls.map((c) => c.txt);
+  for (const want of ['Munna Aziz', 'English Educator', 'SUNRISE TUTORIALS', '9126430090', 'munna@example.com', 'Graduate (B.A.) in English', 'B.Ed', 'English', 'Class 7', 'Educate', 'Inspire', 'Empower', 'Teacher Profile', 'Powered by AZIZ School Management System', 'azizschoolmanagementsystem.com']) assert.ok(text.includes(want), 'missing ' + want);
+  assert.ok(text.some((x) => x.includes('6 years of teaching experience')) && text.some((x) => x.includes('Sunrise Tutorials since Nov 2026')));
+  assert.ok(!text.some((x) => /undefined|null|NaN/.test(x)), 'no placeholder text'); assert.ok(!text.some((x) => /AZIZ COACHING/i.test(x)), 'the centre name is never hard-coded');
+  assert.ok(env.calls.every((c) => c.x >= 0 && c.x <= 1920 && c.y >= 0 && c.y <= 1080));
+  const big = await paintTeacherCard({ teacher: full, centreName: 'Sunrise Tutorials', scale: 2 }); assert.equal(big.width, 3840); assert.equal(big.height, 2160);
+  env.calls.length = 0;
+  await paintTeacherCard({ teacher: { name: 'Rina Das' }, centreName: 'Another Centre', scale: 1 });
+  const bare = env.calls.map((c) => c.txt); assert.ok(bare.includes('Rina Das') && bare.includes('ANOTHER CENTRE'));
+  assert.ok(!bare.some((x) => /MOBILE|EMAIL|QUALIFICATION|SUBJECTS|CLASSES|TEACHING EXPERIENCE/i.test(x)), 'empty fields are left out'); assert.ok(!bare.some((x) => /Educator/.test(x)), 'no title is invented');
+  assert.deepEqual(cardRows({ name: 'x', mobile: ' ', email: 'undefined', subjects: [], classes: [] }), []); assert.equal(designationOf({ subjects: ['English', 'Bengali', 'Science'] }), 'Multi-Subject Educator'); assert.equal(designationOf({ subjects: ['Bengali', 'English'] }), 'Bengali & English Educator');
+  env.calls.length = 0; await paintTeacherCard({ teacher: { ...full, name: 'Dr. Mohammad Abdul Karim Chowdhury Al-Mahmud The Third' }, centreName: 'A very long coaching centre name that goes on and on and on and on and on and on and on forever', scale: 1 });
+  assert.ok(env.calls.length > 10 && env.calls.every((c) => c.x <= 1920));
+});
+test('teacher card: preview and downloads are wired, the file is allowed by the web server, and no outside service is used', () => {
+  const ui = read('public/coaching-ui.mjs'); const card = read('public/teacher-card.mjs');
+  for (const w of ['Download PNG', 'Download JPG', 'Download PDF', 'Close preview', 'High resolution (3840 × 2160)', "'coachingTeacherPhotoGet'", "'institutionLogoGet'"]) assert.ok(ui.includes(w), w);
+  assert.match(ui, /teacher-card\.mjs\?v=tcd-\d+/); assert.match(read('.htaccess'), /teacher-card\\\.mjs/);
+  assert.ok(!/https?:\/\//.test(card.replace(/azizschoolmanagementsystem\.com/g, '')), 'no outside address in the card code'); assert.ok(!/innerHTML/.test(card));
+});

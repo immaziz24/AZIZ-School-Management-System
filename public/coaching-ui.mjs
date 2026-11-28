@@ -7,6 +7,8 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_NAME = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
 const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Sanskrit', 'Mathematics', 'Science', 'Physical Science', 'Life Science', 'Environmental Studies', 'Social Science', 'History', 'Geography', 'Civics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge', 'Spoken English', 'Handwriting', 'Drawing', 'Art', 'Music', 'Dance'];
 
+import { paintTeacherCard } from './teacher-card.mjs?v=tcd-1';
+
 // A one-page PDF that holds one JPEG picture (made in the browser, nothing is sent anywhere).
 export function pdfFromJpeg(jpeg, w, h, pageW = 595.28, pageH = 841.89) {
   const enc = new TextEncoder(); const parts = []; const offs = []; let len = 0;
@@ -64,7 +66,7 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
       h('p', { class: 'hint' }, 'A teacher logs in at azizschoolmanagementsystem.com/coaching with the email you enter here: "Teacher? Create your login".'),
       table(['Name', 'Email', 'Mobile', 'Qualification', 'Subjects', 'Classes', 'Batches', 'Status', ''], items.map((t) => h('tr', {}, h('td', {}, t.name), h('td', {}, t.email), h('td', {}, t.mobile || ''), h('td', {}, [t.highestQualification ? t.highestQualification + (t.qualificationSubject ? ' in ' + t.qualificationSubject : '') : '', t.bed ? 'B.Ed' : '', t.deled ? 'D.El.Ed' : ''].filter(Boolean).join(', ') || '-'), h('td', {}, t.subjects.length > 4 ? t.subjects.length + ' subjects' : t.subjects.join(', ')), h('td', {}, (t.classes || []).join(', ') || '-'), h('td', {}, t.batches.map((x) => x.name).join(', ') || '-'),
         h('td', {}, t.status === 'invited' ? 'Invited' : t.status === 'active' ? 'Active' : 'Switched off'),
-        h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(t) }, 'Edit'), h('button', { type: 'button', onclick: () => downloadPdf(t) }, 'PDF'), h('button', { type: 'button', onclick: () => downloadPng(t) }, 'Card image'), h('button', { type: 'button', onclick: async () => { try { await api('coachingTeacherStatus', { teacherId: t.id, status: t.status === 'inactive' ? 'active' : 'inactive' }); draw(); } catch (e) { window.alert(failText(e)); } } }, t.status === 'inactive' ? 'Switch on' : t.status === 'invited' ? 'Cancel invite' : 'Switch off')))), 'No teachers yet. Add your first teacher.'));
+        h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(t) }, 'Edit'), h('button', { type: 'button', onclick: () => downloadPdf(t) }, 'PDF'), h('button', { type: 'button', onclick: () => openCard(t) }, 'Card image'), h('button', { type: 'button', onclick: async () => { try { await api('coachingTeacherStatus', { teacherId: t.id, status: t.status === 'inactive' ? 'active' : 'inactive' }); draw(); } catch (e) { window.alert(failText(e)); } } }, t.status === 'inactive' ? 'Switch on' : t.status === 'invited' ? 'Cancel invite' : 'Switch off')))), 'No teachers yet. Add your first teacher.'));
     // Shrinks a chosen picture to a small square-ish JPEG so it stays well under the server limit.
     const shrink = (file) => new Promise((res, rej) => { const url = URL.createObjectURL(file); const im = new Image();
       im.onload = () => { const k = Math.min(1, 320 / Math.max(im.width, im.height)); const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(im.width * k)); cv.height = Math.max(1, Math.round(im.height * k));
@@ -103,7 +105,31 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
     };
     const saveBlob = (blob, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); };
     const fileBase = (t) => (t.name || 'teacher').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) + '-profile';
-    const downloadPng = async (t) => { try { const cv = await paintProfile(t, 'card'); cv.toBlob((b) => saveBlob(b, fileBase(t) + '.png'), 'image/png'); } catch (e) { window.alert('Could not make the picture. Try again.'); } };
+    // The premium card: a preview window with PNG, JPG and PDF downloads. It is drawn in the browser from the saved teacher, the centre name and logo.
+    let logoCache;
+    const getLogo = async () => { if (logoCache === undefined) { try { logoCache = (await api('institutionLogoGet')).dataUrl || ''; } catch (e) { logoCache = ''; } } return logoCache; };
+    const openCard = async (t) => {
+      const ov = h('div', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Teacher profile card', style: 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.82);display:flex;align-items:center;justify-content:center;padding:.8rem;overflow:auto' });
+      const panel = h('div', { style: 'background:#0D1424;border:1px solid #293346;border-radius:1rem;padding:1rem;width:min(1100px,96vw);max-height:96vh;overflow:auto' });
+      const status = h('p', { class: 'hint', role: 'status' }, 'Preparing the card.'); const stage = h('div', { style: 'width:100%;aspect-ratio:16/9;background:#240608;border-radius:.6rem;overflow:hidden' });
+      const hi = h('input', { type: 'checkbox', id: 'card-hi' }); const cache = {}; let busy = false;
+      const close = () => { document.removeEventListener('keydown', onKey); ov.remove(); }; const onKey = (e) => { if (e.key === 'Escape') close(); };
+      const data = { teacher: t, centreName: inst.name || (inst.profile && inst.profile.name) || '' };
+      const make = async (scale) => { if (!cache[scale]) cache[scale] = await paintTeacherCard({ ...data, photo: data.photo, logo: data.logo, scale }); return cache[scale]; };
+      const out = async (kind) => { if (busy) return; busy = true; status.textContent = 'Preparing the download.';
+        try { const scale = hi.checked ? 2 : 1; const cv = await make(scale); const base = fileBase(t).replace(/-profile$/, '-card') + (scale === 2 ? '-4k' : '');
+          if (kind === 'png') cv.toBlob((b) => saveBlob(b, base + '.png'), 'image/png');
+          else if (kind === 'jpg') cv.toBlob((b) => saveBlob(b, base + '.jpg'), 'image/jpeg', 0.95);
+          else { const url = cv.toDataURL('image/jpeg', 0.95); const bin = atob(url.split(',')[1]); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); saveBlob(new Blob([pdfFromJpeg(bytes, cv.width, cv.height, 841.89, 473.56)], { type: 'application/pdf' }), base + '.pdf'); }
+          status.textContent = 'Downloaded.'; } catch (e) { status.textContent = 'Could not make the file. Try again.'; } busy = false; };
+      const btn = (label, fn, gold) => h('button', { type: 'button', ...(gold ? { class: 'gold' } : {}), onclick: fn }, label);
+      panel.append(h('h2', { style: 'margin:.2rem 0 .6rem' }, 'Teacher profile card'), stage, status,
+        h('div', { class: 'actions', style: 'flex-wrap:wrap;align-items:center' }, btn('Download PNG', () => out('png'), true), btn('Download JPG', () => out('jpg')), btn('Download PDF', () => out('pdf')), h('label', { class: 'chk', for: 'card-hi' }, hi, 'High resolution (3840 × 2160)'), btn('Close preview', close)));
+      ov.append(panel); ov.addEventListener('click', (e) => { if (e.target === ov) close(); }); document.addEventListener('keydown', onKey); document.body.append(ov);
+      try { const [ph, lg] = await Promise.all([t.hasPhoto ? api('coachingTeacherPhotoGet', { teacherId: t.id }).then((r) => r.dataUrl || '').catch(() => '') : '', getLogo()]); data.photo = ph; data.logo = lg;
+        const cv = await make(1); cv.style.width = '100%'; cv.style.height = 'auto'; cv.style.display = 'block'; stage.replaceChildren(cv); status.textContent = 'This is how the card will look. Choose a format to download.'; }
+      catch (e) { status.textContent = 'Could not make the card. Close this window and try again.'; }
+    };
     const downloadPdf = async (t) => { try { const cv = await paintProfile(t, 'sheet'); const url = cv.toDataURL('image/jpeg', 0.92); const bin = atob(url.split(',')[1]); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       saveBlob(new Blob([pdfFromJpeg(bytes, cv.width, cv.height)], { type: 'application/pdf' }), fileBase(t) + '.pdf'); } catch (e) { window.alert('Could not make the PDF. Try again.'); } };
     const form = (t) => {
@@ -136,7 +162,7 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
         h('fieldset', { 'data-field': 'subjects' }, h('legend', {}, 'Subjects this teacher teaches'), h('div', { class: 'checks' }, [...new Set([...ALL_SUBJECTS, ...(t?.subjects || [])])].map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'subjects[]', value: o, checked: (t?.subjects || []).includes(o) ? true : undefined }), o))),
           h('input', { type: 'text', name: 'subjectsOther', maxlength: 120, placeholder: 'Other subjects, separated by commas', 'aria-label': 'Other subjects' }), h('span', { class: 'ferr', 'data-err': 'subjects' })),
         field('Notes (optional)', inp('notes', 'text', t?.notes, { maxlength: 200 }), 'notes'),
-        h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save teacher'), t ? h('button', { type: 'button', onclick: () => downloadPdf(t) }, 'Download PDF') : null, t ? h('button', { type: 'button', onclick: () => downloadPng(t) }, 'Download card image') : null, h('button', { type: 'button', onclick: draw }, 'Cancel')));
+        h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save teacher'), t ? h('button', { type: 'button', onclick: () => downloadPdf(t) }, 'Download PDF') : null, t ? h('button', { type: 'button', onclick: () => openCard(t) }, 'Card image') : null, h('button', { type: 'button', onclick: draw }, 'Cancel')));
       box.replaceChildren(f);
     };
     const assignClasses = (teachersList) => {
