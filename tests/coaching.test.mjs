@@ -62,7 +62,7 @@ test('logo: real small PNG accepted; wrong type, fake picture and big files refu
   assert.ok(lib.checkLogo('data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(120 * 1024)]).toString('base64')).error);
 });
 
-const OWNER_ONLY = ['coachingTeacherSave', 'coachingTeacherStatus', 'coachingTeacherList', 'coachingAssign', 'coachingSubjectSave', 'coachingSubjectArchive', 'coachingSessionSave', 'coachingSessionDelete', 'coachingNoticeSave', 'coachingNoticeDelete', 'coachingFeesByBatch', 'coachingAttendanceReport', 'institutionLogoSave'];
+const OWNER_ONLY = ['coachingTeacherSave', 'coachingTeacherStatus', 'coachingTeacherList', 'coachingAssign', 'coachingAssignClasses', 'coachingSubjectSave', 'coachingSubjectArchive', 'coachingSessionSave', 'coachingSessionDelete', 'coachingNoticeSave', 'coachingNoticeDelete', 'coachingFeesByBatch', 'coachingAttendanceReport', 'institutionLogoSave'];
 const SHARED = ['coachingSubjectList', 'coachingSessionList', 'coachingExamSave', 'coachingExamList', 'coachingMarksGet', 'coachingMarksSave', 'coachingNoticeList', 'institutionLogoGet'];
 test('coaching functions: owner-only ones check the coaching owner; shared ones name both roles; teacher-only home', () => {
   for (const n of OWNER_ONLY) assert.match(bodyOf(n), /requireCoaching\(request, (data|request\.data)(, \['owner'\], '[a-z]+')?\)/, n);
@@ -72,7 +72,7 @@ test('coaching functions: owner-only ones check the coaching owner; shared ones 
 });
 
 test('a teacher reaches only assigned batches, and never sees fees', () => {
-  assert.match(src, /const canReachBatch = \(ctx, batch\) => ctx\.role === 'owner' \|\| \(ctx\.role === 'teacher' && Array\.isArray\(batch\.teacherIds\) && batch\.teacherIds\.includes\(ctx\.teacherId\)\)/);
+  assert.ok(src.includes("const canReachBatch = (ctx, batch) => ctx.role === 'owner' || (ctx.role === 'teacher' && ((Array.isArray(batch.teacherIds) && batch.teacherIds.includes(ctx.teacherId))"));
   for (const n of ['coachingExamSave', 'coachingMarksGet', 'coachingMarksSave']) assert.match(bodyOf(n) + src.slice(src.indexOf('async function examForMarks'), src.indexOf("exports.coachingMarksGet")), /canReachBatch/, n);
   assert.match(bodyOf('tuitionBatchList'), /delete x\.feePaise/); assert.match(bodyOf('coachingSessionList'), /ctx\.role === 'teacher'/);
   assert.doesNotMatch(bodyOf('coachingTeacherHome'), /feeCharges|payments|feePaise/);
@@ -103,4 +103,9 @@ test('screens: no innerHTML, no secrets, every coaching function is wired, teach
 
 test('firestore.rules is untouched by this phase: the new collections are not mentioned', () => {
   const rules = read('firestore.rules'); for (const w of ['teacherInvites', 'coachingTeacher', 'institutions/']) assert.doesNotMatch(rules, new RegExp(w));
+});
+
+test('assign teachers to classes: owner-only, class checked, teacher reaches the batches of the class', () => {
+  assert.match(bodyOf('coachingAssignClasses'), /Choose one of your classes/); assert.match(bodyOf('coachingAssignClasses'), /Choose up to 10 teachers/);
+  assert.ok(src.includes('ctx.teacherClasses.includes(batch.className)'));
 });

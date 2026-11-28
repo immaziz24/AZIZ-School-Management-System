@@ -1,6 +1,6 @@
 // Tuition and coaching shared screens (Phase 2): dashboard numbers, students, batches, fees, payments, receipts, attendance, reports, settings.
 // Every record is read and written through server functions that check the signed-in owner; this file only draws screens.
-import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-4';
+import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-5';
 const today = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 const money = (p) => '₹' + (Number(p || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: Number(p || 0) % 100 ? 2 : 0, maximumFractionDigits: 2 });
 const rupees = (p) => (Number(p || 0) / 100).toFixed(2).replace(/\.00$/, '');

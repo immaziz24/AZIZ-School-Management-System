@@ -2108,8 +2108,10 @@ async function requireMember(request, data, roles, feature) {
   if (!roles.includes(m.data().role)) throw new HttpsError('permission-denied', m.data().role === 'owner' ? 'You cannot do this.' : 'Only the owner can do this.');
   if (m.data().role === 'teacher' && i.data().type !== 'coaching') throw new HttpsError('permission-denied', 'You do not have access to this account.');
   if (i.data().status !== 'active') throw new HttpsError('failed-precondition', 'This account is suspended. Your records are safe.');
+  let teacherClasses = [];
+  if (m.data().role === 'teacher' && m.data().teacherId) { const td = await db.doc('institutions/' + tenantId + '/teachers/' + m.data().teacherId).get(); if (td.exists && Array.isArray(td.data().classes)) teacherClasses = td.data().classes; }
   if (feature && (i.data().features || {})[feature] === false) throw new HttpsError('failed-precondition', 'This feature is switched off for your plan. Write to support@azizschoolmanagementsystem.com if you need it.');
-  return { uid, tenantId, role: m.data().role, teacherId: m.data().teacherId || '', inst: i.data(), ref: i.ref, col: (name) => db.collection('institutions/' + tenantId + '/' + name), doc: (path) => db.doc('institutions/' + tenantId + '/' + path) };
+  return { uid, tenantId, role: m.data().role, teacherId: m.data().teacherId || '', teacherClasses, inst: i.data(), ref: i.ref, col: (name) => db.collection('institutions/' + tenantId + '/' + name), doc: (path) => db.doc('institutions/' + tenantId + '/' + path) };
 }
 const requireInstitution = (request, data) => requireMember(request, data, ['owner']);
 // Coaching only: the owner, or a teacher where the function allows it.
@@ -2119,7 +2121,7 @@ async function requireCoaching(request, data, roles = ['owner'], feature) {
   return ctx;
 }
 // A teacher reaches a batch only if the owner assigned them to it. The owner reaches every batch.
-const canReachBatch = (ctx, batch) => ctx.role === 'owner' || (ctx.role === 'teacher' && Array.isArray(batch.teacherIds) && batch.teacherIds.includes(ctx.teacherId));
+const canReachBatch = (ctx, batch) => ctx.role === 'owner' || (ctx.role === 'teacher' && ((Array.isArray(batch.teacherIds) && batch.teacherIds.includes(ctx.teacherId)) || (Array.isArray(ctx.teacherClasses) && ctx.teacherClasses.includes(batch.className))));
 const newRecordId = (prefix) => prefix + '-' + Date.now().toString(36).toUpperCase() + nodeCrypto.randomBytes(2).toString('hex').toUpperCase();
 const invalid = (checked) => new HttpsError('invalid-argument', Object.values(checked.errors)[0], { errors: checked.errors });
 const STUDENT_ID = /^ST-[A-Z0-9]{6,20}$/;
@@ -2278,7 +2280,9 @@ exports.tuitionFees = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (re
     const prevDuePaise = (openBy[x.studentId] || []).filter((o) => o.id !== d.id && o.dueDate < x.dueDate).reduce((t, o) => t + o.balancePaise, 0);
     return { id: d.id, studentId: x.studentId, studentName: s.name || '', className: s.className || '', guardianMobile: s.guardianMobile || '', kind: x.kind, cycle: x.cycle, dueDate: x.dueDate, amountPaise: x.amountPaise, paidPaise: x.paidPaise, balancePaise: x.balancePaise, prevDuePaise, status: chargeStatus(x, today) }; })
     .sort((a, b) => (a.studentName < b.studentName ? -1 : a.studentName > b.studentName ? 1 : a.dueDate < b.dueDate ? -1 : 1));
-  return { cycle, scope: open ? 'due' : 'month', items, today };
+  let roster = [];
+  if (!only && !open) { const rs = await ctx.col('students').where('status', '==', 'active').limit(500).get(); roster = rs.docs.map((d) => ({ studentId: d.id, studentName: d.data().name || '', className: d.data().className || '', guardianMobile: d.data().guardianMobile || '', feeStart: d.data().feeStartCycle || d.data().joiningCycle || '' })).sort((a, b) => (a.studentName < b.studentName ? -1 : 1)); }
+  return { cycle, scope: open ? 'due' : 'month', items, roster, today };
 });
 
 exports.tuitionChargeAdjust = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
@@ -2537,7 +2541,7 @@ exports.coachingTeacherList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, a
   const ctx = await requireCoaching(request, request.data, ['owner'], 'teachers');
   const [t, b] = await Promise.all([ctx.col('teachers').limit(100).get(), ctx.col('batches').where('status', '==', 'active').limit(100).get()]);
   const assigned = {}; b.docs.forEach((d) => (d.data().teacherIds || []).forEach((id) => { (assigned[id] = assigned[id] || []).push({ id: d.id, name: d.data().name }); }));
-  return { items: t.docs.map((d) => ({ id: d.id, name: d.data().name, email: d.data().email, mobile: d.data().mobile, subjects: d.data().subjects || [], notes: d.data().notes || '', status: d.data().status, batches: assigned[d.id] || [] })).sort((x, y) => (x.name < y.name ? -1 : 1)) };
+  return { items: t.docs.map((d) => ({ id: d.id, name: d.data().name, email: d.data().email, mobile: d.data().mobile, subjects: d.data().subjects || [], classes: d.data().classes || [], notes: d.data().notes || '', status: d.data().status, batches: assigned[d.id] || [] })).sort((x, y) => (x.name < y.name ? -1 : 1)) };
 });
 
 // Called by a teacher after their email is verified. If the owner invited that email, the account becomes a teacher of that centre.
@@ -2571,6 +2575,22 @@ exports.coachingAssign = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async 
   if (!b.exists || b.data().status !== 'active') throw new HttpsError('not-found', 'Unknown batch.');
   if (ts.some((t) => !t.exists || t.data().status === 'inactive')) throw new HttpsError('invalid-argument', 'One of the teachers is not available.');
   await db.runTransaction(async (tx) => { tx.update(ctx.doc('batches/' + batchId), { teacherIds: ids, updatedAt: Timestamp.now() }); audit(tx, ctx, 'batch-teachers-set', { batchId, count: ids.length }); });
+  return { ok: true };
+});
+
+// Choose which teachers teach a class (the owner only). A teacher then reaches every batch of that class, and the class shows against their name.
+exports.coachingAssignClasses = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'teachers');
+  const className = text(data.className, 40); const known = (((ctx.inst.profile || {}).classes) || []);
+  if (!className || !known.includes(className)) throw new HttpsError('invalid-argument', 'Choose one of your classes.');
+  const ids = [...new Set(Array.isArray(data.teacherIds) ? data.teacherIds.map((x) => String(x)) : [])]; if (ids.length > 10 || ids.some((x) => !TEACHER_ID.test(x))) throw new HttpsError('invalid-argument', 'Choose up to 10 teachers.');
+  const all = await ctx.col('teachers').limit(100).get(); const byId = {}; all.docs.forEach((d) => { byId[d.id] = d; });
+  if (ids.some((id) => !byId[id] || byId[id].data().status === 'inactive')) throw new HttpsError('invalid-argument', 'One of the teachers is not available.');
+  await db.runTransaction(async (tx) => {
+    for (const d of all.docs) { const has = Array.isArray(d.data().classes) ? d.data().classes : []; const want = ids.includes(d.id); const next = want ? [...new Set([...has, className])] : has.filter((c) => c !== className);
+      if (next.length !== has.length || next.some((c, i) => c !== has[i])) tx.update(d.ref, { classes: next.slice(0, 20), updatedAt: Timestamp.now() }); }
+    audit(tx, ctx, 'class-teachers-set', { className, count: ids.length });
+  });
   return { ok: true };
 });
 

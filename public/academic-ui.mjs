@@ -286,11 +286,13 @@ export function mountSettings({ inst, profile, api, h, body, go, say, failText, 
   const feeCache = {};
   function feeStudents() {
     const st = view.fstate || (view.fstate = { cycle: thisMonth(), cls: null, filter: 'all', q: '' }); const out = h('div', {});
-    const load = async () => { if (!feeCache[st.cycle]) feeCache[st.cycle] = (await api('tuitionFees', { cycle: st.cycle })).items; return feeCache[st.cycle]; };
+    const load = async () => { if (!feeCache[st.cycle]) { const r = await api('tuitionFees', { cycle: st.cycle }); feeCache[st.cycle] = { items: r.items || [], roster: r.roster || [] }; } return feeCache[st.cycle]; };
     // One row per student: this month's charges added up, with what is still owed from earlier months.
-    const group = (items) => { const by = {}; for (const x of items) { const k = x.studentId; const r = by[k] || (by[k] = { id: k, name: x.studentName, cls: x.className || 'No class', mobile: x.guardianMobile, billed: 0, paid: 0, bal: 0, prev: 0, overdue: false });
+    const group = (pack) => { const items = pack.items; const by = {}; for (const x of items) { const k = x.studentId; const r = by[k] || (by[k] = { id: k, name: x.studentName, cls: x.className || 'No class', mobile: x.guardianMobile, billed: 0, paid: 0, bal: 0, prev: 0, overdue: false });
         r.billed += x.amountPaise; r.paid += x.paidPaise; r.bal += x.balancePaise; r.prev = Math.max(r.prev, x.prevDuePaise || 0); if (x.status === 'overdue') r.overdue = true; }
-      for (const r of Object.values(by)) r.status = r.bal <= 0 ? 'Paid' : (r.paid > 0 ? (r.overdue ? 'Partial · Overdue' : 'Partial') : (r.overdue ? 'Overdue' : 'Unpaid')); return Object.values(by); };
+      // Every active student is listed, even one with no charge this month (fee starts later, or no fee set yet).
+      for (const x of pack.roster) if (!by[x.studentId]) by[x.studentId] = { id: x.studentId, name: x.studentName, cls: x.className || 'No class', mobile: x.guardianMobile, billed: 0, paid: 0, bal: 0, prev: 0, overdue: false, none: x.feeStart && x.feeStart > st.cycle ? 'Starts ' + x.feeStart : 'No fee this month' };
+      for (const r of Object.values(by)) r.status = r.none ? r.none : r.bal <= 0 ? 'Paid' : (r.paid > 0 ? (r.overdue ? 'Partial · Overdue' : 'Partial') : (r.overdue ? 'Overdue' : 'Unpaid')); return Object.values(by); };
     const pill = (t) => h('span', { class: 'pill ' + (t === 'Paid' ? 'paid' : /Overdue/.test(t) ? 'overdue' : 'unpaid') }, t);
     const paint = async () => {
       const month = h('input', { type: 'month', value: st.cycle, 'aria-label': 'Month', onchange: (e) => { if (e.target.value) { st.cycle = e.target.value; st.cls = null; paint(); } } });
