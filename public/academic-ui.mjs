@@ -55,8 +55,8 @@ export function mountSettings({ inst, profile, api, h, body, go, say, failText, 
   if (pendingJump) { Object.assign(view, pendingJump); pendingJump = null; }
   // Keep the place in Settings across a refresh (the address carries it, for example #Settings/academic/mapping).
   const SECS = ['profile', 'academic', 'fees', 'branding', 'account', 'privacy']; const SUBS = ['overview', 'classes', 'library', 'mapping', 'templates', 'prefs'];
-  try { const parts = String((globalThis.location && globalThis.location.hash) || '').slice(1).split('/'); if (parts[0] === 'Settings') { if (SECS.includes(parts[1])) view.sec = parts[1]; if (view.sec === 'academic' && SUBS.includes(parts[2])) view.sub = parts[2]; } } catch { /* start at the top */ }
-  const remember = () => { try { if (globalThis.history && globalThis.location) globalThis.history.replaceState(null, '', '#Settings/' + view.sec + (view.sec === 'academic' && view.sub !== 'overview' ? '/' + view.sub : '')); } catch { /* the address stays as it is */ } };
+  try { const parts = String((globalThis.location && globalThis.location.hash) || '').slice(1).split('/'); if (parts[0] === 'Settings') { if (SECS.includes(parts[1])) view.sec = parts[1]; if (view.sec === 'academic' && SUBS.includes(parts[2])) view.sub = parts[2]; if (view.sec === 'fees' && ['class', 'students', 'more'].includes(parts[2])) view.fsub = parts[2]; } } catch { /* start at the top */ }
+  const remember = () => { try { if (globalThis.history && globalThis.location) globalThis.history.replaceState(null, '', '#Settings/' + view.sec + (view.sec === 'academic' && view.sub !== 'overview' ? '/' + view.sub : '') + (view.sec === 'fees' && view.fsub ? '/' + view.fsub : '')); } catch { /* the address stays as it is */ } };
   let dirty = false;
 
   // One server call per save. The server merges it into the stored profile and checks every field again.
@@ -256,11 +256,72 @@ export function mountSettings({ inst, profile, api, h, body, go, say, failText, 
   }
 
   // ---------- C to F ----------
+  // ---------- C. Fee settings: a fee for each class, and every class's students with their fee status ----------
+  const rup = (p) => (Number(p || 0) / 100).toFixed(2).replace(/\.00$/, '');
+  const inr = (p) => '₹' + (Number(p || 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const thisMonth = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 7);
+  S.classFees = { ...(profile.classFees || {}) };
   function feesSec() {
-    return h('div', {}, head('Fee settings', 'Fees are set where you use them, so each batch and student can differ.'), h('div', { class: 'navcards' },
-      h('button', { type: 'button', class: 'navcard', onclick: () => guard(() => go('Batches')) }, icon('layers'), h('span', { class: 'nct' }, h('b', {}, 'Monthly fee for a batch'), h('small', {}, 'New students in a batch start with its fee.')), icon('arrow')),
-      h('button', { type: 'button', class: 'navcard', onclick: () => guard(() => go('Students')) }, icon('user'), h('span', { class: 'nct' }, h('b', {}, 'Fee and due day for a student'), h('small', {}, 'Set in the student form. Changes start from the month you choose.')), icon('arrow')),
-      h('button', { type: 'button', class: 'navcard', onclick: () => guard(() => go('Fees')) }, icon('wallet'), h('span', { class: 'nct' }, h('b', {}, 'Collect fees, history and receipts'), h('small', {}, 'The payment method is chosen each time you record a payment.')), icon('arrow'))));
+    const tabs = [['class', 'Class-wise fees'], ['students', 'Students by class'], ['more', 'Collect & history']];
+    if (!tabs.some(([k]) => k === view.fsub)) view.fsub = 'class';
+    const bar = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { type: 'button', ...(view.fsub === k ? { 'aria-current': 'true' } : {}), onclick: () => guard(() => { view.fsub = k; draw(); }) }, l)));
+    return h('div', {}, head('Fee settings', 'Set the monthly fee for each class, then see every class with its students and what they have paid.'), bar, ({ class: feeClass, students: feeStudents, more: feeMore })[view.fsub]());
+  }
+
+  // One monthly fee for each class. New students in the class start with it; students already added keep their own fee.
+  function feeClass() {
+    const m = msgBox(); const inputs = {};
+    const rows = S.classes.map((c) => { const i = h('input', { type: 'text', inputmode: 'decimal', value: S.classFees[c] ? rup(S.classFees[c]) : '', placeholder: 'Not set', 'aria-label': 'Monthly fee for ' + c, oninput: () => { dirty = true; } }); inputs[c] = i;
+      return h('div', { class: 'feerow' }, h('span', { class: 'cn' }, c), h('span', { class: 'rs' }, '₹'), i, h('small', {}, 'per student, per month')); });
+    const save = async () => {
+      const next = {}; for (const [c, p] of Object.entries(S.classFees)) if (!S.classes.includes(c)) next[c] = p;
+      for (const c of S.classes) { const raw = inputs[c].value.trim().replace(/[₹,\s]/g, ''); if (!raw) continue; if (!/^\d+(\.\d{1,2})?$/.test(raw) || Number(raw) <= 0 || Number(raw) > 1000000) { say(m, 'Enter the fee for ' + c + ' as an amount in rupees, for example 1500.'); return; } next[c] = Math.round(Number(raw) * 100); }
+      say(m, 'Saving.'); try { await persist({ classFees: next }); S.classFees = next; dirty = false; ok(m, 'Saved. New students in these classes will start with this fee. Students already added are not changed.'); } catch (er) { say(m, failText(er)); } };
+    return h('div', { class: 'scard' }, S.classes.length ? rows : [h('p', { class: 'empty' }, 'Choose your classes first in Academic Setup → Classes offered.')], m,
+      S.classes.length ? h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'button', onclick: save }, 'Save class fees')) : null,
+      h('p', { class: 'hint' }, 'A batch fee, if you set one, is used first. You can always change one student\'s fee in the student form.'));
+  }
+
+  // Every class with its students, and for each student what is paid, partly paid, unpaid or overdue.
+  const feeCache = {};
+  function feeStudents() {
+    const st = view.fstate || (view.fstate = { cycle: thisMonth(), cls: null, filter: 'all', q: '' }); const out = h('div', {});
+    const load = async () => { if (!feeCache[st.cycle]) feeCache[st.cycle] = (await api('tuitionFees', { cycle: st.cycle })).items; return feeCache[st.cycle]; };
+    // One row per student: this month's charges added up, with what is still owed from earlier months.
+    const group = (items) => { const by = {}; for (const x of items) { const k = x.studentId; const r = by[k] || (by[k] = { id: k, name: x.studentName, cls: x.className || 'No class', mobile: x.guardianMobile, billed: 0, paid: 0, bal: 0, prev: 0, overdue: false });
+        r.billed += x.amountPaise; r.paid += x.paidPaise; r.bal += x.balancePaise; r.prev = Math.max(r.prev, x.prevDuePaise || 0); if (x.status === 'overdue') r.overdue = true; }
+      for (const r of Object.values(by)) r.status = r.bal <= 0 ? 'Paid' : (r.paid > 0 ? (r.overdue ? 'Partial · Overdue' : 'Partial') : (r.overdue ? 'Overdue' : 'Unpaid')); return Object.values(by); };
+    const pill = (t) => h('span', { class: 'pill ' + (t === 'Paid' ? 'paid' : /Overdue/.test(t) ? 'overdue' : 'unpaid') }, t);
+    const paint = async () => {
+      const month = h('input', { type: 'month', value: st.cycle, 'aria-label': 'Month', onchange: (e) => { if (e.target.value) { st.cycle = e.target.value; st.cls = null; paint(); } } });
+      out.replaceChildren(h('div', { class: 'toolrow' }, h('label', { class: 'chk' }, 'Month ', month)), h('p', { class: 'empty' }, 'Loading.'));
+      let rows; try { rows = group(await load()); } catch (er) { out.replaceChildren(h('p', { class: 'err' }, failText(er))); return; }
+      const names = [...S.classes, ...rows.map((r) => r.cls)].filter((c, i, a) => a.indexOf(c) === i);
+      const head2 = h('div', { class: 'toolrow' }, h('label', { class: 'chk' }, 'Month ', month), h('button', { type: 'button', onclick: () => guard(() => go('Fees')) }, 'Record a payment in Fees'));
+      if (!st.cls) {
+        out.replaceChildren(head2, h('div', { class: 'ccards' }, names.map((c) => { const l = rows.filter((r) => r.cls === c); const billed = l.reduce((t, r) => t + r.billed, 0); const paid = l.reduce((t, r) => t + r.paid, 0); const n = (k) => l.filter((r) => r.status.startsWith(k)).length;
+          return h('button', { type: 'button', class: 'ccard', onclick: () => { st.cls = c; st.filter = 'all'; st.q = ''; paint(); } }, h('b', {}, c), h('span', { class: 'hint' }, l.length + (l.length === 1 ? ' student' : ' students')),
+            h('div', { class: 'cnums' }, h('span', {}, h('small', {}, 'Billed'), inr(billed)), h('span', {}, h('small', {}, 'Collected'), inr(paid)), h('span', {}, h('small', {}, 'Pending'), inr(billed - paid))),
+            h('div', { class: 'chips' }, h('span', { class: 'chip' }, n('Paid') + ' paid'), h('span', { class: 'chip mute' }, n('Partial') + ' partial'), h('span', { class: 'chip mute' }, (n('Unpaid') + n('Overdue')) + ' unpaid'))); })));
+        return;
+      }
+      const all = rows.filter((r) => r.cls === st.cls); const FILTERS = [['all', 'All'], ['Paid', 'Paid'], ['Partial', 'Partial'], ['Unpaid', 'Unpaid'], ['Overdue', 'Overdue']];
+      const shown = all.filter((r) => (st.filter === 'all' || r.status.startsWith(st.filter) || (st.filter === 'Overdue' && /Overdue/.test(r.status))) && (!st.q || r.name.toLowerCase().includes(st.q))).sort((a, b) => (a.name < b.name ? -1 : 1));
+      const search = h('input', { type: 'search', placeholder: 'Search student', 'aria-label': 'Search student', value: st.q, oninput: (e) => { st.q = e.target.value.trim().toLowerCase(); paint(); } });
+      const tot = (k) => all.reduce((t, r) => t + r[k], 0);
+      out.replaceChildren(head2, h('div', { class: 'crumb' }, h('button', { type: 'button', onclick: () => { st.cls = null; paint(); } }, '← All classes'), h('span', {}, st.cls + ' · ' + all.length + ' students')),
+        h('div', { class: 'stats' }, stat('Billed', inr(tot('billed'))), stat('Collected', inr(tot('paid'))), stat('Pending this month', inr(tot('bal'))), stat('Earlier dues', inr(tot('prev')))),
+        h('div', { class: 'toolrow' }, search, h('span', { class: 'seg' }, FILTERS.map(([k, l]) => h('button', { type: 'button', 'aria-pressed': st.filter === k ? 'true' : 'false', onclick: () => { st.filter = k; paint(); } }, l)))),
+        shown.length ? h('div', { class: 'tbl' }, h('table', {}, h('thead', {}, h('tr', {}, ['Student', 'Guardian', 'Fee', 'Paid', 'Due', 'Earlier due', 'Status'].map((x) => h('th', {}, x)))),
+          h('tbody', {}, shown.map((r) => h('tr', {}, h('td', {}, h('b', {}, r.name)), h('td', {}, r.mobile || ''), h('td', {}, inr(r.billed)), h('td', {}, inr(r.paid)), h('td', {}, inr(r.bal)), h('td', {}, r.prev ? inr(r.prev) : '-'), h('td', {}, pill(r.status))))))) : h('p', { class: 'empty' }, all.length ? 'No student matches.' : 'No students in this class for this month.'));
+    };
+    paint(); return out;
+  }
+  function feeMore() {
+    return h('div', { class: 'navcards' },
+      h('button', { type: 'button', class: 'navcard', onclick: () => guard(() => go('Fees')) }, icon('wallet'), h('span', { class: 'nct' }, h('b', {}, 'Collect fees, history and receipts'), h('small', {}, 'The payment method is chosen each time you record a payment.')), icon('arrow')),
+      h('button', { type: 'button', class: 'navcard', onclick: () => guard(() => go('Students')) }, icon('user'), h('span', { class: 'nct' }, h('b', {}, 'Fee and due day for one student'), h('small', {}, 'Set in the student form. Changes start from the month you choose.')), icon('arrow')),
+      inst.type === 'coaching' ? h('button', { type: 'button', class: 'navcard', onclick: () => guard(() => go('Batches')) }, icon('layers'), h('span', { class: 'nct' }, h('b', {}, 'Special fee for a batch (optional)'), h('small', {}, 'Use only when one batch pays differently from its class.')), icon('arrow')) : null);
   }
   function brandingSec() {
     const box = h('div', {}); const out = h('div', {}, head('Branding & logo', 'Your logo is printed at the top of your fee receipts.'), box);
