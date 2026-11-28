@@ -15,6 +15,7 @@ const GROUPS = [['All subjects', null], ['Science group', ['Mathematics', 'Scien
 const subjectsOf = (r) => (Array.isArray(r?.subjects) && r.subjects.length ? r.subjects : String(r?.subject || '').split(',').map((x) => x.trim()).filter(Boolean));
 const subjectSummary = (r) => { const l = subjectsOf(r); return l.length > 4 ? l.length + ' subjects' : l.join(', '); };
 const STATUS_LABEL = { paid: 'Paid', unpaid: 'Unpaid', overdue: 'Overdue' };
+const statusText = (x) => (x.status !== 'paid' && x.paidPaise > 0 ? 'Partial' + (x.status === 'overdue' ? ' · Overdue' : '') : STATUS_LABEL[x.status]);
 
 export function mountTuition({ section, inst, call, h, body, go }) {
   const tenantId = inst.tenantId;
@@ -162,7 +163,7 @@ export function mountTuition({ section, inst, call, h, body, go }) {
         const charges = [...c.items].sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)); const due = charges.reduce((t, x) => t + x.balancePaise, 0); const paid = p.items.filter((x) => x.status === 'posted').reduce((t, x) => t + x.amountPaise, 0);
         out.replaceChildren(h('div', { class: 'actions' }, h('button', { type: 'button', onclick: draw }, '← Back to students')), h('h2', {}, s.name + ' · fee history'),
           h('div', { class: 'grid' }, card('Total paid', money(paid)), card('Still due', money(due))),
-          h('h2', {}, 'Charges'), table(['For', 'Due date', 'Amount', 'Paid', 'Balance', 'Status'], charges.map((x) => h('tr', {}, h('td', {}, x.kind === 'monthly' ? monthLabel(x.cycle) : x.kind === 'admission' ? 'Admission fee' : 'Opening balance'), h('td', {}, dmy(x.dueDate)), h('td', {}, money(x.amountPaise)), h('td', {}, money(x.paidPaise)), h('td', {}, money(x.balancePaise)), h('td', {}, h('span', { class: 'pill ' + x.status }, STATUS_LABEL[x.status])))), 'No charges yet.'),
+          h('h2', {}, 'Charges'), table(['For', 'Due date', 'Amount', 'Paid', 'Balance', 'Status'], charges.map((x) => h('tr', {}, h('td', {}, x.kind === 'monthly' ? monthLabel(x.cycle) : x.kind === 'admission' ? 'Admission fee' : 'Opening balance'), h('td', {}, dmy(x.dueDate)), h('td', {}, money(x.amountPaise)), h('td', {}, money(x.paidPaise)), h('td', {}, money(x.balancePaise)), h('td', {}, h('span', { class: 'pill ' + x.status }, statusText(x))))), 'No charges yet.'),
           h('h2', {}, 'Payments'), table(['Date', 'Receipt', 'Amount', 'Method', 'Status', ''], p.items.map((x) => h('tr', {}, h('td', {}, dmy(x.paidOn)), h('td', {}, x.receiptNo), h('td', {}, money(x.amountPaise)), h('td', {}, x.method.toUpperCase()), h('td', {}, h('span', { class: 'pill ' + (x.status === 'posted' ? 'active' : 'archived') }, x.status)),
             h('td', {}, h('button', { type: 'button', onclick: () => showReceipt(x.receiptNo).catch((e) => window.alert(failText(e))) }, 'Receipt')))), 'No payments yet.'));
       } catch (e) { out.replaceChildren(h('div', { class: 'actions' }, h('button', { type: 'button', onclick: draw }, '← Back')), h('p', { class: 'err' }, failText(e))); }
@@ -205,27 +206,47 @@ export function mountTuition({ section, inst, call, h, body, go }) {
       const scope = sel('scope', [{ value: 'month', label: 'One month' }, { value: 'due', label: 'All unpaid dues' }], state.scope); scope.addEventListener('change', () => { state.scope = scope.value; draw(); });
       const owed = r.items.reduce((t, x) => t + x.balancePaise, 0);
       out.replaceChildren(h('div', { class: 'toolbar' }, scope, state.scope === 'month' ? month : null, h('b', {}, 'Due in view: ' + money(owed))),
-        table(['Student', 'For', 'Due date', 'Amount', 'Paid', 'Balance', 'Status', ''], r.items.map((x) => h('tr', {}, h('td', {}, h('b', {}, x.studentName), h('br'), h('small', {}, x.className + (x.guardianMobile ? ' · ' + x.guardianMobile : ''))),
+        table(['Student', 'For', 'Due date', 'Amount', 'Paid', 'Balance', ...(state.scope === 'month' ? ['Earlier due', 'Total to collect'] : []), 'Status', ''], r.items.map((x) => h('tr', {}, h('td', {}, h('b', {}, x.studentName), h('br'), h('small', {}, x.className + (x.guardianMobile ? ' · ' + x.guardianMobile : ''))),
           h('td', {}, x.kind === 'monthly' ? monthLabel(x.cycle) : x.kind === 'admission' ? 'Admission fee' : 'Opening balance'), h('td', {}, dmy(x.dueDate)), h('td', {}, money(x.amountPaise)), h('td', {}, money(x.paidPaise)), h('td', {}, money(x.balancePaise)),
-          h('td', {}, h('span', { class: 'pill ' + x.status }, STATUS_LABEL[x.status])),
-          h('td', { class: 'row-actions' }, x.balancePaise > 0 ? h('button', { class: 'gold', type: 'button', onclick: () => payForm(out, x) }, 'Record payment') : null, h('button', { type: 'button', onclick: () => adjustForm(out, x) }, 'Adjust')))),
+          ...(state.scope === 'month' ? [h('td', {}, x.prevDuePaise ? money(x.prevDuePaise) : '—'), h('td', {}, h('b', {}, money(x.balancePaise + x.prevDuePaise)))] : []),
+          h('td', {}, h('span', { class: 'pill ' + x.status }, statusText(x))),
+          h('td', { class: 'row-actions' }, x.balancePaise > 0 || x.prevDuePaise > 0 ? h('button', { class: 'gold', type: 'button', onclick: () => payForm(out, x) }, 'Record payment') : null, h('button', { type: 'button', onclick: () => historyView(out, x) }, 'History'), h('button', { type: 'button', onclick: () => adjustForm(out, x) }, 'Adjust')))),
           'Nothing to show. Add students with a monthly fee and their charges appear here.'));
     };
     const payForm = (out, x) => {
-      let key = newKey();
+      let key = newKey(); const carry = (x.prevDuePaise || 0) > 0;
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); const btn = f.querySelector('button[type=submit]'); btn.disabled = true; say(msg, 'Saving.');
         try { const r = await api('tuitionPaymentRecord', { studentId: x.studentId, chargeId: fd.get('apply') === 'this' ? x.id : '', amount: fd.get('amount'), method: fd.get('method'), paidOn: fd.get('paidOn'), note: fd.get('note'), idempotencyKey: key });
           say(msg, (r.duplicate ? 'Already saved. Receipt ' : 'Saved. Receipt ') + r.receiptNo, true); await draw(); showReceipt(r.receiptNo).catch(() => {}); }
         catch (er) { btn.disabled = false; showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
-        h('h2', {}, 'Record payment'), h('p', {}, x.studentName + ' · balance on this item ' + money(x.balancePaise)),
-        field('Amount received (₹)', inp('amount', 'text', rupees(x.balancePaise), { inputmode: 'decimal' }), 'amount'),
+        h('h2', {}, 'Record payment'), h('p', {}, x.studentName + ' · balance on this item ' + money(x.balancePaise) + (carry ? ' + earlier due ' + money(x.prevDuePaise) + ' = ' + money(x.balancePaise + x.prevDuePaise) + ' to collect' : '')),
+        field('Amount received (₹)', inp('amount', 'text', rupees(carry ? x.balancePaise + x.prevDuePaise : x.balancePaise), { inputmode: 'decimal' }), 'amount'),
         h('div', { class: 'two' }, field('Method', sel('method', [{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }, { value: 'bank', label: 'Bank transfer' }], 'cash'), 'method'), field('Date received', inp('paidOn', 'date', today(), { max: today() }), 'paidOn')),
         field('Note (optional)', inp('note', 'text', '', { maxlength: 100 }), 'note'),
-        h('label', {}, 'Apply to', sel('apply', [{ value: 'this', label: 'This item only' }, { value: 'oldest', label: 'Oldest dues first (all items of this student)' }], 'this')),
-        h('p', { class: 'hint' }, 'A part payment is allowed. You cannot take more than is due.'),
+        h('label', {}, 'Apply to', sel('apply', [{ value: 'this', label: 'This item only' }, { value: 'oldest', label: 'Oldest dues first (all items of this student)' }], carry ? 'oldest' : 'this')),
+        h('p', { class: 'hint' }, 'A part payment is allowed and the rest stays due. Whatever is not paid carries forward and is shown with next month\'s fee. You cannot take more than is due.'),
         h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save and get receipt'), h('button', { type: 'button', onclick: draw }, 'Cancel')));
       out.replaceChildren(f);
+    };
+    // Every payment applied to one fee item: when it came, how much, how, the receipt, and what is left. Unpaid money carries forward.
+    const historyView = async (out, x) => {
+      out.replaceChildren(loading());
+      try {
+        const p = await api('tuitionPayments', { studentId: x.studentId });
+        const mine = p.items.map((q) => ({ q, part: (q.allocations || []).filter((l) => l.chargeId === x.id).reduce((t, l) => t + l.amountPaise, 0) })).filter((m) => m.part > 0).sort((a, b) => (a.q.paidOn < b.q.paidOn ? -1 : a.q.paidOn > b.q.paidOn ? 1 : a.q.receiptNo < b.q.receiptNo ? -1 : 1));
+        const live = mine.filter((m) => m.q.status === 'posted'); let left = x.amountPaise;
+        const rows = mine.map((m) => { const ok = m.q.status === 'posted'; if (ok) left -= m.part;
+          return h('tr', {}, h('td', {}, dmy(m.q.paidOn)), h('td', {}, money(m.part)), h('td', {}, ok ? money(left) : '—'), h('td', {}, m.q.method.toUpperCase()), h('td', {}, m.q.receiptNo), h('td', {}, h('span', { class: 'pill ' + (ok ? 'paid' : 'overdue') }, ok ? 'Posted' : 'Reversed')), h('td', {}, m.q.note || (ok ? '' : m.q.reverseReason || '')),
+            h('td', {}, h('button', { type: 'button', onclick: () => showReceipt(m.q.receiptNo).catch((e) => window.alert(failText(e))) }, 'Receipt'))); });
+        const last = live.length ? live[live.length - 1].q.paidOn : '';
+        out.replaceChildren(h('div', { class: 'actions' }, h('button', { type: 'button', onclick: draw }, '← Back to fees')),
+          h('h2', {}, x.studentName + ' · ' + (x.kind === 'monthly' ? monthLabel(x.cycle) : x.kind === 'admission' ? 'Admission fee' : 'Opening balance') + ' · payment history'),
+          h('div', { class: 'grid' }, card('Fee', money(x.amountPaise)), card('Paid so far', money(x.paidPaise)), card('Still due', money(x.balancePaise)), card('Payments received', String(live.length)), card('Last payment', last ? dmy(last) : 'None yet')),
+          x.balancePaise > 0 ? h('p', { class: 'hint' }, 'Status: ' + statusText(x) + '. The ' + money(x.balancePaise) + ' still due carries forward: it is added to next month\'s fee (see "Earlier due" and "Total to collect" on the next month).') : h('p', { class: 'hint' }, 'This item is fully paid.'),
+          table(['Date received', 'Amount', 'Due after this', 'Method', 'Receipt', 'Status', 'Note', ''], rows, 'No payment has been recorded for this item yet.'),
+          x.balancePaise > 0 ? h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'button', onclick: () => payForm(out, x) }, 'Record payment for the due')) : null);
+      } catch (e) { out.replaceChildren(h('div', { class: 'actions' }, h('button', { type: 'button', onclick: draw }, '← Back')), h('p', { class: 'err' }, failText(e))); }
     };
     const adjustForm = (out, x) => {
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {

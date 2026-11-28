@@ -2237,8 +2237,12 @@ exports.tuitionFees = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (re
   const ids = [...new Set(snap.docs.map((d) => d.data().studentId))];
   const refs = ids.map((id) => ctx.doc('students/' + id)); const studs = refs.length ? await db.getAll(...refs) : [];
   const map = {}; studs.forEach((s) => { if (s.exists) map[s.id] = s.data(); });
+  // Carry forward: what the student still owes from EARLIER items is shown next to this month's fee, so next month reads 3500 + 1000 = 4500.
+  const openBy = {};
+  if (!only && !open) { const o = await ctx.col('feeCharges').where('balancePaise', '>', 0).limit(600).get(); o.docs.forEach((q) => { const y = q.data(); (openBy[y.studentId] = openBy[y.studentId] || []).push({ id: q.id, dueDate: y.dueDate, balancePaise: y.balancePaise }); }); }
   const items = snap.docs.map((d) => { const x = d.data(); const s = map[x.studentId] || {};
-    return { id: d.id, studentId: x.studentId, studentName: s.name || '', className: s.className || '', guardianMobile: s.guardianMobile || '', kind: x.kind, cycle: x.cycle, dueDate: x.dueDate, amountPaise: x.amountPaise, paidPaise: x.paidPaise, balancePaise: x.balancePaise, status: chargeStatus(x, today) }; })
+    const prevDuePaise = (openBy[x.studentId] || []).filter((o) => o.id !== d.id && o.dueDate < x.dueDate).reduce((t, o) => t + o.balancePaise, 0);
+    return { id: d.id, studentId: x.studentId, studentName: s.name || '', className: s.className || '', guardianMobile: s.guardianMobile || '', kind: x.kind, cycle: x.cycle, dueDate: x.dueDate, amountPaise: x.amountPaise, paidPaise: x.paidPaise, balancePaise: x.balancePaise, prevDuePaise, status: chargeStatus(x, today) }; })
     .sort((a, b) => (a.studentName < b.studentName ? -1 : a.studentName > b.studentName ? 1 : a.dueDate < b.dueDate ? -1 : 1));
   return { cycle, scope: open ? 'due' : 'month', items, today };
 });
@@ -2318,7 +2322,7 @@ exports.tuitionPayments = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async
   else { const from = validDate(data.from) ? data.from : todayIST().slice(0, 8) + '01'; const to = validDate(data.to) ? data.to : '9999-12-31'; snap = await ctx.col('payments').where('paidOn', '>=', from).where('paidOn', '<=', to).limit(500).get(); }
   const ids = [...new Set(snap.docs.map((d) => d.data().studentId))];
   const studs = ids.length ? await db.getAll(...ids.map((id) => ctx.doc('students/' + id))) : []; const names = {}; studs.forEach((s) => { if (s.exists) names[s.id] = s.data().name; });
-  const items = snap.docs.map((d) => { const x = d.data(); return { id: d.id, studentId: x.studentId, studentName: names[x.studentId] || '', amountPaise: x.amountPaise, method: x.method, paidOn: x.paidOn, receiptNo: x.receiptNo, status: x.status, note: x.note }; })
+  const items = snap.docs.map((d) => { const x = d.data(); return { id: d.id, studentId: x.studentId, studentName: names[x.studentId] || '', amountPaise: x.amountPaise, method: x.method, paidOn: x.paidOn, receiptNo: x.receiptNo, status: x.status, note: x.note, reverseReason: x.reverseReason || '', allocations: (x.allocations || []).map((l) => ({ chargeId: l.chargeId, amountPaise: l.amountPaise })) }; })
     .sort((a, b) => (a.paidOn < b.paidOn ? 1 : a.paidOn > b.paidOn ? -1 : a.receiptNo < b.receiptNo ? 1 : -1));
   return { items };
 });
