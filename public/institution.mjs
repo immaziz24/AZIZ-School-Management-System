@@ -2,7 +2,7 @@
 // the restricted screen for a suspended account. The records themselves are read through server functions only.
 import { app } from './firebase-client.mjs';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { mountTuition } from './tuition-ui.mjs?v=tc-11';
+import { mountTuition } from './tuition-ui.mjs?v=tc-12';
 import { mountCoaching, coachingExtras } from './coaching-ui.mjs?v=tc-1';
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
@@ -115,8 +115,10 @@ function render(mode) {
   if (current === 'Dashboard') body.append(h('p', { style: 'color:var(--mut)' }, isTeacher ? 'Teacher · ' + inst.name : (inst.type === 'coaching' ? 'Coaching centre' : 'Tuition') + ' · Free plan · AZIZ branding on receipts'));
   const go = (to, mode) => { current = to; render(mode === 'add' ? 'Students+add' : undefined); };
   const args = { section: mode || current, inst, call, h, body, go };
+  // The logo block of a coaching centre is shown inside the Settings workspace (Branding & Logo), not below it.
+  if (inst.type === 'coaching' && !isTeacher) args.brandingMount = (box) => coachingExtras({ ...args, body: box });
   const handled = (inst.type === 'coaching' && mountCoaching(args)) || mountTuition(args);
-  if (handled && inst.type === 'coaching' && !isTeacher) coachingExtras(args);
+  if (handled && inst.type === 'coaching' && !isTeacher && args.section !== 'Settings') coachingExtras(args);
   if (!handled) body.append(h('p', { class: 'empty' }, 'This coaching section opens in the next release. Everything you need for students, fees and attendance is already available.'));
   const bar = h('header', { class: 'bar' }, h('div', { class: 'brand' }, h('i', {}, 'A'), h('span', {}, 'AZIZ'), h('span', { class: 'tag' }, inst.type)),
     h('div', { style: 'display:flex;gap:.6rem;align-items:center;flex-wrap:wrap' },
