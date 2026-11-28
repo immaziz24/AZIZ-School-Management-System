@@ -7,6 +7,21 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_NAME = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
 const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Sanskrit', 'Mathematics', 'Science', 'Physical Science', 'Life Science', 'Environmental Studies', 'Social Science', 'History', 'Geography', 'Civics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge', 'Spoken English', 'Handwriting', 'Drawing', 'Art', 'Music', 'Dance'];
 
+// A one-page PDF that holds one JPEG picture (made in the browser, nothing is sent anywhere).
+export function pdfFromJpeg(jpeg, w, h, pageW = 595.28, pageH = 841.89) {
+  const enc = new TextEncoder(); const parts = []; const offs = []; let len = 0;
+  const put = (x) => { const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
+  const obj = (n, body) => { offs[n] = len; put(n + ' 0 obj\n'); put(body); put('\nendobj\n'); };
+  put('%PDF-1.4\n');
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>'); obj(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+  obj(3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pageW + ' ' + pageH + '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>');
+  offs[4] = len; put('4 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + w + ' /Height ' + h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpeg.length + ' >>\nstream\n'); put(jpeg); put('\nendstream\nendobj\n');
+  const cs = 'q ' + pageW + ' 0 0 ' + pageH + ' 0 0 cm /Im0 Do Q'; obj(5, '<< /Length ' + cs.length + ' >>\nstream\n' + cs + '\nendstream');
+  const xref = len; let x = 'xref\n0 6\n0000000000 65535 f \n'; for (let i = 1; i <= 5; i++) x += String(offs[i]).padStart(10, '0') + ' 00000 n \n';
+  put(x + 'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF');
+  const out = new Uint8Array(len); let p = 0; for (const b of parts) { out.set(b, p); p += b.length; } return out;
+}
+
 export function mountCoaching({ section, inst, call, h, body, go }) {
   const tenantId = inst.tenantId; const isTeacher = inst.role === 'teacher';
   const api = (name, data) => call(name, { tenantId, ...(data || {}) });
@@ -49,29 +64,51 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
       h('p', { class: 'hint' }, 'A teacher logs in at azizschoolmanagementsystem.com/coaching with the email you enter here: "Teacher? Create your login".'),
       table(['Name', 'Email', 'Mobile', 'Qualification', 'Subjects', 'Classes', 'Batches', 'Status', ''], items.map((t) => h('tr', {}, h('td', {}, t.name), h('td', {}, t.email), h('td', {}, t.mobile || ''), h('td', {}, [t.highestQualification ? t.highestQualification + (t.qualificationSubject ? ' in ' + t.qualificationSubject : '') : '', t.bed ? 'B.Ed' : '', t.deled ? 'D.El.Ed' : ''].filter(Boolean).join(', ') || '-'), h('td', {}, t.subjects.length > 4 ? t.subjects.length + ' subjects' : t.subjects.join(', ')), h('td', {}, (t.classes || []).join(', ') || '-'), h('td', {}, t.batches.map((x) => x.name).join(', ') || '-'),
         h('td', {}, t.status === 'invited' ? 'Invited' : t.status === 'active' ? 'Active' : 'Switched off'),
-        h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(t) }, 'Edit'), h('button', { type: 'button', onclick: () => downloadProfile(t) }, 'Download profile'), h('button', { type: 'button', onclick: async () => { try { await api('coachingTeacherStatus', { teacherId: t.id, status: t.status === 'inactive' ? 'active' : 'inactive' }); draw(); } catch (e) { window.alert(failText(e)); } } }, t.status === 'inactive' ? 'Switch on' : t.status === 'invited' ? 'Cancel invite' : 'Switch off')))), 'No teachers yet. Add your first teacher.'));
+        h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(t) }, 'Edit'), h('button', { type: 'button', onclick: () => downloadPdf(t) }, 'PDF'), h('button', { type: 'button', onclick: () => downloadPng(t) }, 'Card image'), h('button', { type: 'button', onclick: async () => { try { await api('coachingTeacherStatus', { teacherId: t.id, status: t.status === 'inactive' ? 'active' : 'inactive' }); draw(); } catch (e) { window.alert(failText(e)); } } }, t.status === 'inactive' ? 'Switch on' : t.status === 'invited' ? 'Cancel invite' : 'Switch off')))), 'No teachers yet. Add your first teacher.'));
     // Shrinks a chosen picture to a small square-ish JPEG so it stays well under the server limit.
     const shrink = (file) => new Promise((res, rej) => { const url = URL.createObjectURL(file); const im = new Image();
       im.onload = () => { const k = Math.min(1, 320 / Math.max(im.width, im.height)); const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(im.width * k)); cv.height = Math.max(1, Math.round(im.height * k));
         const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(im, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url); res(cv.toDataURL('image/jpeg', 0.85)); };
       im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('That file is not a picture.')); }; im.src = url; });
-    const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-    // Downloads one teacher's profile as a single file that opens in any browser and prints to PDF.
-    const downloadProfile = async (t) => {
+    // Draws the teacher profile on a canvas: a printable sheet (A4, for the PDF) or a card (for the picture). The photo is placed from the top so heads are never cut off.
+    const loadImg = (src) => new Promise((res) => { if (!src) { res(null); return; } const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; });
+    const paintProfile = async (t, mode) => {
       let photo = ''; if (t.hasPhoto) { try { photo = (await api('coachingTeacherPhotoGet', { teacherId: t.id })).dataUrl || ''; } catch (e) { photo = ''; } }
-      const yes = (v) => (v ? 'Yes' : 'No'); const rows = [['Email', t.email], ['Mobile', t.mobile || '-'], ['Highest qualification', t.highestQualification || '-'], ['Subject of higher education', t.qualificationSubject || '-'], ['D.El.Ed', yes(t.deled)], ['B.Ed', yes(t.bed)], ['M.Ed', yes(t.med)], ['TET / CTET passed', yes(t.tet)], ['Other qualifications', t.otherQualifications || '-'],
-        ['Experience', t.experienceYears === null || t.experienceYears === undefined ? '-' : t.experienceYears + ' years'], ['Joined', t.joiningDate || '-'], ['Subjects', (t.subjects || []).join(', ') || '-'], ['Classes', (t.classes || []).join(', ') || '-'], ['Batches', (t.batches || []).map((x) => x.name).join(', ') || '-'], ['Address', t.address || '-'], ['Notes', t.notes || '-']];
-      const doc = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + esc(t.name) + ' - Teacher profile</title><style>body{font-family:Arial,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;color:#111}h1{margin:.2rem 0}.top{display:flex;gap:1.2rem;align-items:center;border-bottom:2px solid #b8923a;padding-bottom:1rem}img{width:120px;height:120px;object-fit:cover;border-radius:8px;border:1px solid #ccc}table{width:100%;border-collapse:collapse;margin-top:1rem}td{padding:.5rem;border-bottom:1px solid #ddd;vertical-align:top}td:first-child{width:35%;font-weight:bold;color:#444}p.f{color:#777;font-size:.8rem;margin-top:2rem}@media print{button{display:none}}</style></head><body><div class="top">' +
-        (photo ? '<img src="' + esc(photo) + '" alt="Teacher photo">' : '') + '<div><h1>' + esc(t.name) + '</h1><div>' + esc(inst.name || (inst.profile && inst.profile.name) || '') + ' · Teacher profile</div></div></div><table>' + rows.map(([k, v]) => '<tr><td>' + esc(k) + '</td><td>' + esc(v) + '</td></tr>').join('') + '</table><p class="f">Downloaded from AZIZ School Management System on ' + new Date().toLocaleDateString('en-IN') + '. Use Print and choose Save as PDF to keep a PDF copy.</p></body></html>';
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([doc], { type: 'text/html' })); a.download = (t.name || 'teacher').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) + '-profile.html'; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      const img = await loadImg(photo); const sheet = mode === 'sheet'; const W = sheet ? 1240 : 1100; const yes = (v) => (v ? 'Yes' : 'No');
+      const centre = inst.name || (inst.profile && inst.profile.name) || '';
+      const qual = [t.highestQualification, t.qualificationSubject ? '(' + t.qualificationSubject + ')' : ''].filter(Boolean).join(' ') || '-';
+      const training = [t.deled ? 'D.El.Ed' : '', t.bed ? 'B.Ed' : '', t.med ? 'M.Ed' : '', t.tet ? 'TET / CTET' : ''].filter(Boolean).join(', ') || '-';
+      const rows = sheet
+        ? [['Teacher ID', t.id], ['Status', t.status === 'invited' ? 'Invited (login not created yet)' : t.status === 'active' ? 'Active' : 'Switched off'], ['Mobile', t.mobile || '-'], ['Email', t.email], ['Highest qualification', qual], ['Teaching training', training], ['Other qualifications', t.otherQualifications || '-'], ['Experience', t.experienceYears === null || t.experienceYears === undefined ? '-' : t.experienceYears + ' years'], ['Joined', dmy(t.joiningDate) || '-'], ['Subjects', (t.subjects || []).join(', ') || '-'], ['Classes', (t.classes || []).join(', ') || '-'], ['Batches', (t.batches || []).map((x) => x.name).join(', ') || '-'], ['Address', t.address || '-'], ['Notes', t.notes || '-']]
+        : [['Mobile', t.mobile || '-'], ['Email', t.email], ['Qualification', qual], ['Teaching training', training], ['Subjects', (t.subjects || []).join(', ') || '-']];
+      const cv = document.createElement('canvas'); cv.width = W; const g = cv.getContext('2d'); const FONT = 'Arial, Helvetica, sans-serif';
+      const wrap = (text, font, maxW) => { g.font = font; const words = String(text).split(/\s+/); const lines = []; let cur = ''; for (const w of words) { const test = cur ? cur + ' ' + w : w; if (g.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; } else cur = test; } lines.push(cur); return lines; };
+      const lh = sheet ? 44 : 40; const labelW = sheet ? 330 : 250; const padX = sheet ? 80 : 60; const valW = W - padX * 2 - labelW; const head = sheet ? 360 : 330;
+      const laid = rows.map(([k, v]) => ({ k, lines: wrap(v, (sheet ? '30px ' : '28px ') + FONT, valW) })); const bodyH = laid.reduce((s, r) => s + r.lines.length * lh + 22, 0);
+      const H = sheet ? 1754 : head + bodyH + 150; cv.height = H; g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#0D1424'; g.fillRect(0, 0, W, head); g.fillStyle = '#D4B367'; g.fillRect(0, head, W, 8);
+      const ps = sheet ? 240 : 220; const px = padX; const py = (head - ps) / 2;
+      g.save(); g.beginPath(); g.roundRect ? g.roundRect(px, py, ps, ps, 22) : g.rect(px, py, ps, ps); g.clip();
+      if (img) { const k = Math.max(ps / img.width, ps / img.height); g.drawImage(img, px + (ps - img.width * k) / 2, py, img.width * k, img.height * k); }
+      else { g.fillStyle = '#293346'; g.fillRect(px, py, ps, ps); g.fillStyle = '#E5C77D'; g.font = 'bold ' + Math.round(ps / 2) + 'px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText((t.name || '?').trim().charAt(0).toUpperCase(), px + ps / 2, py + ps / 2); g.textAlign = 'left'; g.textBaseline = 'alphabetic'; }
+      g.restore(); g.strokeStyle = '#D4B367'; g.lineWidth = 4; g.beginPath(); g.roundRect ? g.roundRect(px, py, ps, ps, 22) : g.rect(px, py, ps, ps); g.stroke();
+      const tx = px + ps + 50; const tw = W - tx - padX; g.fillStyle = '#E5C77D'; g.font = 'bold 22px ' + FONT; g.fillText('TEACHER PROFILE', tx, py + 30);
+      let y = py + 90; g.fillStyle = '#F4F1E8'; for (const ln of wrap(t.name, 'bold ' + (sheet ? 52 : 46) + 'px Georgia, serif', tw)) { g.font = 'bold ' + (sheet ? 52 : 46) + 'px Georgia, serif'; g.fillText(ln, tx, y); y += sheet ? 60 : 54; }
+      g.fillStyle = '#94A3B8'; g.font = '28px ' + FONT; for (const ln of wrap(centre, '28px ' + FONT, tw)) { g.fillText(ln, tx, y + 6); y += 36; }
+      let yy = head + 8 + 50; g.textBaseline = 'alphabetic';
+      laid.forEach((r, i) => { const h2 = r.lines.length * lh + 22; if (i % 2 === 0) { g.fillStyle = '#F7F4EC'; g.fillRect(padX - 20, yy - lh + 8, W - padX * 2 + 40, h2); }
+        g.fillStyle = '#6B5A2A'; g.font = 'bold ' + (sheet ? 28 : 26) + 'px ' + FONT; g.fillText(r.k, padX, yy); g.fillStyle = '#111111'; g.font = (sheet ? 30 : 28) + 'px ' + FONT; r.lines.forEach((ln, j) => g.fillText(ln, padX + labelW, yy + j * lh)); yy += h2; });
+      g.fillStyle = '#8A8A8A'; g.font = '22px ' + FONT; g.fillText('AZIZ School Management System · ' + new Date().toLocaleDateString('en-IN'), padX, H - 40);
+      return cv;
     };
-    // Highest qualification is a real drop-down. A value saved earlier that is not in the list stays selectable.
-    const QUALS = ['Madhyamik / Class 10', 'Higher Secondary / Class 12', 'Graduate (B.A.)', 'Graduate (B.Sc.)', 'Graduate (B.Com.)', 'B.Tech', 'Post Graduate (M.A.)', 'Post Graduate (M.Sc.)', 'Post Graduate (M.Com.)', 'M.Tech', 'M.Phil', 'Ph.D.', 'Other'];
-    const qualBox = (value) => h('select', { name: 'highestQualification', 'aria-label': 'Highest qualification' }, h('option', { value: '' }, 'Choose highest qualification'),
-      [...new Set([...QUALS, ...(value ? [value] : [])])].map((x) => h('option', { value: x, selected: x === value ? true : undefined }, x)));
+    const saveBlob = (blob, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); };
+    const fileBase = (t) => (t.name || 'teacher').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) + '-profile';
+    const downloadPng = async (t) => { try { const cv = await paintProfile(t, 'card'); cv.toBlob((b) => saveBlob(b, fileBase(t) + '.png'), 'image/png'); } catch (e) { window.alert('Could not make the picture. Try again.'); } };
+    const downloadPdf = async (t) => { try { const cv = await paintProfile(t, 'sheet'); const url = cv.toDataURL('image/jpeg', 0.92); const bin = atob(url.split(',')[1]); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      saveBlob(new Blob([pdfFromJpeg(bytes, cv.width, cv.height)], { type: 'application/pdf' }), fileBase(t) + '.pdf'); } catch (e) { window.alert('Could not make the PDF. Try again.'); } };
     const form = (t) => {
       const photoFile = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'Teacher photo' }); const photoPrev = h('div', {});
-      const showPhoto = (u) => photoPrev.replaceChildren(u ? h('img', { src: u, alt: 'Teacher photo', style: 'width:96px;height:96px;object-fit:cover;border-radius:.5rem;border:1px solid #293346' }) : h('p', { class: 'hint' }, 'No photo yet.'));
+      const showPhoto = (u) => photoPrev.replaceChildren(u ? h('img', { src: u, alt: 'Teacher photo', style: 'width:96px;height:120px;object-fit:cover;object-position:center top;border-radius:.5rem;border:1px solid #293346' }) : h('p', { class: 'hint' }, 'No photo yet.'));
       showPhoto(''); if (t && t.hasPhoto) api('coachingTeacherPhotoGet', { teacherId: t.id }).then((r) => showPhoto(r.dataUrl)).catch(() => {});
       photoFile.addEventListener('change', async () => { const p = photoFile.files && photoFile.files[0]; if (p) { try { showPhoto(await shrink(p)); } catch (e) { showPhoto(''); window.alert(failText(e)); } } });
       const chk = (name, label, on) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name, value: 'yes', checked: on ? true : undefined }), label);
@@ -99,7 +136,7 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
         h('fieldset', { 'data-field': 'subjects' }, h('legend', {}, 'Subjects this teacher teaches'), h('div', { class: 'checks' }, [...new Set([...ALL_SUBJECTS, ...(t?.subjects || [])])].map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'subjects[]', value: o, checked: (t?.subjects || []).includes(o) ? true : undefined }), o))),
           h('input', { type: 'text', name: 'subjectsOther', maxlength: 120, placeholder: 'Other subjects, separated by commas', 'aria-label': 'Other subjects' }), h('span', { class: 'ferr', 'data-err': 'subjects' })),
         field('Notes (optional)', inp('notes', 'text', t?.notes, { maxlength: 200 }), 'notes'),
-        h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save teacher'), t ? h('button', { type: 'button', onclick: () => downloadProfile(t) }, 'Download profile') : null, h('button', { type: 'button', onclick: draw }, 'Cancel')));
+        h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save teacher'), t ? h('button', { type: 'button', onclick: () => downloadPdf(t) }, 'Download PDF') : null, t ? h('button', { type: 'button', onclick: () => downloadPng(t) }, 'Download card image') : null, h('button', { type: 'button', onclick: draw }, 'Cancel')));
       box.replaceChildren(f);
     };
     const assignClasses = (teachersList) => {
