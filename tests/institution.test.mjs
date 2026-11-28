@@ -143,3 +143,9 @@ test('the Settings workspace and the student form are wired to the academic modu
   for (const t of ['Centre Profile', 'Academic Setup', 'Fee Settings', 'Branding & Logo', 'Account & Security', 'Data & Privacy', 'Classes offered', 'Subject library', 'Class-subject mapping', 'Curriculum templates', 'Admission preferences', 'Copy to classes', 'Save as template']) assert.ok(ac.includes(t), t);
   assert.ok(read('.htaccess').match(/RewriteRule \^\(sign-in[^\n]*/)[0].includes('academic-ui\\.mjs'), 'academic-ui.mjs is whitelisted'); assert.match(portal, /location\.hash/); assert.match(portal, /history\.replaceState/); assert.ok(ac.includes("'Physical Science', 'Life Science'"), 'West Bengal science subjects'); assert.match(portal, /brandingMount/); assert.match(portal, /tuition-ui\.mjs\?v=tc-\d+/);
 });
+
+test('class fees are whole paise for sensible amounts only, and unsafe class names are dropped', () => {
+  const r = lib.checkInstitution('coaching', { ...coaching, classFees: { 'Class 5': 150000, 'Class 6': 99.5, 'Class 7': -1, 'Class 8': '500', 'Class 9': 100000001, '__x__': 100, 'a/b': 100 } });
+  assert.deepEqual(r.clean.classFees, { 'Class 5': 150000 }); assert.deepEqual(lib.checkInstitution('coaching', coaching).clean.classFees, {}); assert.deepEqual(lib.checkInstitution('coaching', { ...coaching, classFees: [1] }).clean.classFees, {});
+  assert.ok(src.includes('.classFees) || {})[c.className]'), 'the student save falls back to the class fee');
+});

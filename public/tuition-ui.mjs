@@ -1,6 +1,6 @@
 // Tuition and coaching shared screens (Phase 2): dashboard numbers, students, batches, fees, payments, receipts, attendance, reports, settings.
 // Every record is read and written through server functions that check the signed-in owner; this file only draws screens.
-import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-2';
+import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-3';
 const today = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 const money = (p) => '₹' + (Number(p || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: Number(p || 0) % 100 ? 2 : 0, maximumFractionDigits: 2 });
 const rupees = (p) => (Number(p || 0) / 100).toFixed(2).replace(/\.00$/, '');
@@ -186,14 +186,20 @@ export function mountTuition(args) {
     const form = (s) => {
       const classSel = choiceSelect('className', 'classes', s?.className, 'Choose a class');
       const prefs = prefsOf(profile); const card = subjectsCard({ h, profile, current: subjectsOf(s), editing: !!s, go });
-      classSel.querySelector('select').addEventListener('change', (ev) => card.useClass(ev.target.value));
+      classSel.querySelector('select').addEventListener('change', (ev) => { card.useClass(ev.target.value); autoFee(); });
+      // A new student's monthly fee starts from the batch fee, else the class fee (Settings → Fee Settings). Anything the owner types is never overwritten.
+      let lastAuto = ''; const feeBox = inp('monthlyFee', 'text', s ? rupees(s.monthlyFeePaise) : '', { inputmode: 'decimal', placeholder: '500' });
+      const batchSel = sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), s?.batchId || '', 'No batch yet');
+      function autoFee() { if (s) return; const cls = classSel.querySelector('select').value; const b = bl.find((x) => x.id === batchSel.value); const p = (b && b.feePaise > 0) ? b.feePaise : ((profile.classFees || {})[cls] || 0);
+        if (feeBox.value === '' || feeBox.value === lastAuto) { lastAuto = p ? rupees(p) : ''; feeBox.value = lastAuto; } }
+      batchSel.addEventListener('change', autoFee);
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = collectSubjects(fd, withOther(Object.fromEntries(fd.entries())));
         try { await api('tuitionStudentSave', { studentId: s ? s.id : '', values, feeEffectiveFrom: values.feeEffectiveFrom || '' }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, s ? 'Edit student' : 'New student'),
         h('h3', { class: 'fsec' }, 'Student information'),
         h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', classSel, 'className')),
-        h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Batch', sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), s?.batchId || '', 'No batch yet'), 'batchId')),
+        h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Batch', batchSel, 'batchId')),
         h('h3', { class: 'fsec' }, 'Academic information'), card,
         h('h3', { class: 'fsec' }, 'Guardian information'),
         h('div', { class: 'two' }, field('Guardian name', inp('guardianName', 'text', s?.guardianName, { maxlength: 80 }), 'guardianName'), field('Guardian mobile', inp('guardianMobile', 'tel', s?.guardianMobile, { placeholder: '+91 98300 12345' }), 'guardianMobile')),
@@ -201,7 +207,7 @@ export function mountTuition(args) {
         h('h3', { class: 'fsec' }, 'Admission information'),
         h('div', { class: 'two' }, field('Joining date', inp('joiningDate', 'date', s?.joiningDate || (prefs.autoDate ? today() : ''), { max: '9999-12-31' }), 'joiningDate'), field('Joining time (optional)', inp('joiningTime', 'time', s?.joiningTime || (!s && prefs.autoTime ? nowTime() : '')), 'joiningTime')),
         h('h3', { class: 'fsec' }, 'Fee information'),
-        h('div', { class: 'two' }, field('Monthly fee (₹)', inp('monthlyFee', 'text', s ? rupees(s.monthlyFeePaise) : '', { inputmode: 'decimal', placeholder: '500' }), 'monthlyFee'), field('Fee due day of month (1–31)', inp('dueDay', 'number', s?.dueDay ?? 5, { min: 1, max: 31 }), 'dueDay')),
+        h('div', { class: 'two' }, field('Monthly fee (₹)', feeBox, 'monthlyFee'), field('Fee due day of month (1–31)', inp('dueDay', 'number', s?.dueDay ?? 5, { min: 1, max: 31 }), 'dueDay')),
         s ? h('div', {}, field('If you change the fee or due day, it starts from (month)', inp('feeEffectiveFrom', 'month', nextMonth(), { min: today().slice(0, 7) }), 'feeEffectiveFrom'), h('p', { class: 'hint' }, 'Months before this keep their old fee. To fix a charge already created, use Fees → Adjust.' + upcomingFee(s))) : h('div', { class: 'two' },
           field('Admission fee (₹, optional)', inp('admissionFee', 'text', '', { inputmode: 'decimal' }), 'admissionFee'), field('Opening balance (₹, optional)', inp('openingBalance', 'text', '', { inputmode: 'decimal' }), 'openingBalance')),
         field('Notes (optional)', inp('notes', 'text', s?.notes, { maxlength: 300 }), 'notes'),

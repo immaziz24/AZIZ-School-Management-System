@@ -44,7 +44,7 @@ const makeProfile = () => ({ email: 'o@x.in', centreName: 'Bright', ownerName: '
   classes: ['Class 5', 'Class 6', 'Class 10'], subjects: ['English', 'Bengali', 'Mathematics', 'Science', 'General Knowledge', 'Physics'], classSubjects: { 'Class 10': ['English', 'Physics'] }, templates: [] });
 function setup() {
   const calls = []; const profile = makeProfile(); const inst = { name: 'Bright', type: 'coaching', role: 'owner', profile };
-  const api = async (fn, data) => { calls.push({ fn, data }); return { ok: true, name: 'Bright' }; };
+  const api = async (fn, data) => { calls.push({ fn, data }); if (fn === 'tuitionFees') return { items: globalThis.__feeItems || [] }; return { ok: true, name: 'Bright' }; };
   const body = new El('main'); const nav = [];
   ui.mountSettings({ inst, profile, api, h, body, go: (to) => nav.push(to), say: (el, t, ok) => { el.textContent = t; }, failText: (e) => String(e.message), fieldErrors: () => ({}), showErrors() {}, field: (l, i) => h('label', {}, l, i), inp: (n, t, v) => h('input', { name: n, type: t, value: v }), sel: (n, o, v) => h('select', { name: n }, o.map((x) => h('option', { value: x }, x))), brandingMount: null });
   return { calls, profile, body, nav };
@@ -133,4 +133,28 @@ test('Settings remembers where you were across a refresh, and West Bengal scienc
   press(body, 'button', 'Fee Settings'); assert.equal(saved.at(-1), '#Settings/fees');
   assert.ok(ui.ALL_SUBJECTS.includes('Physical Science') && ui.ALL_SUBJECTS.includes('Life Science'));
   delete globalThis.location; delete globalThis.history;
+});
+
+test('class-wise fees: amounts are saved in paise, bad amounts are refused, empty means not set', async () => {
+  const { body, calls } = setup(); press(body, 'button', 'Fee Settings'); assert.match(body.textContent, /Class-wise fees/); assert.match(body.textContent, /Class 5/);
+  const box = (n) => body.querySelectorAll('input').find((i) => i.attrs['aria-label'] === 'Monthly fee for ' + n);
+  box('Class 5').value = '1500'; box('Class 6').value = '999.5'; box('Class 10').value = 'abc'; press(body, 'button', 'Save class fees'); await tick();
+  assert.match(body.textContent, /Enter the fee for Class 10/); assert.equal(calls.filter((c) => c.fn === 'institutionProfileSave').length, 0);
+  box('Class 10').value = ''; press(body, 'button', 'Save class fees'); await tick();
+  const save = calls.filter((c) => c.fn === 'institutionProfileSave').pop(); assert.deepEqual(save.data.values.classFees, { 'Class 5': 150000, 'Class 6': 99950 });
+});
+
+test('students by class: classes list totals, a class opens its students with paid, partial, unpaid and overdue, and the filter works', async () => {
+  globalThis.__feeItems = [
+    { studentId: 'ST-A', studentName: 'Anika', className: 'Class 5', guardianMobile: '+911', amountPaise: 150000, paidPaise: 150000, balancePaise: 0, prevDuePaise: 0, status: 'paid' },
+    { studentId: 'ST-B', studentName: 'Bimal', className: 'Class 5', guardianMobile: '+912', amountPaise: 150000, paidPaise: 50000, balancePaise: 100000, prevDuePaise: 0, status: 'unpaid' },
+    { studentId: 'ST-C', studentName: 'Chitra', className: 'Class 5', guardianMobile: '+913', amountPaise: 150000, paidPaise: 0, balancePaise: 150000, prevDuePaise: 100000, status: 'overdue' },
+    { studentId: 'ST-D', studentName: 'Dev', className: 'Class 6', guardianMobile: '+914', amountPaise: 160000, paidPaise: 0, balancePaise: 160000, prevDuePaise: 0, status: 'unpaid' }];
+  const { body, calls } = setup(); press(body, 'button', 'Fee Settings'); press(body, 'button', 'Students by class'); await tick(); await tick();
+  assert.equal(calls.filter((c) => c.fn === 'tuitionFees').length, 1); assert.match(body.textContent, /Class 53 students/); assert.match(body.textContent, /Class 61 student/); assert.match(body.textContent, /1 paid/);
+  press(body, 'button', 'Class 5'); await tick(); await tick(); const t = body.textContent;
+  for (const n of ['Anika', 'Bimal', 'Chitra']) assert.ok(t.includes(n), n); assert.ok(!t.includes('Dev')); assert.match(t, /Paid/); assert.match(t, /Partial/); assert.match(t, /Overdue/); assert.match(t, /₹1,000/);
+  press(body, 'button', 'Partial'); await tick(); await tick(); assert.ok(body.textContent.includes('Bimal') && !body.textContent.includes('Anika'));
+  assert.equal(calls.filter((c) => c.fn === 'tuitionFees').length, 1, 'switching class or filter does not read again');
+  delete globalThis.__feeItems;
 });

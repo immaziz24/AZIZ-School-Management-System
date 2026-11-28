@@ -1488,6 +1488,11 @@ function checkInstitution(type, values, nowYear = new Date().getUTCFullYear()) {
   for (const c of Object.keys(csIn).slice(0, 40)) { if (!c || c.length > 40 || c === '__proto__' || /^__.*__$/.test(c) || c.includes('/')) continue; const l = listOf(csIn[c], 25, 40); if (l.length) classSubjects[c] = l; }
   clean.classSubjects = classSubjects;
   clean.archivedSubjects = listOf(v.archivedSubjects, 60, 40);
+  // Monthly fee for each class, in paise (whole numbers only, up to Rs 10,00,000). New students in a class start with it; existing students are not changed.
+  const cfIn = v.classFees && typeof v.classFees === 'object' && !Array.isArray(v.classFees) ? v.classFees : {};
+  const classFees = {};
+  for (const c of Object.keys(cfIn).slice(0, 40)) { if (!c || c.length > 40 || c === '__proto__' || /^__.*__$/.test(c) || c.includes('/')) continue; const n = cfIn[c]; if (Number.isInteger(n) && n > 0 && n <= 100000000) classFees[c] = n; }
+  clean.classFees = classFees;
   const templates = []; const tplIds = new Set();
   for (const t of (Array.isArray(v.templates) ? v.templates.slice(0, 20) : [])) {
     if (!t || typeof t !== 'object') continue;
@@ -2135,6 +2140,8 @@ exports.tuitionStudentSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, as
   if (editing && !STUDENT_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown student.');
   if (c.batchId) { const b = await ctx.doc('batches/' + c.batchId).get(); if (!BATCH_ID.test(c.batchId) || !b.exists || b.data().status !== 'active') throw new HttpsError('invalid-argument', 'Choose one of your active batches.');
     if (String((data.values || {}).monthlyFee ?? '').trim() === '' && b.data().feePaise > 0) c.monthlyFeePaise = b.data().feePaise; }
+  // No fee typed and no batch fee: the fee set for the student's class in Settings → Fee Settings starts the student off.
+  if (!editing && String((data.values || {}).monthlyFee ?? '').trim() === '' && !(c.monthlyFeePaise > 0)) { const cf = (((ctx.inst.profile || {}).classFees) || {})[c.className]; if (Number.isInteger(cf) && cf > 0) c.monthlyFeePaise = cf; }
   const now = Timestamp.now(); const cycle = cycleOf(todayIST());
   const studentId = editing || newRecordId('ST');
   const sRef = ctx.doc('students/' + studentId);

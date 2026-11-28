@@ -2,7 +2,7 @@
 // the restricted screen for a suspended account. The records themselves are read through server functions only.
 import { app } from './firebase-client.mjs';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { mountTuition } from './tuition-ui.mjs?v=tc-13';
+import { mountTuition } from './tuition-ui.mjs?v=tc-14';
 import { mountCoaching, coachingExtras } from './coaching-ui.mjs?v=tc-2';
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
