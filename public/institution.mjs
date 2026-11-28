@@ -3,7 +3,7 @@
 import { app } from './firebase-client.mjs';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { mountTuition } from './tuition-ui.mjs?v=tc-16';
-import { mountCoaching, coachingExtras } from './coaching-ui.mjs?v=tc-8';
+import { mountCoaching, coachingExtras } from './coaching-ui.mjs?v=tc-9';
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
 const auth = getAuth(app);
