@@ -120,3 +120,12 @@ test('teacher qualifications and photo are checked', () => {
   assert.equal(lib.checkPhoto('data:image/png;base64,' + png.toString('base64')).ok, true);
   assert.ok(lib.checkPhoto('data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(90 * 1024)]).toString('base64')).error); assert.ok(lib.checkPhoto('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=').error);
 });
+
+test('teacher profile PDF: a valid one-page file around one picture; the photo is placed from the top', async () => {
+  const { pdfFromJpeg } = await import('../public/coaching-ui.mjs');
+  const out = Buffer.from(pdfFromJpeg(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]), 10, 20)).toString('latin1');
+  assert.ok(out.startsWith('%PDF-1.4') && out.endsWith('%%EOF') && out.includes('/DCTDecode') && out.includes('/Count 1'));
+  const offs = [...out.slice(out.indexOf('xref' + String.fromCharCode(10) + '0 6')).matchAll(/(\d{10}) 00000 n/g)].map((x) => Number(x[1]));
+  assert.ok(offs.length === 5 && offs.every((o, i) => out.slice(o, o + String(i + 1).length + 7) === (i + 1) + ' 0 obj' + String.fromCharCode(10)));
+  const ui = readFileSync(new URL('../public/coaching-ui.mjs', import.meta.url), 'utf8'); assert.ok(ui.includes('py, img.width * k, img.height * k')); assert.ok(ui.includes('object-position:center top'));
+});
