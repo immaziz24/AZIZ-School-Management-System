@@ -1478,14 +1478,26 @@ function checkInstitution(type, values, nowYear = new Date().getUTCFullYear()) {
   if (!INST_EMAIL.test(email) || email.length > 120) errors.email = 'Enter a valid email address.'; clean.email = email.slice(0, 120);
   const mobile = typeof v.mobile === 'string' ? v.mobile.trim() : '';
   if (!INST_PHONE.test(mobile)) errors.mobile = 'Enter a mobile number with country code, for example +91 98300 12345.'; clean.mobile = mobile.slice(0, 20);
-  const classes = listOf(v.classes, 20, 40); const subjects = listOf(v.subjects, 25, 40);
+  const classes = listOf(v.classes, 20, 40); const subjects = listOf(v.subjects, 60, 40);
   if (!classes.length) errors.classes = 'Choose at least one class.'; clean.classes = classes;
   if (!subjects.length) errors.subjects = 'Choose at least one subject.'; clean.subjects = subjects;
-  // Subjects for each class (set once in Settings; the student form fills them in when a class is chosen). Only chosen classes are kept.
+  // Academic setup, set once in Settings and reused by the student form: default subjects for each class (kept even if a class is switched off, so
+  // nothing is lost), archived subjects, reusable curriculum templates and the admission preferences.
   const csIn = v.classSubjects && typeof v.classSubjects === 'object' && !Array.isArray(v.classSubjects) ? v.classSubjects : {};
   const classSubjects = {};
-  for (const c of classes) { if (c === '__proto__' || /^__.*__$/.test(c) || c.includes('/') || !Object.prototype.hasOwnProperty.call(csIn, c)) continue; const l = listOf(csIn[c], 25, 40); if (l.length) classSubjects[c] = l; }
+  for (const c of Object.keys(csIn).slice(0, 40)) { if (!c || c.length > 40 || c === '__proto__' || /^__.*__$/.test(c) || c.includes('/')) continue; const l = listOf(csIn[c], 25, 40); if (l.length) classSubjects[c] = l; }
   clean.classSubjects = classSubjects;
+  clean.archivedSubjects = listOf(v.archivedSubjects, 60, 40);
+  const templates = []; const tplIds = new Set();
+  for (const t of (Array.isArray(v.templates) ? v.templates.slice(0, 20) : [])) {
+    if (!t || typeof t !== 'object') continue;
+    const id = typeof t.id === 'string' && /^TP-[A-Za-z0-9]{4,16}$/.test(t.id) ? t.id : ''; const name = typeof t.name === 'string' ? t.name.trim().replace(/\s+/g, ' ').slice(0, 50) : '';
+    if (!id || !name || tplIds.has(id)) continue; tplIds.add(id);
+    templates.push({ id, name, description: typeof t.description === 'string' ? t.description.trim().replace(/\s+/g, ' ').slice(0, 120) : '', subjects: listOf(t.subjects, 40, 40), classes: listOf(t.classes, 20, 40) });
+  }
+  clean.templates = templates;
+  const prefIn = v.admissionPrefs && typeof v.admissionPrefs === 'object' && !Array.isArray(v.admissionPrefs) ? v.admissionPrefs : {};
+  clean.admissionPrefs = Object.fromEntries(['autoAssign', 'allowCustomise', 'showAssigned', 'warnUnconfigured', 'autoDate', 'autoTime'].map((k) => [k, typeof prefIn[k] === 'boolean' ? prefIn[k] : k !== 'autoTime']));
   if (!TEACHING_MODES.includes(v.teachingMode)) errors.teachingMode = 'Choose offline, online or hybrid.'; clean.teachingMode = TEACHING_MODES.includes(v.teachingMode) ? v.teachingMode : '';
   if (v.termsAccepted !== true) errors.termsAccepted = 'Accept the terms and privacy policy to continue.'; clean.termsAccepted = v.termsAccepted === true;
   if (type === 'tuition') {

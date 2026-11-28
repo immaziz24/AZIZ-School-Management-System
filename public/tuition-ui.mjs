@@ -1,15 +1,14 @@
 // Tuition and coaching shared screens (Phase 2): dashboard numbers, students, batches, fees, payments, receipts, attendance, reports, settings.
 // Every record is read and written through server functions that check the signed-in owner; this file only draws screens.
+import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-1';
 const today = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 const money = (p) => '₹' + (Number(p || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: Number(p || 0) % 100 ? 2 : 0, maximumFractionDigits: 2 });
 const rupees = (p) => (Number(p || 0) / 100).toFixed(2).replace(/\.00$/, '');
+const nowTime = () => new Date(Date.now() + 330 * 60000).toISOString().slice(11, 16);
 const dmy = (s) => (s ? s.split('-').reverse().join('-') : '');
 const monthLabel = (c) => new Date(c + '-01T00:00:00Z').toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const ALL_CLASSES = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12', 'College / Other'];
-const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Sanskrit', 'Mathematics', 'Science', 'Environmental Studies', 'Social Science', 'History', 'Geography', 'Civics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge',
-  'Spoken English', 'Handwriting', 'Drawing', 'Art', 'Music', 'Dance'];
 const GROUPS = [['All subjects', null], ['Science group', ['Mathematics', 'Science', 'Physics', 'Chemistry', 'Biology', 'Computer Science']],
   ['Arts group', ['English', 'Bengali', 'Hindi', 'History', 'Geography', 'Civics', 'Sanskrit', 'Social Science']], ['Commerce group', ['Accountancy', 'Commerce', 'Economics', 'Mathematics', 'English']]];
 const subjectsOf = (r) => (Array.isArray(r?.subjects) && r.subjects.length ? r.subjects : String(r?.subject || '').split(',').map((x) => x.trim()).filter(Boolean));
@@ -17,7 +16,8 @@ const subjectSummary = (r) => { const l = subjectsOf(r); return l.length > 4 ? l
 const STATUS_LABEL = { paid: 'Paid', unpaid: 'Unpaid', overdue: 'Overdue' };
 const statusText = (x) => (x.status !== 'paid' && x.paidPaise > 0 ? 'Partial' + (x.status === 'overdue' ? ' · Overdue' : '') : STATUS_LABEL[x.status]);
 
-export function mountTuition({ section, inst, call, h, body, go }) {
+export function mountTuition(args) {
+  const { section, inst, call, h, body, go } = args;
   const tenantId = inst.tenantId;
   // Open the calendar or clock when the date, time or month box is clicked anywhere, not only on its small icon.
   body.addEventListener('click', (e) => { const t = e.target; if (t && t.matches && t.matches('input[type=date],input[type=time],input[type=month]')) { try { t.showPicker(); } catch { /* the browser opens it itself */ } } });
@@ -185,17 +185,22 @@ export function mountTuition({ section, inst, call, h, body, go }) {
     };
     const form = (s) => {
       const classSel = choiceSelect('className', 'classes', s?.className, 'Choose a class');
+      const prefs = prefsOf(profile); const card = subjectsCard({ h, profile, current: subjectsOf(s), editing: !!s, go });
+      classSel.querySelector('select').addEventListener('change', (ev) => card.useClass(ev.target.value));
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = collectSubjects(fd, withOther(Object.fromEntries(fd.entries())));
         try { await api('tuitionStudentSave', { studentId: s ? s.id : '', values, feeEffectiveFrom: values.feeEffectiveFrom || '' }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, s ? 'Edit student' : 'New student'),
+        h('h3', { class: 'fsec' }, 'Student information'),
         h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', classSel, 'className')),
         h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Batch', sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), s?.batchId || '', 'No batch yet'), 'batchId')),
-        linkClass(classSel, subjectPicker(subjectsOf(s), false)),
+        h('h3', { class: 'fsec' }, 'Academic information'), card,
+        h('h3', { class: 'fsec' }, 'Guardian information'),
         h('div', { class: 'two' }, field('Guardian name', inp('guardianName', 'text', s?.guardianName, { maxlength: 80 }), 'guardianName'), field('Guardian mobile', inp('guardianMobile', 'tel', s?.guardianMobile, { placeholder: '+91 98300 12345' }), 'guardianMobile')),
-        h('div', { class: 'two' }, field('Student mobile (optional)', inp('studentMobile', 'tel', s?.studentMobile), 'studentMobile'), h('span')),
-        field('Address (optional)', inp('address', 'text', s?.address, { maxlength: 200 }), 'address'),
-        h('div', { class: 'two' }, field('Joining date', inp('joiningDate', 'date', s?.joiningDate || today(), { max: '9999-12-31' }), 'joiningDate'), field('Joining time (optional)', inp('joiningTime', 'time', s?.joiningTime), 'joiningTime')),
+        h('div', { class: 'two' }, field('Student mobile (optional)', inp('studentMobile', 'tel', s?.studentMobile), 'studentMobile'), field('Address (optional)', inp('address', 'text', s?.address, { maxlength: 200 }), 'address')),
+        h('h3', { class: 'fsec' }, 'Admission information'),
+        h('div', { class: 'two' }, field('Joining date', inp('joiningDate', 'date', s?.joiningDate || (prefs.autoDate ? today() : ''), { max: '9999-12-31' }), 'joiningDate'), field('Joining time (optional)', inp('joiningTime', 'time', s?.joiningTime || (!s && prefs.autoTime ? nowTime() : '')), 'joiningTime')),
+        h('h3', { class: 'fsec' }, 'Fee information'),
         h('div', { class: 'two' }, field('Monthly fee (₹)', inp('monthlyFee', 'text', s ? rupees(s.monthlyFeePaise) : '', { inputmode: 'decimal', placeholder: '500' }), 'monthlyFee'), field('Fee due day of month (1–31)', inp('dueDay', 'number', s?.dueDay ?? 5, { min: 1, max: 31 }), 'dueDay')),
         s ? h('div', {}, field('If you change the fee or due day, it starts from (month)', inp('feeEffectiveFrom', 'month', nextMonth(), { min: today().slice(0, 7) }), 'feeEffectiveFrom'), h('p', { class: 'hint' }, 'Months before this keep their old fee. To fix a charge already created, use Fees → Adjust.' + upcomingFee(s))) : h('div', { class: 'two' },
           field('Admission fee (₹, optional)', inp('admissionFee', 'text', '', { inputmode: 'decimal' }), 'admissionFee'), field('Opening balance (₹, optional)', inp('openingBalance', 'text', '', { inputmode: 'decimal' }), 'openingBalance')),
@@ -345,45 +350,8 @@ export function mountTuition({ section, inst, call, h, body, go }) {
   }
 
   // ---------- Settings ----------
-  // Tick the classes or subjects from the full list, and type any others. Whatever is ticked becomes the choices in the student and batch forms.
-  function picker(kind, label, all, otherHint) {
-    const have = profile[kind] || []; const extra = have.filter((x) => !all.includes(x));
-    return h('fieldset', { 'data-field': kind }, h('legend', {}, label), h('div', { class: 'checks' }, all.map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: kind + '[]', value: o, checked: have.includes(o) ? true : undefined }), o))),
-      h('input', { type: 'text', name: kind + '-other', value: extra.join(', '), placeholder: otherHint, 'aria-label': otherHint }), h('span', { class: 'ferr', 'data-err': kind }));
-  }
-  function settings() {
-    const tuition = inst.type === 'tuition';
-    // Subjects for each class: set once here, then the student form fills them in whenever that class is chosen.
-    const cs = {}; for (const [k, v] of Object.entries(profile.classSubjects || {})) cs[k] = [...v];
-    const csBox = h('div', {});
-    const drawCs = () => {
-      const split = (name) => String(f.querySelector('[name="' + name + '"]')?.value || '').split(',').map((x) => x.trim()).filter(Boolean);
-      const classes = [...new Set([...[...f.querySelectorAll('input[name="classes[]"]:checked')].map((i) => i.value), ...split('classes-other')])].slice(0, 20);
-      const subjectsNow = [...f.querySelectorAll('input[name="subjects[]"]:checked')].map((i) => i.value);
-      const opts = [...new Set([...ALL_SUBJECTS, ...subjectsNow, ...split('subjects-other'), ...(profile.subjects || []), ...Object.values(cs).flat()])];
-      csBox.replaceChildren(h('h3', {}, 'Subjects for each class'), h('p', { class: 'hint' }, 'Tick the subjects each class studies. When you add a student and choose the class, these subjects are filled in for you. Change them here any time.'),
-        ...(classes.length ? classes.map((c) => h('fieldset', {}, h('legend', {}, c),
-          h('div', { class: 'checks' }, opts.map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', value: o, checked: (cs[c] || []).includes(o) ? true : undefined, onchange: (e) => { const l = new Set(cs[c] || []); if (e.target.checked) l.add(o); else l.delete(o); cs[c] = [...l]; } }), o))),
-          h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { for (const k of classes) cs[k] = [...(cs[c] || [])]; drawCs(); } }, 'Copy these to all classes'), h('button', { type: 'button', onclick: () => { cs[c] = []; drawCs(); } }, 'Clear')))) : [h('p', { class: 'hint' }, 'Tick your classes above first.')]));
-    };
-    const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
-      e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = Object.fromEntries(fd.entries());
-      for (const kind of ['classes', 'subjects']) values[kind] = [...fd.getAll(kind + '[]'), ...String(fd.get(kind + '-other') || '').split(',')].map((x) => x.trim().slice(0, 40)).filter((x, i, a) => x && a.indexOf(x) === i).slice(0, kind === 'classes' ? 20 : 25);
-      delete values['classes-other']; delete values['subjects-other'];
-      const kept = {}; for (const c of values.classes) { if (cs[c] && cs[c].length) kept[c] = cs[c].slice(0, 25); }
-      values.classSubjects = kept; values.subjects = [...new Set([...values.subjects, ...Object.values(kept).flat()])].slice(0, 25);
-      try { const r = await api('institutionProfileSave', { values }); inst.name = r.name; Object.assign(profile, values); say(msg, 'Saved.', true); }
-      catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
-      h('h2', {}, 'Profile'), h('p', { class: 'hint' }, 'Sign-in email: ' + (profile.email || '')),
-      ...(tuition ? [field('Tuition name', inp('tuitionName', 'text', profile.tuitionName), 'tuitionName'), field('Your name', inp('fullName', 'text', profile.fullName), 'fullName'), field('Address or locality', inp('locality', 'text', profile.locality), 'locality')]
-        : [field('Centre name', inp('centreName', 'text', profile.centreName), 'centreName'), field('Owner name', inp('ownerName', 'text', profile.ownerName), 'ownerName'), field('Address', inp('address', 'text', profile.address), 'address'), field('PIN code', inp('pin', 'text', profile.pin), 'pin')]),
-      field('Mobile', inp('mobile', 'tel', profile.mobile), 'mobile'), picker('classes', 'Classes you teach', ALL_CLASSES, 'Other classes, separated by commas'), picker('subjects', 'Subjects you teach', ALL_SUBJECTS, 'Other subjects, separated by commas'), csBox,
-      field('Teaching mode', sel('teachingMode', ['offline', 'online', 'hybrid'], profile.teachingMode), 'teachingMode'),
-      h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save profile')),
-      h('p', { class: 'hint' }, 'To export or delete your data, write to support@azizschoolmanagementsystem.com from your registered email.'));
-    f.addEventListener('change', (e) => { const n = e.target && e.target.name; if (n === 'classes[]' || n === 'classes-other' || n === 'subjects-other') drawCs(); });
-    drawCs(); body.append(f);
-  }
+  // The whole workspace (profile, academic setup, fees, branding, account, privacy) lives in academic-ui.mjs.
+  function settings() { mountSettings({ inst, profile, api, h, body, go, say, failText, fieldErrors, showErrors, field, inp, sel, brandingMount: args.brandingMount }); }
 
   const screens = isTeacher ? { Batches: batches, Attendance: attendance } : { Dashboard: dashboard, Students: () => students(false), Batches: batches, Fees: fees, Attendance: attendance, Reports: reports, Settings: settings };
   if (section === 'Students+add') { students(true); return true; }

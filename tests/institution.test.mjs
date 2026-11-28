@@ -121,19 +121,25 @@ test('every page file referenced by the portal and the form exists', () => {
   for (const n of ['Students', 'Batches', 'Fees', 'Attendance', 'Reports', 'Settings', 'Teachers', 'Timetable', 'Examinations', 'Announcements']) assert.ok(portal.includes("'" + n + "'"), n);
 });
 
-test('subjects for each class: only chosen classes are kept, cleaned, and unsafe keys are dropped', () => {
-  const ok = lib.checkInstitution('coaching', { ...coaching, classes: ['Class 8', 'Class 9'], classSubjects: { 'Class 8': ['English', ' Maths ', 'English'], 'Class 9': 'Physics,Chemistry', 'Class 10': ['History'], __proto__x: ['A'] } });
+test('academic setup rules: class subjects are cleaned and kept for classes switched off, unsafe names are dropped, templates and preferences are checked', () => {
+  const ok = lib.checkInstitution('coaching', { ...coaching, classes: ['Class 8', 'Class 9'], classSubjects: { 'Class 8': ['English', ' Maths ', 'English'], 'Class 9': 'Physics,Chemistry', 'Class 10': ['History'], '__x__': ['A'], 'a/b': ['A'] } });
   assert.equal(ok.ok, true);
-  assert.deepEqual(Object.keys(ok.clean.classSubjects).sort(), ['Class 8', 'Class 9']);
-  assert.deepEqual(ok.clean.classSubjects['Class 9'], ['Physics', 'Chemistry']);
-  assert.ok(ok.clean.classSubjects['Class 8'].includes('Maths'));
-  const bad = lib.checkInstitution('coaching', { ...coaching, classes: ['__x__', 'a/b', 'Class 8'], classSubjects: { '__x__': ['E'], 'a/b': ['E'], 'Class 8': ['E'] } });
-  assert.deepEqual(Object.keys(bad.clean.classSubjects), ['Class 8']);
-  assert.deepEqual(lib.checkInstitution('coaching', coaching).clean.classSubjects, {});
-  assert.deepEqual(lib.checkInstitution('coaching', { ...coaching, classSubjects: 'oops' }).clean.classSubjects, {});
+  assert.deepEqual(Object.keys(ok.clean.classSubjects).sort(), ['Class 10', 'Class 8', 'Class 9']);
+  assert.deepEqual(ok.clean.classSubjects['Class 9'], ['Physics', 'Chemistry']); assert.ok(ok.clean.classSubjects['Class 8'].includes('Maths'));
+  assert.deepEqual(lib.checkInstitution('coaching', coaching).clean.classSubjects, {}); assert.deepEqual(lib.checkInstitution('coaching', { ...coaching, classSubjects: 'oops' }).clean.classSubjects, {});
+  const t = lib.checkInstitution('coaching', { ...coaching, templates: [{ id: 'TP-abcd1234', name: '  Foundation  Curriculum ', description: 'd', subjects: ['English', 'English', 'Science'], classes: ['Class 5'] }, { id: 'bad', name: 'No id', subjects: ['A'] }, { id: 'TP-abcd1234', name: 'Duplicate id', subjects: ['A'] }, { id: 'TP-zzzz9999', name: '', subjects: ['A'] }, 'junk', null] });
+  assert.equal(t.clean.templates.length, 1); assert.equal(t.clean.templates[0].name, 'Foundation Curriculum'); assert.deepEqual(t.clean.templates[0].subjects, ['English', 'Science']);
+  assert.equal(lib.checkInstitution('coaching', { ...coaching, templates: Array.from({ length: 30 }, (_, i) => ({ id: 'TP-id' + String(i).padStart(4, '0'), name: 'T' + i, subjects: ['A'] })) }).clean.templates.length, 20);
+  assert.deepEqual(lib.checkInstitution('coaching', coaching).clean.admissionPrefs, { autoAssign: true, allowCustomise: true, showAssigned: true, warnUnconfigured: true, autoDate: true, autoTime: false });
+  assert.equal(lib.checkInstitution('coaching', { ...coaching, admissionPrefs: { autoAssign: false, autoTime: 'yes', evil: true } }).clean.admissionPrefs.autoAssign, false);
+  assert.equal(lib.checkInstitution('coaching', { ...coaching, admissionPrefs: { autoTime: 'yes' } }).clean.admissionPrefs.autoTime, false);
+  assert.equal('evil' in lib.checkInstitution('coaching', { ...coaching, admissionPrefs: { evil: true } }).clean.admissionPrefs, false);
+  assert.equal(lib.checkInstitution('coaching', { ...coaching, subjects: Array.from({ length: 70 }, (_, i) => 'S' + i) }).clean.subjects.length, 60);
 });
 
-test('the student form fills subjects from the class and Settings has a subjects-for-each-class section', () => {
-  const ui = read('public/tuition-ui.mjs');
-  assert.match(ui, /useClass/); assert.match(ui, /linkClass\(classSel/); assert.match(ui, /Subjects for each class/); assert.match(ui, /values\.classSubjects = kept/);
+test('the Settings workspace and the student form are wired to the academic module', () => {
+  const ui = read('public/tuition-ui.mjs'); const ac = read('public/academic-ui.mjs'); const portal = read('public/institution.mjs');
+  assert.match(ui, /academic-ui\.mjs\?v=ac-\d+/); assert.match(ui, /mountSettings\(/); assert.match(ui, /subjectsCard\(/); assert.match(ui, /card\.useClass/);
+  for (const t of ['Centre Profile', 'Academic Setup', 'Fee Settings', 'Branding & Logo', 'Account & Security', 'Data & Privacy', 'Classes offered', 'Subject library', 'Class-subject mapping', 'Curriculum templates', 'Admission preferences', 'Copy to classes', 'Save as template']) assert.ok(ac.includes(t), t);
+  assert.ok(read('.htaccess').match(/RewriteRule \^\(sign-in[^\n]*/)[0].includes('academic-ui\\.mjs'), 'academic-ui.mjs is whitelisted'); assert.match(portal, /brandingMount/); assert.match(portal, /tuition-ui\.mjs\?v=tc-\d+/);
 });

@@ -97,7 +97,7 @@ test('the client never sends plan, role, status or limits; no secret or rules ch
 });
 
 test('screens, routing and cache are wired', () => {
-  const ui = read('public/tuition-ui.mjs'); for (const n of CALLABLES.filter((x) => x !== 'tuitionBatchList' || true)) assert.ok(ui.includes("'" + n + "'") || n === 'tuitionStudentList' || ui.includes(n), n);
+  const ui = read('public/tuition-ui.mjs') + read('public/academic-ui.mjs'); for (const n of CALLABLES.filter((x) => x !== 'tuitionBatchList' || true)) assert.ok(ui.includes("'" + n + "'") || n === 'tuitionStudentList' || ui.includes(n), n);
   const inst = read('public/institution.mjs'); assert.match(inst, /mountTuition/); assert.match(inst, /tuition-ui\.mjs/);
   assert.match(read('.htaccess'), /tuition-ui\\\.mjs/); assert.match(read('public/institution.html'), /institution\.mjs\?v=tc-\d+/); assert.match(read('public/institution.html'), /@media print/);
 });
@@ -125,7 +125,7 @@ test('registration confirms the email with a code, not a link, and verifies on t
 test('students and batches choose class and subject from the teacher\'s own lists, set in Settings from the full lists', () => {
   const ui = read('public/tuition-ui.mjs');
   assert.doesNotMatch(ui, /list: 'classes'|list: 'subjects'/); assert.match(ui, /choiceSelect\('className'/); assert.match(ui, /subjectPicker\(/); assert.match(ui, /Science group/); assert.match(ui, /Arts group/); assert.match(ui, /Commerce group/); assert.match(ui, /All subjects/);
-  assert.match(ui, /const ALL_CLASSES/); assert.match(ui, /const ALL_SUBJECTS/); assert.match(ui, /picker\('classes'/); assert.match(ui, /picker\('subjects'/);
+  const ac = read('public/academic-ui.mjs'); assert.match(ac, /export const ALL_CLASSES/); assert.match(ac, /export const ALL_SUBJECTS/); assert.match(ac, /Classes offered/); assert.match(ac, /Subject library/);
 });
 
 test('a student or batch can have many subjects; a batch needs at least one', () => {
