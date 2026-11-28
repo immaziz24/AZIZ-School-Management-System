@@ -181,7 +181,7 @@ async function next() {
   if (S.step < steps.length - 1) { S.step += 1; draw(); return; }
   S.busy = true; draw();
   try { await createAccount(); } catch (error) { S.note = friendly(error); } finally { S.busy = false; }
-  if (S.view === 'form') draw();
+  if (S.view === 'form' || S.view === 'verify') draw();
 }
 
 const friendly = (error) => {
@@ -207,7 +207,7 @@ async function createAccount() {
   saveValues(user.uid);
   await user.reload();
   if (user.emailVerified) { await provision(user); return; }
-  S.view = 'verify'; draw();
+  S.busy = false; S.view = 'verify'; draw();
   await sendVerification(user);
 }
 
@@ -229,7 +229,7 @@ async function sendVerification(user) {
 async function checkCode(user, code) {
   S.busy = true; S.codeError = ''; draw();
   try {
-    await call('verifyInstitutionOtp', { code });
+    await Promise.race([call('verifyInstitutionOtp', { code }), new Promise((_, no) => setTimeout(() => no(new Error('This is taking too long. Check the internet and press Verify again.')), 30000))]);
     await user.reload(); await user.getIdToken(true);
     S.busy = false; await provision(auth.currentUser); return;
   } catch (error) { S.codeError = friendly(error); }
