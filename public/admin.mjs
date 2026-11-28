@@ -2348,13 +2348,14 @@ async function acceptInvite(user, invite) {
 onAuthStateChanged(auth, async (user) => {
   if (!user) { location.replace('/app'); return; }
   let role = null; let staffData = null; let revoked = false; let invite = null;
-  try { if ((await getDocFromServer(doc(db, 'platformAdmins', user.uid))).exists()) role = 'admin'; } catch { /* not an admin */ }
-  if (!role) {
-    try {
-      const mine = await getDocFromServer(doc(db, 'platformStaff', user.uid));
-      if (mine.exists()) { if (mine.data().status === 'active') { role = 'staff'; staffData = mine.data(); } else revoked = true; }
-    } catch { /* no staff record */ }
-  }
+  // Speed (Batch 121): the admin record, the staff record and the locale are asked at the same time, not one after another.
+  const [adminDoc, staffDoc, localeDoc] = await Promise.all([
+    getDocFromServer(doc(db, 'platformAdmins', user.uid)).catch(() => null),
+    getDocFromServer(doc(db, 'platformStaff', user.uid)).catch(() => null),
+    getDocFromServer(doc(db, 'platformConfig', 'locale')).catch(() => null),
+  ]);
+  if (adminDoc && adminDoc.exists()) role = 'admin';
+  if (!role && staffDoc && staffDoc.exists()) { if (staffDoc.data().status === 'active') { role = 'staff'; staffData = staffDoc.data(); } else revoked = true; }
   if (!role && !revoked && user.email && user.emailVerified) {
     try { const found = await getDocFromServer(doc(db, 'staffInvites', user.email.toLowerCase())); if (found.exists() && found.data().status === 'invited') invite = found.data(); } catch { /* no invitation */ }
   }
@@ -2374,7 +2375,7 @@ onAuthStateChanged(auth, async (user) => {
     return;
   }
   S.user = user; S.role = role; S.staff = staffData;
-  try { const lc = await getDocFromServer(doc(db, 'platformConfig', 'locale')); if (lc.exists()) LOCALE = { ...LOCALE, ...Object.fromEntries(['currency', 'timezone', 'dateFormat'].filter((k) => typeof lc.data()[k] === 'string').map((k) => [k, lc.data()[k]])) }; } catch { /* keep the defaults */ }
+  try { const lc = localeDoc; if (lc && lc.exists()) LOCALE = { ...LOCALE, ...Object.fromEntries(['currency', 'timezone', 'dateFormat'].filter((k) => typeof lc.data()[k] === 'string').map((k) => [k, lc.data()[k]])) }; } catch { /* keep the defaults */ }
   $('who').textContent = user.email || user.uid;
   $('gate').hidden = true; $('gate').style.display = 'none'; $('shell').hidden = false;
   applyRoleToPage();
