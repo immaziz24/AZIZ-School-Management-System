@@ -20,7 +20,7 @@ export async function viewInstitutions({ h, show, toast, sub }) {
   const lead = h('h1', {}, 'Tuition teachers and coaching centres');
   const fail = (e) => show(lead, h('div', { class: 'empty' }, failText(e)));
   const fields = (rowsDef) => rowsDef.map(([l, v]) => h('div', {}, h('span', { class: 'muted' }, l + ': '), String(v)));
-  const reasonBox = (label = 'Reason (saved in the audit log)') => h('input', { type: 'text', maxlength: 300, placeholder: label, 'aria-label': label, style: 'min-width:18rem' });
+  const reasonBox = (label = 'Reason (optional)') => h('input', { type: 'text', maxlength: 300, placeholder: label, 'aria-label': label, style: 'min-width:18rem' });
 
   // ---------- Overview ----------
   async function overview(data) {
@@ -53,17 +53,16 @@ export async function viewInstitutions({ h, show, toast, sub }) {
     for (const type of ['tuition', 'coaching']) {
       const d = p[type]; const f = h('form', { class: 'card', onsubmit: async (e) => { e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); msg.textContent = 'Saving.';
         const features = {}; d.featureKeys.forEach((k) => { features[k] = fd.get('f-' + k) === 'on'; });
-        try { const r = await call('adminInstitutionPlanSave', { type, reason: fd.get('reason'), applyToExisting: fd.get('apply') === 'on', features, limits: { activeStudents: fd.get('activeStudents'), extraTeachers: fd.get('extraTeachers'), batches: fd.get('batches'), storageMB: fd.get('storageMB') } });
-          msg.textContent = 'Saved as version ' + r.version + (r.applied ? '. Applied to ' + r.applied + ' existing accounts.' : '.'); } catch (er) { msg.textContent = failText(er); } } },
+        try { const r = await call('adminInstitutionPlanSave', { type, reason: fd.get('reason'), features, limits: { activeStudents: fd.get('activeStudents'), extraTeachers: fd.get('extraTeachers'), batches: fd.get('batches'), storageMB: fd.get('storageMB') } });
+          msg.textContent = 'Saved as version ' + r.version + '. Applied now to ' + r.applied + ' existing account' + (r.applied === 1 ? '' : 's') + '.'; } catch (er) { msg.textContent = failText(er); } } },
         h('h3', {}, TYPE_LABEL[type] + ' free plan · version ' + d.version),
         h('div', { class: 'row', style: 'gap:.6rem;flex-wrap:wrap' }, [['activeStudents', 'Active students', d.limits.activeStudents], ['extraTeachers', 'Extra teachers', d.limits.extraTeachers], ['batches', 'Batches', d.limits.batches], ['storageMB', 'Storage (MB)', Math.round(d.limits.storageBytes / 1048576)]].map(([k, l, v]) =>
           h('label', {}, l, h('input', { name: k, type: 'number', min: 0, value: v, style: 'width:7rem', ...(type === 'tuition' && k === 'extraTeachers' ? { readonly: true } : {}) })))),
         h('div', {}, d.featureKeys.map((k) => h('label', { class: 'chk', style: 'margin-right:1rem' }, h('input', { type: 'checkbox', name: 'f-' + k, checked: d.features[k] ? true : undefined }), k))),
-        h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'apply' }), 'Also apply to existing accounts that have no custom quota'),
         h('div', {}, reasonBox(), ' ', h('button', { class: 'btn gold', type: 'submit' }, 'Save new version')), h('p', { class: 'msg muted', role: 'status' }));
       f.querySelector('input[type=text]').name = 'reason'; blocks.push(f);
     }
-    show(lead, tabs('plan'), h('p', { class: 'muted' }, 'Each save creates a new version. New accounts start with the latest version. A feature switched off here is refused by the server for those accounts.'), ...blocks);
+    show(lead, tabs('plan'), h('p', { class: 'muted' }, 'Each save creates a new version and changes every existing account of that type straight away (except accounts you gave a custom quota). New accounts start with the latest version. A feature switched off here is refused by the server for those accounts.'), ...blocks);
   }
 
   // ---------- Cost ----------
@@ -80,15 +79,15 @@ export async function viewInstitutions({ h, show, toast, sub }) {
     const d = await call('adminInstitutionDetail', { tenantId: id }); const box = h('div', {});
     const act = (label, fn, input) => h('button', { class: 'btn', type: 'button', onclick: async (e) => { const b = e.currentTarget; b.disabled = true; try { await fn(); } catch (er) { toast(failText(er)); } b.disabled = false; } }, label);
     const refresh = () => detail(id);
-    const statusReason = reasonBox('Reason for suspending or reactivating');
+    const statusReason = reasonBox('Reason (optional)');
     const limitsForm = h('form', { class: 'card', onsubmit: async (e) => { e.preventDefault(); const fd = new FormData(e.target);
       try { await call('adminInstitutionSetLimits', { tenantId: id, reason: fd.get('reason'), limits: { activeStudents: fd.get('activeStudents'), extraTeachers: fd.get('extraTeachers'), batches: fd.get('batches'), storageMB: fd.get('storageMB') } }); toast('Quotas saved.'); refresh(); } catch (er) { toast(failText(er)); } } },
       h('h3', {}, 'Quotas (students, teachers, batches, storage)'), h('div', { class: 'row', style: 'gap:.6rem;flex-wrap:wrap' }, [['activeStudents', 'Active students', d.limits.activeStudents], ['extraTeachers', 'Extra teachers', d.limits.extraTeachers], ['batches', 'Batches', d.limits.batches], ['storageMB', 'Storage (MB)', Math.round((d.limits.storageBytes || 0) / 1048576)]].map(([k, l, v]) =>
-        h('label', {}, l, h('input', { name: k, type: 'number', min: 0, value: v ?? 0, style: 'width:7rem' })))), h('div', {}, h('input', { name: 'reason', type: 'text', maxlength: 300, placeholder: 'Reason (saved in the audit log)', style: 'min-width:18rem' }), ' ', h('button', { class: 'btn gold', type: 'submit' }, 'Save quotas')));
+        h('label', {}, l, h('input', { name: k, type: 'number', min: 0, value: v ?? 0, style: 'width:7rem' })))), h('div', {}, h('input', { name: 'reason', type: 'text', maxlength: 300, placeholder: 'Reason (optional)', style: 'min-width:18rem' }), ' ', h('button', { class: 'btn gold', type: 'submit' }, 'Save quotas')));
     const featForm = h('form', { class: 'card', onsubmit: async (e) => { e.preventDefault(); const fd = new FormData(e.target); const features = {}; d.featureKeys.forEach((k) => { features[k] = fd.get('f-' + k) === 'on'; });
       try { await call('adminInstitutionSetFeatures', { tenantId: id, reason: fd.get('reason'), features }); toast('Features saved.'); refresh(); } catch (er) { toast(failText(er)); } } },
       h('h3', {}, 'Free plan features for this account'), h('div', {}, d.featureKeys.map((k) => h('label', { class: 'chk', style: 'margin-right:1rem' }, h('input', { type: 'checkbox', name: 'f-' + k, checked: d.features[k] === false ? undefined : true }), k))),
-      h('div', {}, h('input', { name: 'reason', type: 'text', maxlength: 300, placeholder: 'Reason (saved in the audit log)', style: 'min-width:18rem' }), ' ', h('button', { class: 'btn gold', type: 'submit' }, 'Save features')));
+      h('div', {}, h('input', { name: 'reason', type: 'text', maxlength: 300, placeholder: 'Reason (optional)', style: 'min-width:18rem' }), ' ', h('button', { class: 'btn gold', type: 'submit' }, 'Save features')));
     const convForm = h('form', { class: 'card', onsubmit: async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { await call('adminInstitutionSetConversion', { tenantId: id, state: fd.get('state'), note: fd.get('note') }); toast('Saved.'); refresh(); } catch (er) { toast(failText(er)); } } },
       h('h3', {}, 'Free to paid'), h('select', { name: 'state' }, [['none', 'Not interested'], ['interested', 'Interested in a paid plan'], ['converted', 'Converted to paid']].map(([v, l]) => h('option', { value: v, selected: v === d.conversion ? true : undefined }, l))), ' ',
       h('input', { name: 'note', type: 'text', maxlength: 200, value: d.conversionNote || '', placeholder: 'Note (optional)' }), ' ', h('button', { class: 'btn', type: 'submit' }, 'Save'));
