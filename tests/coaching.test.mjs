@@ -7,7 +7,7 @@ const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 const src = read('functions/index.js');
 const t1 = src.match(/\/\/ --- tuition rules begin[\s\S]*?\/\/ --- tuition rules end ---/); const t2 = src.match(/\/\/ --- coaching rules begin[\s\S]*?\/\/ --- coaching rules end ---/);
 assert.ok(t1 && t2, 'rule blocks are missing');
-const lib = new Function(t1[0] + '\n' + t2[0] + '\n; return { checkTeacher, checkSubject, checkSession, findSessionConflicts, checkExam, checkMarks, checkNotice, checkLogo, toMinutes };')();
+const lib = new Function(t1[0] + '\n' + t2[0] + '\n; return { checkTeacher, checkSubject, checkSession, findSessionConflicts, checkExam, checkMarks, checkNotice, checkLogo, checkPhoto, toMinutes };')();
 const bodyOf = (name) => { const i = src.indexOf('exports.' + name + ' = '); assert.ok(i > 0, name + ' missing'); const j = src.indexOf('\nexports.', i + 10); return src.slice(i, j > 0 ? j : undefined); };
 
 test('teacher: name, a real email and optional mobile; subjects are kept', () => {
@@ -62,7 +62,7 @@ test('logo: real small PNG accepted; wrong type, fake picture and big files refu
   assert.ok(lib.checkLogo('data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(120 * 1024)]).toString('base64')).error);
 });
 
-const OWNER_ONLY = ['coachingTeacherSave', 'coachingTeacherStatus', 'coachingTeacherList', 'coachingAssign', 'coachingAssignClasses', 'coachingSubjectSave', 'coachingSubjectArchive', 'coachingSessionSave', 'coachingSessionDelete', 'coachingNoticeSave', 'coachingNoticeDelete', 'coachingFeesByBatch', 'coachingAttendanceReport', 'institutionLogoSave'];
+const OWNER_ONLY = ['coachingTeacherSave', 'coachingTeacherStatus', 'coachingTeacherList', 'coachingAssign', 'coachingAssignClasses', 'coachingTeacherPhotoSave', 'coachingTeacherPhotoGet', 'coachingSubjectSave', 'coachingSubjectArchive', 'coachingSessionSave', 'coachingSessionDelete', 'coachingNoticeSave', 'coachingNoticeDelete', 'coachingFeesByBatch', 'coachingAttendanceReport', 'institutionLogoSave'];
 const SHARED = ['coachingSubjectList', 'coachingSessionList', 'coachingExamSave', 'coachingExamList', 'coachingMarksGet', 'coachingMarksSave', 'coachingNoticeList', 'institutionLogoGet'];
 test('coaching functions: owner-only ones check the coaching owner; shared ones name both roles; teacher-only home', () => {
   for (const n of OWNER_ONLY) assert.match(bodyOf(n), /requireCoaching\(request, (data|request\.data)(, \['owner'\], '[a-z]+')?\)/, n);
@@ -108,4 +108,15 @@ test('firestore.rules is untouched by this phase: the new collections are not me
 test('assign teachers to classes: owner-only, class checked, teacher reaches the batches of the class', () => {
   assert.match(bodyOf('coachingAssignClasses'), /Choose one of your classes/); assert.match(bodyOf('coachingAssignClasses'), /Choose up to 10 teachers/);
   assert.ok(src.includes('ctx.teacherClasses.includes(batch.className)'));
+});
+
+test('teacher qualifications and photo are checked', () => {
+  const base = { name: 'Rina Das', email: 'rina@example.com', subjects: ['Mathematics'] };
+  const ok = lib.checkTeacher({ ...base, highestQualification: 'M.Sc in Physics', bed: true, deled: 'yes', experienceYears: '6', joiningDate: '2026-04-01', address: 'Kolkata' });
+  assert.equal(ok.ok, true); assert.equal(ok.clean.bed, true); assert.equal(ok.clean.deled, true); assert.equal(ok.clean.med, false); assert.equal(ok.clean.experienceYears, 6); assert.equal(ok.clean.highestQualification, 'M.Sc in Physics');
+  assert.equal(lib.checkTeacher(base).clean.experienceYears, null);
+  assert.ok(lib.checkTeacher({ ...base, experienceYears: '99' }).errors.experienceYears); assert.ok(lib.checkTeacher({ ...base, joiningDate: '2026-02-30' }).errors.joiningDate);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(300)]);
+  assert.equal(lib.checkPhoto('data:image/png;base64,' + png.toString('base64')).ok, true);
+  assert.ok(lib.checkPhoto('data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(90 * 1024)]).toString('base64')).error); assert.ok(lib.checkPhoto('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=').error);
 });
