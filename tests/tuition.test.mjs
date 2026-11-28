@@ -74,8 +74,8 @@ const bodyOf = (name) => { const i = src.indexOf('exports.' + name + ' = '); ass
 
 const TEACHER_OK = ['tuitionBatchList', 'tuitionAttendanceGet', 'tuitionAttendanceMark', 'tuitionAttendanceHistory'];
 test('every Phase 2 function is tenant-checked; only the four attendance and batch-view functions admit a teacher', () => {
-  for (const n of CALLABLES.filter((x) => !TEACHER_OK.includes(x))) assert.match(bodyOf(n), /requireInstitution\(request/, n);
-  for (const n of TEACHER_OK) { assert.match(bodyOf(n), /requireMember\(request, [a-z.]+, \['owner', 'teacher'\]\)/, n); assert.match(bodyOf(n), /canReachBatch/, n); }
+  for (const n of CALLABLES.filter((x) => !TEACHER_OK.includes(x))) assert.match(bodyOf(n), /require(Institution|Member)\(request, (data|request\.data)(, \['owner'\], '[a-z]+')?\)/, n);
+  for (const n of TEACHER_OK) { assert.match(bodyOf(n), /requireMember\(request, [a-z.]+, \['owner', 'teacher'\], 'attendance'\)|requireMember\(request, [a-z.]+, \['owner', 'teacher'\]\)/, n); assert.match(bodyOf(n), /canReachBatch/, n); }
   const g = src.slice(src.indexOf('async function requireMember'), src.indexOf('const requireInstitution'));
   assert.match(g, /unauthenticated/); assert.match(g, /memberships\/' \+ uid \+ '_' \+ tenantId/); assert.match(g, /roles\.includes\(m\.data\(\)\.role\)/); assert.match(g, /status !== 'active'/); assert.match(g, /TENANT_ID\.test/);
   assert.match(src, /const requireInstitution = \(request, data\) => requireMember\(request, data, \['owner'\]\)/);

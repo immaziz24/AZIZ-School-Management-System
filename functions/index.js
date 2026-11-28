@@ -1454,10 +1454,11 @@ const FREE_PLANS = {
 };
 const TEACHING_MODES = ['offline', 'online', 'hybrid'];
 const INSTITUTION_EXCLUDED = ['student and parent portals', 'online exams', 'online payment gateway', 'QR, selfie, biometric or GPS attendance', 'study material uploads', 'payroll', 'custom website or domain', 'AI features', 'automated SMS and WhatsApp'];
-function institutionEntitlements(type) {
+function institutionEntitlements(type, override) {
   const plan = FREE_PLANS[type];
   if (!plan) throw new HttpsError('invalid-argument', 'Choose Tuition or Coaching.');
-  return { planId: plan.planId, version: ENTITLEMENT_VERSION, featureIds: Array.from({ length: plan.featureCount }, (_, i) => i + 1), limits: { ...plan.limits },
+  const ov = override || {};
+  return { planId: plan.planId, version: ov.version || ENTITLEMENT_VERSION, features: ov.features || {}, featureIds: Array.from({ length: plan.featureCount }, (_, i) => i + 1), limits: { ...plan.limits, ...(ov.limits || {}) },
     manualFeesAndAttendance: true, brandingRequired: true, subscriptionInr: 0, trialExpiry: false, excluded: INSTITUTION_EXCLUDED };
 }
 function tenantIdFor(uid) { return 'ins-' + nodeCrypto.createHash('sha256').update('institution:' + String(uid)).digest('hex').slice(0, 20); }
@@ -1504,11 +1505,11 @@ function checkInstitution(type, values, nowYear = new Date().getUTCFullYear()) {
   return { ok: Object.keys(errors).length === 0, errors, clean };
 }
 // The records written for a new institution. role, plan, status and limits come from here, never from the request.
-function buildInstitutionRecords(type, clean, { uid, tenantId, terms, privacy, now }) {
-  const ent = institutionEntitlements(type);
+function buildInstitutionRecords(type, clean, { uid, tenantId, terms, privacy, now, override }) {
+  const ent = institutionEntitlements(type, override);
   const profile = { ...clean }; delete profile.termsAccepted;
   return {
-    institution: { type, planId: ent.planId, status: 'active', ownerUid: uid, ownerEmail: clean.email, name: clean.displayName, timezone: 'Asia/Kolkata', entitlementVersion: ent.version,
+    institution: { type, planId: ent.planId, status: 'active', ownerUid: uid, ownerEmail: clean.email, name: clean.displayName, timezone: 'Asia/Kolkata', entitlementVersion: ent.version, features: ent.features,
       profile, limits: ent.limits, usage: { activeStudents: 0, batches: 0, extraTeachers: 0, storageBytes: 0 }, consent: { terms, privacy, acceptedAt: now },
       createdAt: now, verifiedAt: now },
     membership: { uid, tenantId, role: 'owner', status: 'active', type, assignedBatchIds: [], createdAt: now },
@@ -1711,6 +1712,53 @@ function checkLogo(dataUrl) {
   return { ok: true, mime: 'image/' + m[1], bytes: buf.length, dataUrl: String(dataUrl) };
 }
 // --- coaching rules end ---
+// --- institution admin rules begin (Super Admin controls for tuition and coaching: pure code) ---
+const ADMIN_FEATURE_KEYS = { tuition: ['attendance', 'reports'], coaching: ['attendance', 'reports', 'teachers', 'subjects', 'timetable', 'exams', 'announcements', 'logo'] };
+const ADMIN_LIMIT_FIELDS = [['activeStudents', 'Active students', 0, 5000], ['extraTeachers', 'Extra teachers', 0, 50], ['batches', 'Batches', 0, 200], ['storageMB', 'Storage in MB', 1, 2000]];
+const INACTIVE_DAYS = 30;
+// Quotas the Super Admin may set. Whole numbers inside fixed bounds; storage is entered in MB and kept in bytes.
+function checkLimits(v) {
+  const errors = {}; const limits = {};
+  for (const [key, label, min, max] of ADMIN_LIMIT_FIELDS) {
+    const n = Number((v || {})[key]);
+    if (!Number.isInteger(n) || n < min || n > max) { errors[key] = label + ' must be a whole number from ' + min + ' to ' + max + '.'; continue; }
+    if (key === 'storageMB') limits.storageBytes = n * 1024 * 1024; else limits[key] = n;
+  }
+  return { ok: Object.keys(errors).length === 0, errors, limits };
+}
+const checkReason = (r) => { const t = typeof r === 'string' ? r.trim() : ''; return t.length >= 5 && t.length <= 300 ? { ok: true, reason: t } : { ok: false, error: 'Write the reason (5 to 300 characters). It is saved in the audit log.' }; };
+// Only the known switches for the type are kept, and only true or false.
+function cleanFeatures(type, obj) {
+  const out = {}; for (const k of ADMIN_FEATURE_KEYS[type] || []) out[k] = !obj || obj[k] !== false && obj[k] !== 'false' && obj[k] !== 0;
+  return out;
+}
+// never: not signed in since this was tracked; active: seen within 30 days; inactive: not seen for 30 days.
+function activityState(lastSeenMs, nowMs) {
+  if (!lastSeenMs) return 'never';
+  return nowMs - lastSeenMs <= INACTIVE_DAYS * 86400000 ? 'active' : 'inactive';
+}
+// Totals shown on the Super Admin page, kept separate for tuition and coaching.
+function summarizeInstitutions(rows, nowMs) {
+  const blank = () => ({ accounts: 0, active: 0, suspended: 0, activeNow: 0, inactive: 0, never: 0, students: 0, teachers: 0, batches: 0, storageBytes: 0, interested: 0, converted: 0 });
+  const out = { tuition: blank(), coaching: blank() };
+  for (const r of rows) {
+    const t = out[r.type]; if (!t) continue;
+    t.accounts += 1; if (r.status === 'active') t.active += 1; else t.suspended += 1;
+    const st = activityState(r.lastSeenMs, nowMs); if (st === 'active') t.activeNow += 1; else if (st === 'inactive') t.inactive += 1; else t.never += 1;
+    const u = r.usage || {}; t.students += u.activeStudents || 0; t.teachers += u.extraTeachers || 0; t.batches += u.batches || 0; t.storageBytes += u.storageBytes || 0;
+    if (r.conversion === 'interested') t.interested += 1; if (r.conversion === 'converted') t.converted += 1;
+  }
+  return out;
+}
+// A rough size guide from the counters we keep, NOT a bill. About one record per student, one fee charge per student per month (assume 12 a year),
+// payments, attendance days and the small records around them. The real bill comes only from Google Cloud Billing.
+function estimateRecords(usage) {
+  const u = usage || {}; const students = u.activeStudents || 0;
+  const records = students * (1 + 12 + 12 + 60) + (u.batches || 0) * 2 + (u.extraTeachers || 0) * 2;
+  return { records, approxBytes: records * 700 + (u.storageBytes || 0) };
+}
+const CONVERSION_STATES = ['none', 'interested', 'converted'];
+// --- institution admin rules end ---
 
 exports.reserveSchoolId = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const { uid } = await requirePlatformAdmin(request);
@@ -1926,7 +1974,8 @@ exports.registerInstitution = onCall({ memory: '256MiB', timeoutSeconds: 60 }, a
   const instRef = db.doc('institutions/' + tenantId);
   const memRef = db.doc('memberships/' + uid + '_' + tenantId);
   const now = Timestamp.now();
-  const recs = buildInstitutionRecords(type, checked.clean, { uid, tenantId, terms: LEGAL_VERSIONS.terms, privacy: LEGAL_VERSIONS.privacy, now });
+  const planDoc = await db.doc('platformConfig/institutionPlans').get();
+  const recs = buildInstitutionRecords(type, checked.clean, { uid, tenantId, terms: LEGAL_VERSIONS.terms, privacy: LEGAL_VERSIONS.privacy, now, override: planDoc.exists ? planDoc.data()[type] : null });
   const outcome = await db.runTransaction(async (tx) => {
     const found = await tx.get(instRef);
     if (found.exists) return { created: false, type: found.data().type };
@@ -1951,6 +2000,7 @@ exports.resolveMyInstitutions = onCall({ memory: '256MiB', timeoutSeconds: 30 },
     const inst = await db.doc('institutions/' + d.tenantId).get();
     if (!inst.exists) continue;
     const i = inst.data();
+    if (d.role === 'owner' && (!i.lastSeenAt || Date.now() - i.lastSeenAt.toMillis() > 6 * 3600000)) { try { await inst.ref.update({ lastSeenAt: Timestamp.now() }); } catch { /* tracking only */ } }
     items.push(d.role === 'owner' ? { tenantId: d.tenantId, type: i.type, role: d.role, status: i.status, name: i.name, planId: i.planId, limits: i.limits, usage: i.usage, profile: i.profile || {} } : { tenantId: d.tenantId, type: i.type, role: d.role, status: i.status, name: i.name, teacherId: d.teacherId || '' });
   }
   return { institutions: items, emailVerified: request.auth.token.email_verified === true };
@@ -2016,7 +2066,7 @@ exports.verifyInstitutionOtp = onCall({ memory: '256MiB', timeoutSeconds: 60 }, 
 // ---- Tuition and coaching shared engine: students, batches, fees, payments, receipts, attendance (Phase 2) ----
 // Every function checks the signed-in account, its active membership and the institution status first. The institution id is never
 // trusted on its own: the membership record must belong to the caller. Collections live under institutions/{id}; no client rules.
-async function requireMember(request, data, roles) {
+async function requireMember(request, data, roles, feature) {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
   const tenantId = text((data || {}).tenantId, 40);
   if (!TENANT_ID.test(tenantId)) throw new HttpsError('invalid-argument', 'Unknown institution.');
@@ -2026,12 +2076,13 @@ async function requireMember(request, data, roles) {
   if (!roles.includes(m.data().role)) throw new HttpsError('permission-denied', m.data().role === 'owner' ? 'You cannot do this.' : 'Only the owner can do this.');
   if (m.data().role === 'teacher' && i.data().type !== 'coaching') throw new HttpsError('permission-denied', 'You do not have access to this account.');
   if (i.data().status !== 'active') throw new HttpsError('failed-precondition', 'This account is suspended. Your records are safe.');
+  if (feature && (i.data().features || {})[feature] === false) throw new HttpsError('failed-precondition', 'This feature is switched off for your plan. Write to support@azizschoolmanagementsystem.com if you need it.');
   return { uid, tenantId, role: m.data().role, teacherId: m.data().teacherId || '', inst: i.data(), ref: i.ref, col: (name) => db.collection('institutions/' + tenantId + '/' + name), doc: (path) => db.doc('institutions/' + tenantId + '/' + path) };
 }
 const requireInstitution = (request, data) => requireMember(request, data, ['owner']);
 // Coaching only: the owner, or a teacher where the function allows it.
-async function requireCoaching(request, data, roles = ['owner']) {
-  const ctx = await requireMember(request, data, roles);
+async function requireCoaching(request, data, roles = ['owner'], feature) {
+  const ctx = await requireMember(request, data, roles, feature);
   if (ctx.inst.type !== 'coaching') throw new HttpsError('failed-precondition', 'This feature is for coaching centres.');
   return ctx;
 }
@@ -2281,7 +2332,7 @@ exports.tuitionReceipt = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async 
 
 exports.tuitionAttendanceGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
   const data = request.data || {};
-  const ctx = await requireMember(request, data, ['owner', 'teacher']);
+  const ctx = await requireMember(request, data, ['owner', 'teacher'], 'attendance');
   const batchId = text(data.batchId, 30); const date = data.date;
   if (!BATCH_ID.test(batchId) || !validDate(date)) throw new HttpsError('invalid-argument', 'Choose a batch and a date.');
   const theBatch = await ctx.doc('batches/' + batchId).get(); if (!theBatch.exists || !canReachBatch(ctx, theBatch.data())) throw new HttpsError('permission-denied', 'This batch is not assigned to you.');
@@ -2292,7 +2343,7 @@ exports.tuitionAttendanceGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, 
 });
 exports.tuitionAttendanceMark = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const data = request.data || {};
-  const ctx = await requireMember(request, data, ['owner', 'teacher']);
+  const ctx = await requireMember(request, data, ['owner', 'teacher'], 'attendance');
   const batchId = text(data.batchId, 30);
   if (!BATCH_ID.test(batchId)) throw new HttpsError('invalid-argument', 'Choose a batch.');
   const checked = checkAttendanceEntries(data.entries, data.date);
@@ -2315,7 +2366,7 @@ exports.tuitionAttendanceMark = onCall({ memory: '256MiB', timeoutSeconds: 60 },
 });
 exports.tuitionAttendanceHistory = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const data = request.data || {};
-  const ctx = await requireMember(request, data, ['owner', 'teacher']);
+  const ctx = await requireMember(request, data, ['owner', 'teacher'], 'attendance');
   if (!validDate(data.from) || !validDate(data.to) || data.to < data.from) throw new HttpsError('invalid-argument', 'Choose a start and an end date.');
   if ((new Date(data.to) - new Date(data.from)) / 86400000 > 92) throw new HttpsError('invalid-argument', 'Choose a range of at most 92 days.');
   const batchId = text(data.batchId, 30); const studentId = text(data.studentId, 30);
@@ -2351,7 +2402,7 @@ async function coachingDashboardExtra(ctx) {
 }
 exports.tuitionReport = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const data = request.data || {};
-  const ctx = await requireInstitution(request, data);
+  const ctx = await requireMember(request, data, ['owner'], 'reports');
   const cycle = CYCLE.test(String(data.cycle || '')) ? data.cycle : cycleOf(todayIST());
   const [month, open, pays] = await Promise.all([ctx.col('feeCharges').where('cycle', '==', cycle).limit(900).get(), ctx.col('feeCharges').where('balancePaise', '>', 0).limit(900).get(),
     ctx.col('payments').where('paidOn', '>=', cycle + '-01').where('paidOn', '<=', cycle + '-31').limit(900).get()]);
@@ -2398,7 +2449,7 @@ const weekdayOf = (date) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][ne
 const audit = (tx, ctx, action, extra) => tx.create(ctx.doc('audit/' + newEventId('A')), { actor: ctx.uid, action, ...(extra || {}), at: Timestamp.now() });
 
 exports.coachingTeacherSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'teachers');
   const editing = text(data.teacherId, 30); if (editing && !TEACHER_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown teacher.');
   const values = { ...(data.values || {}) };
   if (editing) { const old = await ctx.doc('teachers/' + editing).get(); if (!old.exists) throw new HttpsError('not-found', 'Unknown teacher.'); values.email = old.data().email; }
@@ -2423,7 +2474,7 @@ exports.coachingTeacherSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, a
 
 // Switch a teacher off (login stops, records stay) or back on. An invite that was never used is cancelled.
 exports.coachingTeacherStatus = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'teachers');
   const teacherId = text(data.teacherId, 30); if (!TEACHER_ID.test(teacherId)) throw new HttpsError('invalid-argument', 'Unknown teacher.');
   const want = data.status === 'active' ? 'active' : 'inactive';
   const ref = ctx.doc('teachers/' + teacherId);
@@ -2445,7 +2496,7 @@ exports.coachingTeacherStatus = onCall({ memory: '256MiB', timeoutSeconds: 60 },
 });
 
 exports.coachingTeacherList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const ctx = await requireCoaching(request, request.data);
+  const ctx = await requireCoaching(request, request.data, ['owner'], 'teachers');
   const [t, b] = await Promise.all([ctx.col('teachers').limit(100).get(), ctx.col('batches').where('status', '==', 'active').limit(100).get()]);
   const assigned = {}; b.docs.forEach((d) => (d.data().teacherIds || []).forEach((id) => { (assigned[id] = assigned[id] || []).push({ id: d.id, name: d.data().name }); }));
   return { items: t.docs.map((d) => ({ id: d.id, name: d.data().name, email: d.data().email, mobile: d.data().mobile, subjects: d.data().subjects || [], notes: d.data().notes || '', status: d.data().status, batches: assigned[d.id] || [] })).sort((x, y) => (x.name < y.name ? -1 : 1)) };
@@ -2475,7 +2526,7 @@ exports.acceptTeacherInvite = onCall({ memory: '256MiB', timeoutSeconds: 60 }, a
 
 // Choose which teachers teach a batch (the owner only). Teachers then see that batch, its students and its attendance.
 exports.coachingAssign = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'teachers');
   const batchId = text(data.batchId, 30); if (!BATCH_ID.test(batchId)) throw new HttpsError('invalid-argument', 'Unknown batch.');
   const ids = [...new Set(Array.isArray(data.teacherIds) ? data.teacherIds.map((x) => String(x)) : [])]; if (ids.length > 10 || ids.some((x) => !TEACHER_ID.test(x))) throw new HttpsError('invalid-argument', 'Choose up to 10 teachers.');
   const [b, ts] = await Promise.all([ctx.doc('batches/' + batchId).get(), ids.length ? db.getAll(...ids.map((id) => ctx.doc('teachers/' + id))) : []]);
@@ -2486,7 +2537,7 @@ exports.coachingAssign = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async 
 });
 
 exports.coachingSubjectSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'subjects');
   const checked = checkSubject(data.values || {}); if (!checked.ok) throw invalid(checked);
   const editing = text(data.subjectId, 30); if (editing && !SUBJECT_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown subject.');
   const all = await ctx.col('subjects').limit(80).get(); const lower = checked.clean.name.toLowerCase();
@@ -2498,19 +2549,19 @@ exports.coachingSubjectSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, a
   return { subjectId };
 });
 exports.coachingSubjectArchive = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data); const id = text(data.subjectId, 30); if (!SUBJECT_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown subject.');
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'subjects'); const id = text(data.subjectId, 30); if (!SUBJECT_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown subject.');
   const ref = ctx.doc('subjects/' + id); if (!(await ref.get()).exists) throw new HttpsError('not-found', 'Unknown subject.');
   await ref.update({ status: data.restore === true ? 'active' : 'archived', updatedAt: Timestamp.now() }); return { ok: true };
 });
 exports.coachingSubjectList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher']);
+  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher'], 'subjects');
   const snap = await ctx.col('subjects').limit(80).get();
   return { items: snap.docs.map((d) => ({ id: d.id, name: d.data().name, code: d.data().code || '', status: d.data().status })).sort((a, b) => (a.name < b.name ? -1 : 1)) };
 });
 
 // Timetable. A save that would put one teacher, or one room, in two places at once is not saved; the page shows the clash and the owner may save anyway.
 exports.coachingSessionSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'timetable');
   const checked = checkSession(data.values || {}); if (!checked.ok) throw invalid(checked);
   const editing = text(data.sessionId, 30); if (editing && !SESSION_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown class.');
   const [b, t, all] = await Promise.all([ctx.doc('batches/' + checked.clean.batchId).get(), ctx.doc('teachers/' + checked.clean.teacherId).get(), ctx.col('sessions').limit(300).get()]);
@@ -2525,11 +2576,11 @@ exports.coachingSessionSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, a
   return { saved: true, sessionId };
 });
 exports.coachingSessionDelete = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data); const id = text(data.sessionId, 30); if (!SESSION_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown class.');
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'timetable'); const id = text(data.sessionId, 30); if (!SESSION_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown class.');
   await ctx.doc('sessions/' + id).delete(); return { ok: true };
 });
 exports.coachingSessionList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher']);
+  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher'], 'timetable');
   const [s, b, t] = await Promise.all([ctx.col('sessions').limit(300).get(), ctx.col('batches').limit(100).get(), ctx.col('teachers').limit(100).get()]);
   const bn = {}; b.docs.forEach((d) => { bn[d.id] = d.data().name; }); const tn = {}; t.docs.forEach((d) => { tn[d.id] = d.data().name; });
   let rows = s.docs.map((d) => ({ id: d.id, ...d.data(), createdAt: undefined, updatedAt: undefined, createdBy: undefined, batchName: bn[d.data().batchId] || '', teacherName: tn[d.data().teacherId] || '' }));
@@ -2540,7 +2591,7 @@ exports.coachingSessionList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, a
 
 // Exams and marks. The owner reaches every batch; a teacher only the batches assigned to them.
 exports.coachingExamSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher']);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher'], 'exams');
   const checked = checkExam(data.values || {}); if (!checked.ok) throw invalid(checked);
   const b = await ctx.doc('batches/' + checked.clean.batchId).get(); if (!b.exists || b.data().status !== 'active' || !canReachBatch(ctx, b.data())) throw new HttpsError('permission-denied', 'This batch is not assigned to you.');
   const editing = text(data.examId, 30); if (editing && !EXAM_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown exam.');
@@ -2556,7 +2607,7 @@ exports.coachingExamSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, asyn
   return { examId };
 });
 exports.coachingExamList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher']);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher'], 'exams');
   const [e, b] = await Promise.all([ctx.col('exams').limit(500).get(), ctx.col('batches').limit(100).get()]);
   const reach = {}; b.docs.forEach((d) => { if (canReachBatch(ctx, d.data())) reach[d.id] = d.data().name; });
   const batchId = text(data.batchId, 30);
@@ -2570,7 +2621,7 @@ async function examForMarks(ctx, data) {
   return { examId, exam: ex.data(), ref: ex.ref };
 }
 exports.coachingMarksGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher']); const { examId, exam } = await examForMarks(ctx, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher'], 'exams'); const { examId, exam } = await examForMarks(ctx, data);
   const [studs, marks] = await Promise.all([ctx.col('students').where('batchId', '==', exam.batchId).where('status', '==', 'active').limit(300).get(), ctx.col('marks').where('examId', '==', examId).limit(400).get()]);
   const got = {}; marks.docs.forEach((d) => { got[d.data().studentId] = d.data().marks; });
   const items = studs.docs.map((d) => ({ studentId: d.id, name: d.data().name, marks: got[d.id] === undefined ? null : got[d.id], entered: got[d.id] !== undefined })).sort((a, b) => (a.name < b.name ? -1 : 1));
@@ -2579,7 +2630,7 @@ exports.coachingMarksGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, asyn
     summary: { students: items.length, absent: items.filter((x) => x.entered && x.marks === null).length, highest: scored.length ? Math.max(...scored) : null, average: scored.length ? Math.round((scored.reduce((t, x) => t + x, 0) / scored.length) * 100) / 100 : null } };
 });
 exports.coachingMarksSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher']); const { examId, exam, ref } = await examForMarks(ctx, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner', 'teacher'], 'exams'); const { examId, exam, ref } = await examForMarks(ctx, data);
   const checked = checkMarks(data.entries, exam.maxMarks); if (checked.error) throw new HttpsError('invalid-argument', checked.error);
   const studs = await db.getAll(...checked.entries.map((e) => ctx.doc('students/' + e.studentId)));
   if (studs.some((s) => !s.exists || s.data().batchId !== exam.batchId)) throw new HttpsError('invalid-argument', 'One of the students is not in this batch.');
@@ -2590,7 +2641,7 @@ exports.coachingMarksSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, asy
 });
 
 exports.coachingNoticeSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'announcements');
   const checked = checkNotice(data.values || {}); if (!checked.ok) throw invalid(checked);
   const editing = text(data.noticeId, 30); if (editing && !NOTICE_ID.test(editing)) throw new HttpsError('invalid-argument', 'Unknown announcement.');
   const noticeId = editing || newRecordId('AN'); const ref = ctx.doc('notices/' + noticeId);
@@ -2599,11 +2650,11 @@ exports.coachingNoticeSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, as
   return { noticeId };
 });
 exports.coachingNoticeDelete = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data); const id = text(data.noticeId, 30); if (!NOTICE_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown announcement.');
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'announcements'); const id = text(data.noticeId, 30); if (!NOTICE_ID.test(id)) throw new HttpsError('invalid-argument', 'Unknown announcement.');
   await ctx.doc('notices/' + id).delete(); return { ok: true };
 });
 exports.coachingNoticeList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher']);
+  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher'], 'announcements');
   const snap = await ctx.col('notices').limit(120).get();
   const items = snap.docs.map((d) => ({ id: d.id, title: d.data().title, body: d.data().body, pinned: d.data().pinned === true, createdAt: d.data().createdAt.toMillis() }));
   return { items: items.sort((a, b) => (a.pinned === b.pinned ? b.createdAt - a.createdAt : a.pinned ? -1 : 1)) };
@@ -2648,15 +2699,156 @@ exports.coachingTeacherHome = onCall({ memory: '256MiB', timeoutSeconds: 30 }, a
 
 // Centre logo for receipts: a small picture kept with the centre record.
 exports.institutionLogoSave = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const data = request.data || {}; const ctx = await requireCoaching(request, data);
+  const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'logo');
   if (data.remove === true) { await ctx.doc('config/logo').delete(); await ctx.ref.update({ 'usage.storageBytes': 0 }); return { ok: true, removed: true }; }
   const checked = checkLogo(data.dataUrl); if (checked.error) throw new HttpsError('invalid-argument', checked.error);
   await ctx.doc('config/logo').set({ dataUrl: checked.dataUrl, mime: checked.mime, bytes: checked.bytes, updatedAt: Timestamp.now(), by: ctx.uid });
   await ctx.ref.update({ 'usage.storageBytes': checked.bytes }); return { ok: true, bytes: checked.bytes };
 });
 exports.institutionLogoGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
-  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher']); const l = await ctx.doc('config/logo').get();
+  const ctx = await requireCoaching(request, request.data, ['owner', 'teacher'], 'logo'); const l = await ctx.doc('config/logo').get();
   return { dataUrl: l.exists ? l.data().dataUrl : '' };
+});
+
+// ---- Super Admin controls for tuition and coaching (Phase 4) ----
+// Platform administrators only (the platformAdmins list). These functions use the Admin SDK, which bypasses the database rules, so each one checks the
+// administrator first, requires a reason for every change and for every look at private records, and writes platformAudit before it answers.
+const adminAudit = (uid, email, action, tenantId, reason, detail) => db.doc('platformAudit/' + newEventId('A')).set({ actor: uid, actorEmail: email, action, schoolId: '', tenantId, reason: String(reason || '').slice(0, 300), detail: JSON.stringify(detail || {}).slice(0, 1500), at: Timestamp.now() });
+const adminTenant = async (data) => {
+  const tenantId = text((data || {}).tenantId, 40); if (!TENANT_ID.test(tenantId)) throw new HttpsError('invalid-argument', 'Unknown institution.');
+  const ref = db.doc('institutions/' + tenantId); const snap = await ref.get(); if (!snap.exists) throw new HttpsError('not-found', 'Unknown institution.');
+  return { tenantId, ref, inst: snap.data() };
+};
+const instRow = (id, d) => ({ tenantId: id, type: d.type, name: d.name || '', ownerEmail: d.ownerEmail || '', status: d.status || 'active', planId: d.planId || '', createdMs: d.createdAt && d.createdAt.toMillis ? d.createdAt.toMillis() : 0,
+  lastSeenMs: d.lastSeenAt && d.lastSeenAt.toMillis ? d.lastSeenAt.toMillis() : 0, usage: d.usage || {}, limits: d.limits || {}, conversion: d.conversion || 'none', entitlementVersion: d.entitlementVersion || 1, limitsCustom: d.limitsCustom === true,
+  city: (d.profile && (d.profile.locality || d.profile.address)) || '' });
+
+// Controls 01 to 06 and 12: the two directories, filters, totals, activity and conversion counts. Filtering and search run in the browser on this list.
+exports.adminInstitutionList = onCall({ memory: '512MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request);
+  const snap = await db.collection('institutions').limit(2000).get(); const now = Date.now();
+  const rows = snap.docs.map((d) => instRow(d.id, d.data()));
+  return { items: rows.map((r) => ({ ...r, activity: activityState(r.lastSeenMs, now) })), totals: summarizeInstitutions(rows, now), truncated: snap.size >= 2000, now };
+});
+
+exports.adminInstitutionDetail = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request); const { tenantId, ref, inst } = await adminTenant(request.data);
+  let owner = { verified: null, lastSignIn: '', created: '' };
+  try { const u = await getAuth().getUser(inst.ownerUid); owner = { verified: u.emailVerified === true, lastSignIn: u.metadata.lastSignInTime || '', created: u.metadata.creationTime || '' }; } catch { /* the account may have been removed */ }
+  const [own, plat, ent] = await Promise.all([ref.collection('audit').orderBy('at', 'desc').limit(30).get(), db.collection('platformAudit').where('tenantId', '==', tenantId).limit(60).get(), ref.collection('config').doc('entitlements').get()]);
+  const ms = (t) => (t && t.toMillis ? t.toMillis() : 0);
+  const row = instRow(tenantId, inst);
+  return { ...row, ownerUid: inst.ownerUid, owner, statusReason: inst.statusReason || '', features: inst.features || {}, featureKeys: ADMIN_FEATURE_KEYS[inst.type] || [], conversionNote: inst.conversionNote || '', estimate: estimateRecords(inst.usage), entitlements: ent.exists ? { version: ent.data().version, planId: ent.data().planId } : null,
+    activityState: activityState(row.lastSeenMs, Date.now()),
+    history: [...own.docs.map((d) => ({ at: ms(d.data().at), who: 'Account', action: d.data().action })), ...plat.docs.map((d) => ({ at: ms(d.data().at), who: d.data().actorEmail || 'Super Admin', action: d.data().action, reason: d.data().reason || '' }))].sort((a, b) => b.at - a.at).slice(0, 60) };
+});
+
+// Control 10: suspend or reactivate with a reason. A suspended account can sign in but every action is refused (see requireMember).
+exports.adminInstitutionSetStatus = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request); const { tenantId, ref, inst } = await adminTenant(request.data);
+  const status = (request.data || {}).status; if (!['active', 'suspended'].includes(status)) throw new HttpsError('invalid-argument', 'Choose suspend or reactivate.');
+  const why = checkReason((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  if ((inst.status || 'active') === status) return { ok: true, unchanged: true };
+  await adminAudit(uid, email, status === 'suspended' ? 'institution-suspended' : 'institution-reactivated', tenantId, why.reason, { before: inst.status || 'active', after: status });
+  await ref.update({ status, statusReason: why.reason, statusChangedAt: Timestamp.now() });
+  await ref.collection('audit').doc(newEventId('A')).set({ actor: uid, action: 'admin-' + status, at: Timestamp.now() });
+  return { ok: true };
+});
+
+// Controls 08 and 09: student, teacher, batch and storage quotas for one account. Each change bumps the entitlement version and keeps the old numbers in the history.
+exports.adminInstitutionSetLimits = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request); const { tenantId, ref, inst } = await adminTenant(request.data);
+  const c = checkLimits((request.data || {}).limits); if (!c.ok) throw new HttpsError('invalid-argument', Object.values(c.errors)[0], { errors: c.errors });
+  const why = checkReason((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  if (inst.type === 'tuition' && c.limits.extraTeachers > 0) throw new HttpsError('invalid-argument', 'Tuition accounts have no extra teachers.', { errors: { extraTeachers: 'Tuition accounts have no extra teachers.' } });
+  const version = (inst.entitlementVersion || 1) + 1; const before = inst.limits || {}; const limits = { ...before, ...c.limits };
+  await adminAudit(uid, email, 'institution-limits-changed', tenantId, why.reason, { before, after: limits, version });
+  await db.runTransaction(async (tx) => {
+    tx.update(ref, { limits, entitlementVersion: version, limitsCustom: true });
+    tx.set(ref.collection('config').doc('entitlements'), { limits, version, setAt: Timestamp.now(), setBy: uid }, { merge: true });
+    tx.set(ref.collection('entitlementHistory').doc('v' + version), { version, before, after: limits, by: uid, reason: why.reason, at: Timestamp.now() });
+  });
+  return { ok: true, version, limits };
+});
+
+// Control 07 (one account): switch individual free-plan features on or off for one account.
+exports.adminInstitutionSetFeatures = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request); const { tenantId, ref, inst } = await adminTenant(request.data);
+  const why = checkReason((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  const features = cleanFeatures(inst.type, (request.data || {}).features); const version = (inst.entitlementVersion || 1) + 1;
+  await adminAudit(uid, email, 'institution-features-changed', tenantId, why.reason, { before: inst.features || {}, after: features, version });
+  await db.runTransaction(async (tx) => {
+    tx.update(ref, { features, entitlementVersion: version, limitsCustom: true });
+    tx.set(ref.collection('config').doc('entitlements'), { features, version, setAt: Timestamp.now(), setBy: uid }, { merge: true });
+    tx.set(ref.collection('entitlementHistory').doc('v' + version), { version, features, by: uid, reason: why.reason, at: Timestamp.now() });
+  });
+  return { ok: true, version, features };
+});
+
+// Control 07 (the plan): the free plan every NEW account of a type starts with, versioned. The change can also be applied to existing accounts that have no custom quota.
+exports.adminInstitutionPlanGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  await requirePlatformAdmin(request); const doc = await db.doc('platformConfig/institutionPlans').get(); const saved = doc.exists ? doc.data() : {}; const out = {};
+  for (const type of INSTITUTION_TYPES) { const base = institutionEntitlements(type, saved[type]); out[type] = { version: base.version, limits: base.limits, features: cleanFeatures(type, base.features), featureKeys: ADMIN_FEATURE_KEYS[type] }; }
+  return out;
+});
+exports.adminInstitutionPlanSave = onCall({ memory: '512MiB', timeoutSeconds: 120 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request); const data = request.data || {}; const type = text(data.type, 10);
+  if (!INSTITUTION_TYPES.includes(type)) throw new HttpsError('invalid-argument', 'Choose Tuition or Coaching.');
+  const c = checkLimits(data.limits); if (!c.ok) throw new HttpsError('invalid-argument', Object.values(c.errors)[0], { errors: c.errors });
+  if (type === 'tuition' && c.limits.extraTeachers > 0) throw new HttpsError('invalid-argument', 'Tuition accounts have no extra teachers.', { errors: { extraTeachers: 'Tuition accounts have no extra teachers.' } });
+  const why = checkReason(data.reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  const features = cleanFeatures(type, data.features); const ref = db.doc('platformConfig/institutionPlans');
+  const prev = await ref.get(); const old = prev.exists ? prev.data()[type] || {} : {}; const version = Math.max(old.version || ENTITLEMENT_VERSION, ENTITLEMENT_VERSION) + 1;
+  const limits = { ...FREE_PLANS[type].limits, ...c.limits };
+  await adminAudit(uid, email, 'free-plan-changed', '', why.reason, { type, version, limits, features, applyToExisting: data.applyToExisting === true });
+  await ref.set({ [type]: { version, limits, features, setAt: Timestamp.now(), setBy: uid } }, { merge: true });
+  let applied = 0;
+  if (data.applyToExisting === true) {
+    const snap = await db.collection('institutions').where('type', '==', type).limit(500).get(); let batch = db.batch(); let n = 0;
+    for (const d of snap.docs) {
+      if (d.data().limitsCustom === true) continue;
+      batch.update(d.ref, { limits: { ...(d.data().limits || {}), ...limits }, features, entitlementVersion: version }); batch.set(d.ref.collection('config').doc('entitlements'), { limits, features, version, setAt: Timestamp.now(), setBy: uid }, { merge: true });
+      applied += 1; n += 2; if (n >= 400) { await batch.commit(); batch = db.batch(); n = 0; }
+    }
+    if (n) await batch.commit();
+  }
+  return { ok: true, version, applied };
+});
+
+// Control 12: free-to-paid conversion tracking. Owners can say they are interested; the administrator records follow-up and a conversion.
+exports.adminInstitutionSetConversion = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request); const { tenantId, ref, inst } = await adminTenant(request.data);
+  const state = (request.data || {}).state; if (!CONVERSION_STATES.includes(state)) throw new HttpsError('invalid-argument', 'Choose none, interested or converted.');
+  const note = text((request.data || {}).note, 200);
+  await adminAudit(uid, email, 'institution-conversion', tenantId, note || 'Conversion status', { before: inst.conversion || 'none', after: state });
+  await ref.update({ conversion: state, conversionNote: note, conversionAt: Timestamp.now() }); return { ok: true };
+});
+exports.institutionUpgradeInterest = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
+  const ctx = await requireInstitution(request, request.data);
+  if (!ctx.inst.conversion || ctx.inst.conversion === 'none') await ctx.ref.update({ conversion: 'interested', conversionAt: Timestamp.now() });
+  return { ok: true };
+});
+
+// Controls 11: record counts and rough size, labelled as an estimate. Actual billing is in Google Cloud Billing.
+exports.adminInstitutionCost = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  await requirePlatformAdmin(request); const snap = await db.collection('institutions').limit(2000).get();
+  const total = { records: 0, approxBytes: 0 }; const byType = { tuition: { accounts: 0, records: 0, approxBytes: 0 }, coaching: { accounts: 0, records: 0, approxBytes: 0 } }; const top = [];
+  for (const d of snap.docs) { const x = d.data(); const e = estimateRecords(x.usage); const t = byType[x.type]; if (!t) continue; t.accounts += 1; t.records += e.records; t.approxBytes += e.approxBytes; total.records += e.records; total.approxBytes += e.approxBytes; top.push({ tenantId: d.id, name: x.name || '', type: x.type, records: e.records, approxBytes: e.approxBytes }); }
+  return { estimate: true, total, byType, top: top.sort((a, b) => b.records - a.records).slice(0, 10), note: 'These numbers are estimates worked out from student, batch and teacher counts. They are not a bill. Actual Firebase charges are only in Google Cloud Billing.' };
+});
+
+// Private records: a reason is required and is written to platformAudit BEFORE anything is returned. Names and amounts only, at most 100 rows, no passwords.
+exports.adminInstitutionPrivateAccess = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
+  const { uid, email } = await requirePlatformAdmin(request); const { tenantId, ref } = await adminTenant(request.data);
+  const kind = (request.data || {}).kind; if (!['students', 'fees'].includes(kind)) throw new HttpsError('invalid-argument', 'Choose students or fees.');
+  const why = checkReason((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  await adminAudit(uid, email, 'private-access-' + kind, tenantId, why.reason, { kind });
+  if (kind === 'students') {
+    const s = await ref.collection('students').limit(100).get();
+    return { kind, items: s.docs.map((d) => ({ id: d.id, name: d.data().name, className: d.data().className, guardianName: d.data().guardianName, guardianMobile: d.data().guardianMobile, status: d.data().status })), logged: true };
+  }
+  const p = await ref.collection('payments').limit(100).get();
+  return { kind, items: p.docs.map((d) => ({ id: d.id, receiptNo: d.data().receiptNo, amountPaise: d.data().amountPaise, method: d.data().method, paidOn: d.data().paidOn, status: d.data().status })).sort((a, b) => (a.paidOn < b.paidOn ? 1 : -1)), logged: true };
 });
 
 exports.getOnboardingFlag = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => { await requirePlatformAdmin(request); return { enabled: await onboardingEnabled() }; });

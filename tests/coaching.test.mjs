@@ -65,8 +65,8 @@ test('logo: real small PNG accepted; wrong type, fake picture and big files refu
 const OWNER_ONLY = ['coachingTeacherSave', 'coachingTeacherStatus', 'coachingTeacherList', 'coachingAssign', 'coachingSubjectSave', 'coachingSubjectArchive', 'coachingSessionSave', 'coachingSessionDelete', 'coachingNoticeSave', 'coachingNoticeDelete', 'coachingFeesByBatch', 'coachingAttendanceReport', 'institutionLogoSave'];
 const SHARED = ['coachingSubjectList', 'coachingSessionList', 'coachingExamSave', 'coachingExamList', 'coachingMarksGet', 'coachingMarksSave', 'coachingNoticeList', 'institutionLogoGet'];
 test('coaching functions: owner-only ones check the coaching owner; shared ones name both roles; teacher-only home', () => {
-  for (const n of OWNER_ONLY) assert.match(bodyOf(n), /requireCoaching\(request, (data|request\.data)\)/, n);
-  for (const n of SHARED) assert.match(bodyOf(n), /requireCoaching\(request, (data|request\.data), \['owner', 'teacher'\]\)/, n);
+  for (const n of OWNER_ONLY) assert.match(bodyOf(n), /requireCoaching\(request, (data|request\.data)(, \['owner'\], '[a-z]+')?\)/, n);
+  for (const n of SHARED) assert.match(bodyOf(n), /requireCoaching\(request, (data|request\.data), \['owner', 'teacher'\](, '[a-z]+')?\)/, n);
   assert.match(bodyOf('coachingTeacherHome'), /requireCoaching\(request, request\.data, \['teacher'\]\)/);
   assert.match(src, /async function requireCoaching[\s\S]*?type !== 'coaching'/);
 });
