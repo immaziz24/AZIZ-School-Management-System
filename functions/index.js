@@ -1502,7 +1502,7 @@ function checkInstitution(type, values, nowYear = new Date().getUTCFullYear()) {
   }
   clean.templates = templates;
   const prefIn = v.admissionPrefs && typeof v.admissionPrefs === 'object' && !Array.isArray(v.admissionPrefs) ? v.admissionPrefs : {};
-  clean.admissionPrefs = Object.fromEntries(['autoAssign', 'allowCustomise', 'showAssigned', 'warnUnconfigured', 'autoDate', 'autoTime'].map((k) => [k, typeof prefIn[k] === 'boolean' ? prefIn[k] : k !== 'autoTime']));
+  clean.admissionPrefs = Object.fromEntries(['autoAssign', 'allowCustomise', 'showAssigned', 'warnUnconfigured', 'autoDate', 'autoTime'].map((k) => [k, typeof prefIn[k] === 'boolean' ? prefIn[k] : true]));
   if (!TEACHING_MODES.includes(v.teachingMode)) errors.teachingMode = 'Choose offline, online or hybrid.'; clean.teachingMode = TEACHING_MODES.includes(v.teachingMode) ? v.teachingMode : '';
   if (v.termsAccepted !== true) errors.termsAccepted = 'Accept the terms and privacy policy to continue.'; clean.termsAccepted = v.termsAccepted === true;
   if (type === 'tuition') {
@@ -1608,6 +1608,14 @@ function checkStudent(v, today = todayIST()) {
   if (!validDate(v.joiningDate)) errors.joiningDate = 'Enter the joining date.'; c.joiningDate = String(v.joiningDate || '');
   c.joiningTime = v.joiningTime === '' || v.joiningTime == null ? '' : String(v.joiningTime);
   if (c.joiningTime && !validTime(c.joiningTime)) errors.joiningTime = 'Enter the time as HH:MM.';
+  // The month the monthly fee starts from. A student who joins on the 20th can start next month, so the days already gone are not charged.
+  { const joinCycle = validDate(v.joiningDate) ? String(v.joiningDate).slice(0, 7) : ''; const raw = typeof v.feeStartMonth === 'string' ? v.feeStartMonth.trim() : ''; c.feeStartCycle = joinCycle;
+    if (raw) {
+      if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(raw)) errors.feeStartMonth = 'Choose the month the fee starts from.';
+      else if (joinCycle && raw < joinCycle) errors.feeStartMonth = 'The fee cannot start before the joining month.';
+      else if (joinCycle && (Number(raw.slice(0, 4)) - Number(joinCycle.slice(0, 4))) * 12 + Number(raw.slice(5)) - Number(joinCycle.slice(5)) > 24) errors.feeStartMonth = 'Choose a month within two years of joining.';
+      else c.feeStartCycle = raw;
+    } }
   for (const [key, label] of [['monthlyFee', 'Monthly fee'], ['admissionFee', 'Admission fee'], ['openingBalance', 'Opening balance']]) {
     const raw = v[key] === '' || v[key] == null ? '0' : v[key]; const p = rupeesToPaise(raw);
     if (p === null) errors[key] = label + ' must be an amount in rupees.'; c[key + 'Paise'] = p === null ? 0 : p;
@@ -2118,12 +2126,12 @@ const STUDENT_ID = /^ST-[A-Z0-9]{6,20}$/;
 const BATCH_ID = /^BT-[A-Z0-9]{6,20}$/;
 const CYCLE = /^[0-9]{4}-(0[1-9]|1[0-2])$/;
 const studentFields = (c, now) => ({ name: c.name, nameLower: c.name.toLowerCase(), className: c.className, schoolName: c.schoolName, guardianName: c.guardianName, guardianMobile: c.guardianMobile,
-  studentMobile: c.studentMobile, address: c.address, subject: c.subject, subjects: c.subjects, batchId: c.batchId, joiningDate: c.joiningDate, joiningTime: c.joiningTime, joiningCycle: cycleOf(c.joiningDate),
+  studentMobile: c.studentMobile, address: c.address, subject: c.subject, subjects: c.subjects, batchId: c.batchId, joiningDate: c.joiningDate, joiningTime: c.joiningTime, joiningCycle: cycleOf(c.joiningDate), feeStartCycle: c.feeStartCycle || cycleOf(c.joiningDate),
   monthlyFeePaise: c.monthlyFeePaise, dueDay: c.dueDay, admissionFeePaise: c.admissionFeePaise, openingBalancePaise: c.openingBalancePaise, notes: c.notes, updatedAt: now });
 
 async function ensureCharges(ctx, cycle) {
   const students = await ctx.col('students').where('status', '==', 'active').limit(600).get();
-  await Promise.all(students.docs.filter((d) => d.data().joiningCycle <= cycle && planFor(d.data().feePlan, cycle, d.data()).monthlyFeePaise > 0).map(async (d) => {
+  await Promise.all(students.docs.filter((d) => (d.data().feeStartCycle || d.data().joiningCycle) <= cycle && planFor(d.data().feePlan, cycle, d.data()).monthlyFeePaise > 0).map(async (d) => {
     const s = d.data(); const pl = planFor(s.feePlan, cycle, s);
     try { await ctx.doc('feeCharges/' + chargeIdFor(d.id, cycle)).create({ studentId: d.id, cycle, kind: 'monthly', dueDate: dueDateFor(cycle, pl.dueDay), amountPaise: pl.monthlyFeePaise, paidPaise: 0, balancePaise: pl.monthlyFeePaise, createdAt: Timestamp.now() }); }
     catch (error) { if (error.code !== 6) throw error; }
@@ -2151,7 +2159,7 @@ exports.tuitionStudentSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, as
       if (!found.exists) throw new HttpsError('not-found', 'Unknown student.');
       if (found.data().status === 'archived') throw new HttpsError('failed-precondition', 'Reactivate this student before editing.');
       const old = found.data(); const fields = studentFields(c, now);
-      delete fields.admissionFeePaise; delete fields.openingBalancePaise; delete fields.joiningCycle;
+      delete fields.admissionFeePaise; delete fields.openingBalancePaise; delete fields.joiningCycle; delete fields.feeStartCycle;
       const oldPlan = Array.isArray(old.feePlan) && old.feePlan.length ? old.feePlan : [{ from: '0000-00', monthlyFeePaise: old.monthlyFeePaise, dueDay: old.dueDay }];
       if (c.monthlyFeePaise !== old.monthlyFeePaise || c.dueDay !== old.dueDay) {
         const asked = String(data.feeEffectiveFrom || ''); const from = CYCLE.test(asked) && asked >= cycle ? asked : nextCycle(cycle);
@@ -2164,11 +2172,11 @@ exports.tuitionStudentSave = onCall({ memory: '256MiB', timeoutSeconds: 60 }, as
     }
     const u = inst.data().usage || {}; const limit = (inst.data().limits || {}).activeStudents || 0;
     if (c.status === 'active' && (u.activeStudents || 0) + 1 > limit) throw new HttpsError('resource-exhausted', 'You have reached the free limit of ' + limit + ' active students. Archive a student or switch one to inactive first.');
-    tx.create(sRef, { ...studentFields(c, now), feePlan: [{ from: cycleOf(c.joiningDate), monthlyFeePaise: c.monthlyFeePaise, dueDay: c.dueDay }], status: c.status, createdAt: now, createdBy: ctx.uid });
+    tx.create(sRef, { ...studentFields(c, now), feePlan: [{ from: c.feeStartCycle || cycleOf(c.joiningDate), monthlyFeePaise: c.monthlyFeePaise, dueDay: c.dueDay }], status: c.status, createdAt: now, createdBy: ctx.uid });
     const base = { studentId, paidPaise: 0, createdAt: now };
     if (c.openingBalancePaise > 0) tx.create(ctx.doc('feeCharges/' + studentId + '_OPEN'), { ...base, cycle: cycleOf(c.joiningDate), kind: 'opening', dueDate: c.joiningDate, amountPaise: c.openingBalancePaise, balancePaise: c.openingBalancePaise });
     if (c.admissionFeePaise > 0) tx.create(ctx.doc('feeCharges/' + studentId + '_ADM'), { ...base, cycle: cycleOf(c.joiningDate), kind: 'admission', dueDate: c.joiningDate, amountPaise: c.admissionFeePaise, balancePaise: c.admissionFeePaise });
-    if (c.status === 'active' && c.monthlyFeePaise > 0 && cycleOf(c.joiningDate) <= cycle) tx.create(ctx.doc('feeCharges/' + chargeIdFor(studentId, cycle)), { ...base, cycle, kind: 'monthly', dueDate: dueDateFor(cycle, c.dueDay), amountPaise: c.monthlyFeePaise, balancePaise: c.monthlyFeePaise });
+    if (c.status === 'active' && c.monthlyFeePaise > 0 && (c.feeStartCycle || cycleOf(c.joiningDate)) <= cycle) tx.create(ctx.doc('feeCharges/' + chargeIdFor(studentId, cycle)), { ...base, cycle, kind: 'monthly', dueDate: dueDateFor(cycle, c.dueDay), amountPaise: c.monthlyFeePaise, balancePaise: c.monthlyFeePaise });
     if (c.status === 'active') tx.update(ctx.ref, { 'usage.activeStudents': FieldValue.increment(1) });
   });
   return { studentId };

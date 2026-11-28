@@ -130,9 +130,9 @@ test('academic setup rules: class subjects are cleaned and kept for classes swit
   const t = lib.checkInstitution('coaching', { ...coaching, templates: [{ id: 'TP-abcd1234', name: '  Foundation  Curriculum ', description: 'd', subjects: ['English', 'English', 'Science'], classes: ['Class 5'] }, { id: 'bad', name: 'No id', subjects: ['A'] }, { id: 'TP-abcd1234', name: 'Duplicate id', subjects: ['A'] }, { id: 'TP-zzzz9999', name: '', subjects: ['A'] }, 'junk', null] });
   assert.equal(t.clean.templates.length, 1); assert.equal(t.clean.templates[0].name, 'Foundation Curriculum'); assert.deepEqual(t.clean.templates[0].subjects, ['English', 'Science']);
   assert.equal(lib.checkInstitution('coaching', { ...coaching, templates: Array.from({ length: 30 }, (_, i) => ({ id: 'TP-id' + String(i).padStart(4, '0'), name: 'T' + i, subjects: ['A'] })) }).clean.templates.length, 20);
-  assert.deepEqual(lib.checkInstitution('coaching', coaching).clean.admissionPrefs, { autoAssign: true, allowCustomise: true, showAssigned: true, warnUnconfigured: true, autoDate: true, autoTime: false });
+  assert.deepEqual(lib.checkInstitution('coaching', coaching).clean.admissionPrefs, { autoAssign: true, allowCustomise: true, showAssigned: true, warnUnconfigured: true, autoDate: true, autoTime: true });
   assert.equal(lib.checkInstitution('coaching', { ...coaching, admissionPrefs: { autoAssign: false, autoTime: 'yes', evil: true } }).clean.admissionPrefs.autoAssign, false);
-  assert.equal(lib.checkInstitution('coaching', { ...coaching, admissionPrefs: { autoTime: 'yes' } }).clean.admissionPrefs.autoTime, false);
+  assert.equal(lib.checkInstitution('coaching', { ...coaching, admissionPrefs: { autoTime: 'yes' } }).clean.admissionPrefs.autoTime, true);
   assert.equal('evil' in lib.checkInstitution('coaching', { ...coaching, admissionPrefs: { evil: true } }).clean.admissionPrefs, false);
   assert.equal(lib.checkInstitution('coaching', { ...coaching, subjects: Array.from({ length: 70 }, (_, i) => 'S' + i) }).clean.subjects.length, 60);
 });

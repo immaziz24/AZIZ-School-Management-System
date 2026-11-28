@@ -163,3 +163,11 @@ test('student money history, attendance by student, fee start month and calendar
   assert.match(read('public/institution.html'), /color-scheme:dark/);
   const f = bodyOf('tuitionFees'); assert.match(f, /studentId/); assert.match(bodyOf('tuitionStudentSave'), /fee-plan-changed/); assert.match(src, /planFor\(d\.data\(\)\.feePlan, cycle, d\.data\(\)\)/);
 });
+
+test('fee start month: defaults to joining month, later allowed, earlier or bad rejected', () => {
+  assert.equal(lib.checkStudent(student, '2026-11-26').clean.feeStartCycle, '2026-11');
+  const later = lib.checkStudent({ ...student, joiningDate: '2026-11-20', feeStartMonth: '2026-12' }, '2026-11-26'); assert.equal(later.ok, true); assert.equal(later.clean.feeStartCycle, '2026-12');
+  assert.equal(lib.checkStudent({ ...student, feeStartMonth: '2026-10' }, '2026-11-26').errors.feeStartMonth, 'The fee cannot start before the joining month.');
+  assert.ok(lib.checkStudent({ ...student, feeStartMonth: '2026-13' }, '2026-11-26').errors.feeStartMonth);
+  assert.ok(lib.checkStudent({ ...student, feeStartMonth: '2029-01' }, '2026-11-26').errors.feeStartMonth);
+});
