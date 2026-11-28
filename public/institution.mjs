@@ -7,7 +7,25 @@ import { mountCoaching, coachingExtras } from './coaching-ui.mjs?v=tc-1';
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
 const auth = getAuth(app);
-const call = async (name, data) => (await httpsCallable(getFunctions(app, 'asia-south1'), name)(data || {})).data;
+const fns = getFunctions(app, 'asia-south1');
+// Speed (Batch 120). 1) Each server function sleeps when unused and takes seconds to wake. We wake the ones this page uses in the background
+// (the calls fail at once with "sign in" or "unknown institution", so nothing is read or changed). 2) Read results are kept for 45 seconds, so
+// going back to a screen is instant; any save, payment or other change clears the kept results so nothing stale is shown after your own edit.
+const READ = /(List|Get|Dashboard|Report|Receipt|History|Home|ByBatch)$|^tuition(Fees|Payments)$/;
+const kept = new Map(); const KEEP_MS = 45000;
+const rawCall = async (name, data) => (await httpsCallable(fns, name)(data || {})).data;
+const call = async (name, data) => {
+  if (!READ.test(name)) { kept.clear(); return rawCall(name, data); }
+  const key = name + '|' + JSON.stringify(data || {}); const hit = kept.get(key);
+  if (hit && Date.now() - hit.at < KEEP_MS) return hit.promise;
+  const promise = rawCall(name, data); kept.set(key, { at: Date.now(), promise });
+  promise.catch(() => kept.delete(key));
+  return promise;
+};
+const WARM = { tuition: ['tuitionDashboard', 'tuitionStudentList', 'tuitionBatchList', 'tuitionFees', 'tuitionPayments', 'tuitionAttendanceGet', 'tuitionReport', 'tuitionReceipt', 'tuitionPaymentRecord', 'tuitionStudentSave', 'tuitionAttendanceMark'],
+  coaching: ['tuitionDashboard', 'tuitionStudentList', 'tuitionBatchList', 'tuitionFees', 'tuitionPayments', 'tuitionAttendanceGet', 'tuitionReport', 'coachingTeacherList', 'coachingSubjectList', 'coachingSessionList', 'coachingExamList', 'coachingNoticeList', 'coachingFeesByBatch', 'coachingAttendanceReport', 'coachingTeacherHome'] };
+const warm = (names) => { for (const n of names) rawCall(n, {}).catch(() => {}); };
+warm(['resolveMyInstitutions', 'tuitionDashboard']);
 const root = document.querySelector('#root');
 const h = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag);
@@ -119,6 +137,7 @@ onAuthStateChanged(auth, async (user) => {
   try {
     const r = await call('resolveMyInstitutions');
     list = r.institutions || [];
+    { const t = list[0] && list[0].type; if (t) warm(WARM[t] || WARM.tuition); }
     if (!list.length && r.emailVerified) { try { const a = await call('acceptTeacherInvite'); if (a.accepted) { location.replace('/coaching'); return; } } catch { /* no invitation */ } }
     if (!list.length) { root.replaceChildren(h('div', { class: 'panel' }, h('h1', {}, 'No account found'), h('p', {}, 'This email has no tuition or coaching account yet.'), h('a', { class: 'btn', href: '/register' }, 'Register free'), ' ', h('button', { onclick: () => signOut(auth) }, 'Sign out'), h('p', {}, h('a', { href: '/' }, '← Back to home')))); return; }
     const match = list.findIndex((x) => x.type === pathType);
