@@ -4,7 +4,7 @@
 // so switching classes or opening the student form needs no extra database reads, and saving is one server call that checks the signed-in owner.
 export const ALL_CLASSES = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12', 'College / Other'];
 export const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Sanskrit', 'Mathematics', 'Science', 'Physical Science', 'Life Science', 'Environmental Studies', 'Social Science', 'History', 'Geography', 'Civics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge', 'Spoken English', 'Handwriting', 'Drawing', 'Art', 'Music', 'Dance'];
-export const PREF_DEFAULTS = { autoAssign: true, allowCustomise: true, showAssigned: true, warnUnconfigured: true, autoDate: true, autoTime: false };
+export const PREF_DEFAULTS = { autoAssign: true, allowCustomise: true, showAssigned: true, warnUnconfigured: true, autoDate: true, autoTime: true };
 export const prefsOf = (profile) => ({ ...PREF_DEFAULTS, ...((profile && profile.admissionPrefs) || {}) });
 
 // Lets the student form open Settings straight at the class-subject screen.
@@ -248,7 +248,7 @@ export function mountSettings({ inst, profile, api, h, body, go, say, failText, 
   function acPrefs() {
     const draft = { ...S.prefs }; const m = msgBox();
     const rows = [['autoAssign', 'Automatically assign subjects based on class', 'Choosing a class in the new-student form fills in its default subjects.'], ['allowCustomise', 'Allow individual student subject customisation', 'Show the Edit subjects button on a student.'],
-      ['autoDate', 'Automatically fill the joining date', 'The joining date starts as today. You can still change it.'], ['autoTime', 'Automatically fill the joining time', 'The joining time starts as the current time.'],
+      ['autoDate', 'Automatically fill the joining date', 'The joining date starts as today. You can still change it.'], ['autoTime', 'Automatically fill the joining time', 'The joining time starts as the time you add the student. You can still change it.'],
       ['showAssigned', 'Display assigned subjects before saving', 'Show the subject chips in the student form.'], ['warnUnconfigured', 'Warn when a class has no configured subjects', 'Show a notice when the chosen class has no default subjects.']];
     const save = async () => { say(m, 'Saving.'); try { await persist({ admissionPrefs: draft }); S.prefs = { ...draft }; dirty = false; ok(m, 'Saved.'); } catch (er) { say(m, failText(er)); } };
     return h('div', {}, head('Admission preferences', 'How the new-student form behaves.'), h('div', { class: 'scard' }, rows.map(([k, t, d]) => h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: draft[k] ? true : undefined, onchange: (e) => { draft[k] = e.target.checked; dirty = true; } }), h('span', { class: 'sw' }), h('span', { class: 'swt' }, h('b', {}, t), h('small', {}, d)))),

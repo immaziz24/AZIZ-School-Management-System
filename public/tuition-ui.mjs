@@ -1,6 +1,6 @@
 // Tuition and coaching shared screens (Phase 2): dashboard numbers, students, batches, fees, payments, receipts, attendance, reports, settings.
 // Every record is read and written through server functions that check the signed-in owner; this file only draws screens.
-import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-3';
+import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-4';
 const today = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 const money = (p) => '₹' + (Number(p || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: Number(p || 0) % 100 ? 2 : 0, maximumFractionDigits: 2 });
 const rupees = (p) => (Number(p || 0) / 100).toFixed(2).replace(/\.00$/, '');
@@ -185,7 +185,16 @@ export function mountTuition(args) {
     };
     const form = (s) => {
       const classSel = choiceSelect('className', 'classes', s?.className, 'Choose a class');
-      const prefs = prefsOf(profile); const card = subjectsCard({ h, profile, current: subjectsOf(s), editing: !!s, go });
+      const prefs = prefsOf(profile);
+      // New students: the month the monthly fee starts from (default: the joining month). Joined late in the month? Start next month.
+      const joinBox = inp('joiningDate', 'date', s?.joiningDate || (prefs.autoDate ? today() : ''), { max: '9999-12-31' });
+      const addMonth = (ym) => { const [y, m] = ym.split('-').map(Number); const d = new Date(Date.UTC(y, m, 1)); return d.toISOString().slice(0, 7); };
+      const joinMonth = () => (joinBox.value || today()).slice(0, 7);
+      const startBox = inp('feeStartMonth', 'month', joinMonth()); let touched = false; const startHint = h('p', { class: 'hint ok' });
+      const showStart = () => { const m = startBox.value || joinMonth(); startHint.textContent = 'The monthly fee starts from ' + monthLabel(m) + '. Nothing is charged for the days before it.'; };
+      joinBox.addEventListener('change', () => { if (!touched) { startBox.value = joinMonth(); } showStart(); });
+      startBox.addEventListener('change', () => { touched = true; showStart(); }); showStart();
+ const card = subjectsCard({ h, profile, current: subjectsOf(s), editing: !!s, go });
       classSel.querySelector('select').addEventListener('change', (ev) => { card.useClass(ev.target.value); autoFee(); });
       // A new student's monthly fee starts from the batch fee, else the class fee (Settings → Fee Settings). Anything the owner types is never overwritten.
       let lastAuto = ''; const feeBox = inp('monthlyFee', 'text', s ? rupees(s.monthlyFeePaise) : '', { inputmode: 'decimal', placeholder: '500' });
@@ -205,13 +214,15 @@ export function mountTuition(args) {
         h('div', { class: 'two' }, field('Guardian name', inp('guardianName', 'text', s?.guardianName, { maxlength: 80 }), 'guardianName'), field('Guardian mobile', inp('guardianMobile', 'tel', s?.guardianMobile, { placeholder: '+91 98300 12345' }), 'guardianMobile')),
         h('div', { class: 'two' }, field('Student mobile (optional)', inp('studentMobile', 'tel', s?.studentMobile), 'studentMobile'), field('Address (optional)', inp('address', 'text', s?.address, { maxlength: 200 }), 'address')),
         h('h3', { class: 'fsec' }, 'Admission information'),
-        h('div', { class: 'two' }, field('Joining date', inp('joiningDate', 'date', s?.joiningDate || (prefs.autoDate ? today() : ''), { max: '9999-12-31' }), 'joiningDate'), field('Joining time (optional)', inp('joiningTime', 'time', s?.joiningTime || (!s && prefs.autoTime ? nowTime() : '')), 'joiningTime')),
+        h('div', { class: 'two' }, field('Joining date', joinBox, 'joiningDate'), field('Joining time (optional)', inp('joiningTime', 'time', s?.joiningTime || (!s && prefs.autoTime ? nowTime() : '')), 'joiningTime')),
         h('h3', { class: 'fsec' }, 'Fee information'),
         h('div', { class: 'two' }, field('Monthly fee (₹)', feeBox, 'monthlyFee'), field('Fee due day of month (1–31)', inp('dueDay', 'number', s?.dueDay ?? 5, { min: 1, max: 31 }), 'dueDay')),
+        !s ? h('div', {}, field('Charge the monthly fee from', startBox, 'feeStartMonth'), h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { startBox.value = joinMonth(); touched = true; showStart(); } }, 'This month'),
+          h('button', { type: 'button', onclick: () => { startBox.value = addMonth(joinMonth()); touched = true; showStart(); } }, 'Next month')), startHint) : null,
         s ? h('div', {}, field('If you change the fee or due day, it starts from (month)', inp('feeEffectiveFrom', 'month', nextMonth(), { min: today().slice(0, 7) }), 'feeEffectiveFrom'), h('p', { class: 'hint' }, 'Months before this keep their old fee. To fix a charge already created, use Fees → Adjust.' + upcomingFee(s))) : h('div', { class: 'two' },
           field('Admission fee (₹, optional)', inp('admissionFee', 'text', '', { inputmode: 'decimal' }), 'admissionFee'), field('Opening balance (₹, optional)', inp('openingBalance', 'text', '', { inputmode: 'decimal' }), 'openingBalance')),
         field('Notes (optional)', inp('notes', 'text', s?.notes, { maxlength: 300 }), 'notes'),
-        settingsHint('classes or subjects'), h('p', { class: 'hint' }, 'The first month is charged in full by default. If you want a different amount, record it later from Fees → Adjust with a reason.'),
+        settingsHint('classes or subjects'), h('p', { class: 'hint' }, 'The first month is charged in full. If you want a different amount, record it later from Fees → Adjust with a reason, or start the fee from next month above.'),
         h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save student'), h('button', { type: 'button', onclick: draw }, 'Cancel')));
       box.replaceChildren(f, ...datalists());
     };
