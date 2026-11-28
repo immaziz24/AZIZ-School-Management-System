@@ -1681,11 +1681,11 @@ function checkTeacher(v) {
   return { ok: Object.keys(errors).length === 0, errors, clean: c };
 }
 // A teacher's profile picture: a small PNG, JPEG or WebP kept apart from the teacher record, so the teacher list stays light.
-function checkPhoto(dataUrl) {
+function checkPhoto(dataUrl, maxBytes = 520 * 1024) {
   const m = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
   if (!m) return { error: 'Choose a PNG, JPEG or WebP picture.' };
   const buf = Buffer.from(m[2], 'base64');
-  if (buf.length < 100 || buf.length > 80 * 1024) return { error: 'The photo must be under 80 KB. Try a smaller picture.' };
+  if (buf.length < 100 || buf.length > maxBytes) return { error: 'The photo must be under ' + Math.round(maxBytes / 1024) + ' KB. Try a smaller picture.' };
   const head = buf.subarray(0, 12);
   const okMagic = m[1] === 'png' ? head.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])) : m[1] === 'jpeg' ? head.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) : (head.subarray(0, 4).toString() === 'RIFF' && head.subarray(8, 12).toString() === 'WEBP');
   if (!okMagic) return { error: 'That file is not a real ' + m[1].toUpperCase() + ' picture.' };
@@ -2559,7 +2559,7 @@ exports.coachingTeacherList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, a
   const ctx = await requireCoaching(request, request.data, ['owner'], 'teachers');
   const [t, b] = await Promise.all([ctx.col('teachers').limit(100).get(), ctx.col('batches').where('status', '==', 'active').limit(100).get()]);
   const assigned = {}; b.docs.forEach((d) => (d.data().teacherIds || []).forEach((id) => { (assigned[id] = assigned[id] || []).push({ id: d.id, name: d.data().name }); }));
-  return { items: t.docs.map((d) => ({ id: d.id, name: d.data().name, email: d.data().email, mobile: d.data().mobile, subjects: d.data().subjects || [], classes: d.data().classes || [], notes: d.data().notes || '', highestQualification: d.data().highestQualification || '', qualificationSubject: d.data().qualificationSubject || '', otherQualifications: d.data().otherQualifications || '', address: d.data().address || '', deled: d.data().deled === true, bed: d.data().bed === true, med: d.data().med === true, tet: d.data().tet === true, experienceYears: d.data().experienceYears ?? null, joiningDate: d.data().joiningDate || '', hasPhoto: d.data().hasPhoto === true, status: d.data().status, batches: assigned[d.id] || [] })).sort((x, y) => (x.name < y.name ? -1 : 1)) };
+  return { items: t.docs.map((d) => ({ id: d.id, name: d.data().name, email: d.data().email, mobile: d.data().mobile, subjects: d.data().subjects || [], classes: d.data().classes || [], notes: d.data().notes || '', highestQualification: d.data().highestQualification || '', qualificationSubject: d.data().qualificationSubject || '', otherQualifications: d.data().otherQualifications || '', address: d.data().address || '', deled: d.data().deled === true, bed: d.data().bed === true, med: d.data().med === true, tet: d.data().tet === true, experienceYears: d.data().experienceYears ?? null, joiningDate: d.data().joiningDate || '', hasPhoto: d.data().hasPhoto === true, photoW: d.data().photoW || 0, photoH: d.data().photoH || 0, status: d.data().status, batches: assigned[d.id] || [] })).sort((x, y) => (x.name < y.name ? -1 : 1)) };
 });
 
 // Called by a teacher after their email is verified. If the owner invited that email, the account becomes a teacher of that centre.
@@ -2601,15 +2601,19 @@ exports.coachingTeacherPhotoSave = onCall({ memory: '256MiB', timeoutSeconds: 30
   const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'teachers');
   const teacherId = text(data.teacherId, 30); if (!TEACHER_ID.test(teacherId)) throw new HttpsError('invalid-argument', 'Unknown teacher.');
   const tRef = ctx.doc('teachers/' + teacherId); if (!(await tRef.get()).exists) throw new HttpsError('not-found', 'Unknown teacher.');
-  if (data.remove === true) { await ctx.doc('teacherPhotos/' + teacherId).delete(); await tRef.update({ hasPhoto: false, updatedAt: Timestamp.now() }); return { ok: true, removed: true }; }
+  if (data.remove === true) { await ctx.doc('teacherPhotos/' + teacherId).delete(); await tRef.update({ hasPhoto: false, photoW: 0, photoH: 0, updatedAt: Timestamp.now() }); return { ok: true, removed: true }; }
+  // Two versions: the master (for the profile card and PDF) and a small thumbnail (for lists and small previews). A Firestore record holds under 1 MB, so the master stays under 520 KB.
   const checked = checkPhoto(data.dataUrl); if (checked.error) throw new HttpsError('invalid-argument', checked.error);
-  await ctx.doc('teacherPhotos/' + teacherId).set({ dataUrl: checked.dataUrl, mime: checked.mime, bytes: checked.bytes, updatedAt: Timestamp.now(), by: ctx.uid });
-  await tRef.update({ hasPhoto: true, updatedAt: Timestamp.now() }); return { ok: true, bytes: checked.bytes };
+  const thumb = data.thumbUrl ? checkPhoto(data.thumbUrl, 40 * 1024) : null; if (thumb && thumb.error) throw new HttpsError('invalid-argument', thumb.error);
+  const dim = (n) => (Number.isInteger(n) && n >= 1 && n <= 8000 ? n : 0); const width = dim(data.width); const height = dim(data.height);
+  await ctx.doc('teacherPhotos/' + teacherId).set({ dataUrl: checked.dataUrl, thumb: thumb ? thumb.dataUrl : '', mime: checked.mime, bytes: checked.bytes, width, height, updatedAt: Timestamp.now(), by: ctx.uid });
+  await tRef.update({ hasPhoto: true, photoW: width, photoH: height, updatedAt: Timestamp.now() }); return { ok: true, bytes: checked.bytes };
 });
 exports.coachingTeacherPhotoGet = onCall({ memory: '256MiB', timeoutSeconds: 30 }, async (request) => {
   const data = request.data || {}; const ctx = await requireCoaching(request, data, ['owner'], 'teachers');
   const teacherId = text(data.teacherId, 30); if (!TEACHER_ID.test(teacherId)) throw new HttpsError('invalid-argument', 'Unknown teacher.');
-  const p = await ctx.doc('teacherPhotos/' + teacherId).get(); return { dataUrl: p.exists ? p.data().dataUrl : '' };
+  const p = await ctx.doc('teacherPhotos/' + teacherId).get(); const want = data.size === 'thumb';
+  return { dataUrl: p.exists ? (want && p.data().thumb ? p.data().thumb : p.data().dataUrl) : '', thumb: want && p.exists && !!p.data().thumb, width: p.exists ? p.data().width || 0 : 0, height: p.exists ? p.data().height || 0 : 0 };
 });
 
 // Choose which teachers teach a class (the owner only). A teacher then reaches every batch of that class, and the class shows against their name.

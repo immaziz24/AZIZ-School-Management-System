@@ -7,22 +7,25 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_NAME = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
 const ALL_SUBJECTS = ['English', 'Bengali', 'Hindi', 'Sanskrit', 'Mathematics', 'Science', 'Physical Science', 'Life Science', 'Environmental Studies', 'Social Science', 'History', 'Geography', 'Civics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge', 'Spoken English', 'Handwriting', 'Drawing', 'Art', 'Music', 'Dance'];
 
-import { paintTeacherCard } from './teacher-card.mjs?v=tcd-1';
+import { paintTeacherCard, paintTeacherPdfPages } from './teacher-card.mjs?v=tcd-2';
 
-// A one-page PDF that holds one JPEG picture (made in the browser, nothing is sent anywhere).
-export function pdfFromJpeg(jpeg, w, h, pageW = 595.28, pageH = 841.89) {
-  const enc = new TextEncoder(); const parts = []; const offs = []; let len = 0;
+// A PDF that holds one JPEG picture per page (made in the browser, nothing is sent anywhere). pages: [{ jpeg, w, h }]
+export function pdfFromJpegs(pages, pageW = 595.28, pageH = 841.89) {
+  const enc = new TextEncoder(); const parts = []; const offs = []; let len = 0; const n = pages.length;
   const put = (x) => { const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
-  const obj = (n, body) => { offs[n] = len; put(n + ' 0 obj\n'); put(body); put('\nendobj\n'); };
+  const obj = (id, body) => { offs[id] = len; put(id + ' 0 obj\n'); put(body); put('\nendobj\n'); };
   put('%PDF-1.4\n');
-  obj(1, '<< /Type /Catalog /Pages 2 0 R >>'); obj(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-  obj(3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pageW + ' ' + pageH + '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>');
-  offs[4] = len; put('4 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + w + ' /Height ' + h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpeg.length + ' >>\nstream\n'); put(jpeg); put('\nendstream\nendobj\n');
-  const cs = 'q ' + pageW + ' 0 0 ' + pageH + ' 0 0 cm /Im0 Do Q'; obj(5, '<< /Length ' + cs.length + ' >>\nstream\n' + cs + '\nendstream');
-  const xref = len; let x = 'xref\n0 6\n0000000000 65535 f \n'; for (let i = 1; i <= 5; i++) x += String(offs[i]).padStart(10, '0') + ' 00000 n \n';
-  put(x + 'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF');
-  const out = new Uint8Array(len); let p = 0; for (const b of parts) { out.set(b, p); p += b.length; } return out;
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>'); obj(2, '<< /Type /Pages /Kids [' + pages.map((_, i) => (3 + i * 3) + ' 0 R').join(' ') + '] /Count ' + n + ' >>');
+  pages.forEach((p, i) => { const pg = 3 + i * 3; const im = pg + 1; const ct = pg + 2;
+    obj(pg, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pageW + ' ' + pageH + '] /Resources << /XObject << /Im0 ' + im + ' 0 R >> >> /Contents ' + ct + ' 0 R >>');
+    offs[im] = len; put(im + ' 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + p.w + ' /Height ' + p.h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + p.jpeg.length + ' >>\nstream\n'); put(p.jpeg); put('\nendstream\nendobj\n');
+    const cs = 'q ' + pageW + ' 0 0 ' + pageH + ' 0 0 cm /Im0 Do Q'; obj(ct, '<< /Length ' + cs.length + ' >>\nstream\n' + cs + '\nendstream'); });
+  const total = 3 + n * 3; const xref = len; let x = 'xref\n0 ' + total + '\n0000000000 65535 f \n'; for (let i = 1; i < total; i++) x += String(offs[i]).padStart(10, '0') + ' 00000 n \n';
+  put(x + 'trailer\n<< /Size ' + total + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF');
+  const out = new Uint8Array(len); let p = 0; for (const bb of parts) { out.set(bb, p); p += bb.length; } return out;
 }
+// One picture on one page.
+export function pdfFromJpeg(jpeg, w, h, pageW = 595.28, pageH = 841.89) { return pdfFromJpegs([{ jpeg, w, h }], pageW, pageH); }
 
 export function mountCoaching({ section, inst, call, h, body, go }) {
   const tenantId = inst.tenantId; const isTeacher = inst.role === 'teacher';
@@ -66,90 +69,84 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
       h('p', { class: 'hint' }, 'A teacher logs in at azizschoolmanagementsystem.com/coaching with the email you enter here: "Teacher? Create your login".'),
       table(['Name', 'Email', 'Mobile', 'Qualification', 'Subjects', 'Classes', 'Batches', 'Status', ''], items.map((t) => h('tr', {}, h('td', {}, t.name), h('td', {}, t.email), h('td', {}, t.mobile || ''), h('td', {}, [t.highestQualification ? t.highestQualification + (t.qualificationSubject ? ' in ' + t.qualificationSubject : '') : '', t.bed ? 'B.Ed' : '', t.deled ? 'D.El.Ed' : ''].filter(Boolean).join(', ') || '-'), h('td', {}, t.subjects.length > 4 ? t.subjects.length + ' subjects' : t.subjects.join(', ')), h('td', {}, (t.classes || []).join(', ') || '-'), h('td', {}, t.batches.map((x) => x.name).join(', ') || '-'),
         h('td', {}, t.status === 'invited' ? 'Invited' : t.status === 'active' ? 'Active' : 'Switched off'),
-        h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(t) }, 'Edit'), h('button', { type: 'button', onclick: () => downloadPdf(t) }, 'PDF'), h('button', { type: 'button', onclick: () => openCard(t) }, 'Card image'), h('button', { type: 'button', onclick: async () => { try { await api('coachingTeacherStatus', { teacherId: t.id, status: t.status === 'inactive' ? 'active' : 'inactive' }); draw(); } catch (e) { window.alert(failText(e)); } } }, t.status === 'inactive' ? 'Switch on' : t.status === 'invited' ? 'Cancel invite' : 'Switch off')))), 'No teachers yet. Add your first teacher.'));
-    // Shrinks a chosen picture to a small square-ish JPEG so it stays well under the server limit.
-    const shrink = (file) => new Promise((res, rej) => { const url = URL.createObjectURL(file); const im = new Image();
-      im.onload = () => { const k = Math.min(1, 320 / Math.max(im.width, im.height)); const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(im.width * k)); cv.height = Math.max(1, Math.round(im.height * k));
-        const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(im, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url); res(cv.toDataURL('image/jpeg', 0.85)); };
-      im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('That file is not a picture.')); }; im.src = url; });
-    // Draws the teacher profile on a canvas: a printable sheet (A4, for the PDF) or a card (for the picture). The photo is placed from the top so heads are never cut off.
-    const loadImg = (src) => new Promise((res) => { if (!src) { res(null); return; } const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; });
-    const paintProfile = async (t, mode) => {
-      let photo = ''; if (t.hasPhoto) { try { photo = (await api('coachingTeacherPhotoGet', { teacherId: t.id })).dataUrl || ''; } catch (e) { photo = ''; } }
-      const img = await loadImg(photo); const sheet = mode === 'sheet'; const W = sheet ? 1240 : 1100; const yes = (v) => (v ? 'Yes' : 'No');
-      const centre = inst.name || (inst.profile && inst.profile.name) || '';
-      const qual = [t.highestQualification, t.qualificationSubject ? '(' + t.qualificationSubject + ')' : ''].filter(Boolean).join(' ') || '-';
-      const training = [t.deled ? 'D.El.Ed' : '', t.bed ? 'B.Ed' : '', t.med ? 'M.Ed' : '', t.tet ? 'TET / CTET' : ''].filter(Boolean).join(', ') || '-';
-      const rows = sheet
-        ? [['Teacher ID', t.id], ['Status', t.status === 'invited' ? 'Invited (login not created yet)' : t.status === 'active' ? 'Active' : 'Switched off'], ['Mobile', t.mobile || '-'], ['Email', t.email], ['Highest qualification', qual], ['Teaching training', training], ['Other qualifications', t.otherQualifications || '-'], ['Experience', t.experienceYears === null || t.experienceYears === undefined ? '-' : t.experienceYears + ' years'], ['Joined', dmy(t.joiningDate) || '-'], ['Subjects', (t.subjects || []).join(', ') || '-'], ['Classes', (t.classes || []).join(', ') || '-'], ['Batches', (t.batches || []).map((x) => x.name).join(', ') || '-'], ['Address', t.address || '-'], ['Notes', t.notes || '-']]
-        : [['Mobile', t.mobile || '-'], ['Email', t.email], ['Qualification', qual], ['Teaching training', training], ['Subjects', (t.subjects || []).join(', ') || '-']];
-      const cv = document.createElement('canvas'); cv.width = W; const g = cv.getContext('2d'); const FONT = 'Arial, Helvetica, sans-serif';
-      const wrap = (text, font, maxW) => { g.font = font; const words = String(text).split(/\s+/); const lines = []; let cur = ''; for (const w of words) { const test = cur ? cur + ' ' + w : w; if (g.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; } else cur = test; } lines.push(cur); return lines; };
-      const lh = sheet ? 44 : 40; const labelW = sheet ? 330 : 250; const padX = sheet ? 80 : 60; const valW = W - padX * 2 - labelW; const head = sheet ? 360 : 330;
-      const laid = rows.map(([k, v]) => ({ k, lines: wrap(v, (sheet ? '30px ' : '28px ') + FONT, valW) })); const bodyH = laid.reduce((s, r) => s + r.lines.length * lh + 22, 0);
-      const H = sheet ? 1754 : head + bodyH + 150; cv.height = H; g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
-      g.fillStyle = '#0D1424'; g.fillRect(0, 0, W, head); g.fillStyle = '#D4B367'; g.fillRect(0, head, W, 8);
-      const ps = sheet ? 240 : 220; const px = padX; const py = (head - ps) / 2;
-      g.save(); g.beginPath(); g.roundRect ? g.roundRect(px, py, ps, ps, 22) : g.rect(px, py, ps, ps); g.clip();
-      if (img) { const k = Math.max(ps / img.width, ps / img.height); g.drawImage(img, px + (ps - img.width * k) / 2, py, img.width * k, img.height * k); }
-      else { g.fillStyle = '#293346'; g.fillRect(px, py, ps, ps); g.fillStyle = '#E5C77D'; g.font = 'bold ' + Math.round(ps / 2) + 'px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText((t.name || '?').trim().charAt(0).toUpperCase(), px + ps / 2, py + ps / 2); g.textAlign = 'left'; g.textBaseline = 'alphabetic'; }
-      g.restore(); g.strokeStyle = '#D4B367'; g.lineWidth = 4; g.beginPath(); g.roundRect ? g.roundRect(px, py, ps, ps, 22) : g.rect(px, py, ps, ps); g.stroke();
-      const tx = px + ps + 50; const tw = W - tx - padX; g.fillStyle = '#E5C77D'; g.font = 'bold 22px ' + FONT; g.fillText('TEACHER PROFILE', tx, py + 30);
-      let y = py + 90; g.fillStyle = '#F4F1E8'; for (const ln of wrap(t.name, 'bold ' + (sheet ? 52 : 46) + 'px Georgia, serif', tw)) { g.font = 'bold ' + (sheet ? 52 : 46) + 'px Georgia, serif'; g.fillText(ln, tx, y); y += sheet ? 60 : 54; }
-      g.fillStyle = '#94A3B8'; g.font = '28px ' + FONT; for (const ln of wrap(centre, '28px ' + FONT, tw)) { g.fillText(ln, tx, y + 6); y += 36; }
-      let yy = head + 8 + 50; g.textBaseline = 'alphabetic';
-      laid.forEach((r, i) => { const h2 = r.lines.length * lh + 22; if (i % 2 === 0) { g.fillStyle = '#F7F4EC'; g.fillRect(padX - 20, yy - lh + 8, W - padX * 2 + 40, h2); }
-        g.fillStyle = '#6B5A2A'; g.font = 'bold ' + (sheet ? 28 : 26) + 'px ' + FONT; g.fillText(r.k, padX, yy); g.fillStyle = '#111111'; g.font = (sheet ? 30 : 28) + 'px ' + FONT; r.lines.forEach((ln, j) => g.fillText(ln, padX + labelW, yy + j * lh)); yy += h2; });
-      g.fillStyle = '#8A8A8A'; g.font = '22px ' + FONT; g.fillText('AZIZ School Management System · ' + new Date().toLocaleDateString('en-IN'), padX, H - 40);
-      return cv;
+        h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(t) }, 'Edit'), h('button', { type: 'button', onclick: () => openCard(t, 'pdf') }, 'PDF'), h('button', { type: 'button', onclick: () => openCard(t, 'card') }, 'Card image'), h('button', { type: 'button', onclick: async () => { try { await api('coachingTeacherStatus', { teacherId: t.id, status: t.status === 'inactive' ? 'active' : 'inactive' }); draw(); } catch (e) { window.alert(failText(e)); } } }, t.status === 'inactive' ? 'Switch on' : t.status === 'invited' ? 'Cancel invite' : 'Switch off')))), 'No teachers yet. Add your first teacher.'));
+    // Prepares a chosen picture: a full-size master (long edge at most 1600 px, never enlarged, one compression pass from the original, camera rotation honoured)
+    // for the card and PDF, and a small thumbnail for lists and previews. Nothing is blurred or stretched.
+    const readPicture = async (file) => {
+      if (typeof createImageBitmap === 'function') { try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) { /* fall back to an image element */ } }
+      return new Promise((res, rej) => { const url = URL.createObjectURL(file); const im = new Image(); im.onload = () => { res(im); setTimeout(() => URL.revokeObjectURL(url), 4000); }; im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('That file is not a picture.')); }; im.src = url; });
+    };
+    const encodeJpeg = (im, longEdge, quality) => { const k = Math.min(1, longEdge / Math.max(im.width, im.height)); const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(im.width * k)); cv.height = Math.max(1, Math.round(im.height * k));
+      const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; g.drawImage(im, 0, 0, cv.width, cv.height);
+      const dataUrl = cv.toDataURL('image/jpeg', quality); return { dataUrl, width: cv.width, height: cv.height, bytes: Math.round((dataUrl.length - 23) * 0.75) }; };
+    const prepPhoto = async (file) => {
+      let im; try { im = await readPicture(file); } catch (e) { throw new Error('That file is not a picture.'); }
+      let edge = 1600; let q = 0.92; let master = encodeJpeg(im, edge, q);
+      while (master.bytes > 500 * 1024 && q > 0.62) { q = Math.round((q - 0.05) * 100) / 100; master = encodeJpeg(im, edge, q); }
+      while (master.bytes > 500 * 1024 && edge > 600) { edge = Math.round(edge * 0.85); master = encodeJpeg(im, edge, 0.85); }
+      let thumb = encodeJpeg(im, 160, 0.8); if (thumb.bytes > 38 * 1024) thumb = encodeJpeg(im, 120, 0.7);
+      if (im.close) im.close();
+      return { dataUrl: master.dataUrl, thumbUrl: thumb.dataUrl, width: master.width, height: master.height };
     };
     const saveBlob = (blob, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); };
     const fileBase = (t) => (t.name || 'teacher').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) + '-profile';
-    // The premium card: a preview window with PNG, JPG and PDF downloads. It is drawn in the browser from the saved teacher, the centre name and logo.
+    // The profile card window. The card (16:9) and the A4 PDF are drawn in the browser from the saved teacher, the centre name and logo, and the full-size photo.
     let logoCache;
     const getLogo = async () => { if (logoCache === undefined) { try { logoCache = (await api('institutionLogoGet')).dataUrl || ''; } catch (e) { logoCache = ''; } } return logoCache; };
-    const openCard = async (t) => {
+    const jpegBytes = (cv, q) => { const bin = atob(cv.toDataURL('image/jpeg', q).split(',')[1]); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); return bytes; };
+    const openCard = async (t, startView) => {
       const ov = h('div', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Teacher profile card', style: 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.82);display:flex;align-items:center;justify-content:center;padding:.8rem;overflow:auto' });
       const panel = h('div', { style: 'background:#0D1424;border:1px solid #293346;border-radius:1rem;padding:1rem;width:min(1100px,96vw);max-height:96vh;overflow:auto' });
-      const status = h('p', { class: 'hint', role: 'status' }, 'Preparing the card.'); const stage = h('div', { style: 'width:100%;aspect-ratio:16/9;background:#240608;border-radius:.6rem;overflow:hidden' });
-      const hi = h('input', { type: 'checkbox', id: 'card-hi' }); const cache = {}; let busy = false;
+      const status = h('p', { class: 'hint', role: 'status' }, 'Preparing the card.'); const stage = h('div', { style: 'width:100%;background:#240608;border-radius:.6rem;overflow:auto' });
+      const hide = h('input', { type: 'checkbox', id: 'card-hide' }); const cache = {}; let busy = false; let view = startView === 'pdf' ? 'pdf' : 'card';
       const close = () => { document.removeEventListener('keydown', onKey); ov.remove(); }; const onKey = (e) => { if (e.key === 'Escape') close(); };
       const data = { teacher: t, centreName: inst.name || (inst.profile && inst.profile.name) || '' };
-      const make = async (scale) => { if (!cache[scale]) cache[scale] = await paintTeacherCard({ ...data, photo: data.photo, logo: data.logo, scale }); return cache[scale]; };
+      const ck = (kind, scale) => kind + ':' + scale + ':' + (hide.checked ? 'x' : 'a');
+      const makeCard = async (scale) => { const k = ck('c', scale); if (!cache[k]) cache[k] = await paintTeacherCard({ ...data, scale, hideContact: hide.checked }); return cache[k]; };
+      const makePdf = async (scale) => { const k = ck('p', scale); if (!cache[k]) cache[k] = await paintTeacherPdfPages({ ...data, scale, hideContact: hide.checked }); return cache[k]; };
+      const fit = (cv) => { cv.style.width = '100%'; cv.style.height = 'auto'; cv.style.display = 'block'; return cv; };
+      const show = async (v) => { if (busy) return; busy = true; view = v; status.textContent = 'Preparing the preview.';
+        try { if (v === 'card') { stage.style.aspectRatio = '16/9'; stage.style.maxHeight = ''; stage.replaceChildren(fit(await makeCard(1))); status.textContent = 'This is how the card will look. Choose a format to download.'; }
+          else { const pages = await makePdf(1); stage.style.aspectRatio = 'auto'; stage.style.maxHeight = '68vh'; stage.replaceChildren(...pages.map((cv) => { const d = h('div', { style: 'margin:0 0 .6rem' }); d.append(fit(cv)); return d; })); status.textContent = 'This is how the A4 PDF will look (' + pages.length + (pages.length === 1 ? ' page' : ' pages') + ').'; } }
+        catch (e) { status.textContent = 'Could not make the preview. Close this window and try again.'; } busy = false; };
       const out = async (kind) => { if (busy) return; busy = true; status.textContent = 'Preparing the download.';
-        try { const scale = hi.checked ? 2 : 1; const cv = await make(scale); const base = fileBase(t).replace(/-profile$/, '-card') + (scale === 2 ? '-4k' : '');
-          if (kind === 'png') cv.toBlob((b) => saveBlob(b, base + '.png'), 'image/png');
-          else if (kind === 'jpg') cv.toBlob((b) => saveBlob(b, base + '.jpg'), 'image/jpeg', 0.95);
-          else { const url = cv.toDataURL('image/jpeg', 0.95); const bin = atob(url.split(',')[1]); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); saveBlob(new Blob([pdfFromJpeg(bytes, cv.width, cv.height, 841.89, 473.56)], { type: 'application/pdf' }), base + '.pdf'); }
+        try { const base = fileBase(t).replace(/-profile$/, '-card');
+          if (kind === 'png') { const cv = await makeCard(1); cv.toBlob((b) => saveBlob(b, base + '-1920x1080.png'), 'image/png'); }
+          else if (kind === 'uhd') { const k = ck('c', 2); const cv = await makeCard(2); cv.toBlob((b) => { saveBlob(b, base + '-ultra-hd-3840x2160.png'); delete cache[k]; }, 'image/png'); }
+          else if (kind === 'jpg') { const k = ck('c', 2); const cv = await makeCard(2); cv.toBlob((b) => { saveBlob(b, base + '-3840x2160.jpg'); delete cache[k]; }, 'image/jpeg', 0.94); }
+          else { const k = ck('p', 2); const pages = await makePdf(2); saveBlob(new Blob([pdfFromJpegs(pages.map((cv) => ({ jpeg: jpegBytes(cv, 0.93), w: cv.width, h: cv.height })), 595.28, 841.89)], { type: 'application/pdf' }), fileBase(t) + '-A4.pdf'); delete cache[k]; }
           status.textContent = 'Downloaded.'; } catch (e) { status.textContent = 'Could not make the file. Try again.'; } busy = false; };
       const btn = (label, fn, gold) => h('button', { type: 'button', ...(gold ? { class: 'gold' } : {}), onclick: fn }, label);
+      hide.addEventListener('change', () => { show(view); });
       panel.append(h('h2', { style: 'margin:.2rem 0 .6rem' }, 'Teacher profile card'), stage, status,
-        h('div', { class: 'actions', style: 'flex-wrap:wrap;align-items:center' }, btn('Download PNG', () => out('png'), true), btn('Download JPG', () => out('jpg')), btn('Download PDF', () => out('pdf')), h('label', { class: 'chk', for: 'card-hi' }, hi, 'High resolution (3840 × 2160)'), btn('Close preview', close)));
+        h('div', { class: 'actions', style: 'flex-wrap:wrap;align-items:center' }, btn('Preview Profile Card', () => show('card')), btn('Preview PDF', () => show('pdf'))),
+        h('div', { class: 'actions', style: 'flex-wrap:wrap;align-items:center' }, btn('Download Standard PNG', () => out('png'), true), btn('Download Ultra HD PNG', () => out('uhd')), btn('Download JPG', () => out('jpg')), btn('Download A4 PDF', () => out('pdf'), true)),
+        h('div', { class: 'actions', style: 'flex-wrap:wrap;align-items:center' }, h('label', { class: 'chk', for: 'card-hide' }, hide, 'Hide mobile and email (for public sharing)'), btn('Close preview', close)));
       ov.append(panel); ov.addEventListener('click', (e) => { if (e.target === ov) close(); }); document.addEventListener('keydown', onKey); document.body.append(ov);
-      try { const [ph, lg] = await Promise.all([t.hasPhoto ? api('coachingTeacherPhotoGet', { teacherId: t.id }).then((r) => r.dataUrl || '').catch(() => '') : '', getLogo()]); data.photo = ph; data.logo = lg;
-        const cv = await make(1); cv.style.width = '100%'; cv.style.height = 'auto'; cv.style.display = 'block'; stage.replaceChildren(cv); status.textContent = 'This is how the card will look. Choose a format to download.'; }
-      catch (e) { status.textContent = 'Could not make the card. Close this window and try again.'; }
+      try { const [ph, lg] = await Promise.all([t.hasPhoto ? api('coachingTeacherPhotoGet', { teacherId: t.id }).then((r) => r.dataUrl || '').catch(() => '') : '', getLogo()]); data.photo = ph; data.logo = lg; }
+      catch (e) { /* the card is drawn without a photo or logo */ }
+      await show(view);
     };
-    const downloadPdf = async (t) => { try { const cv = await paintProfile(t, 'sheet'); const url = cv.toDataURL('image/jpeg', 0.92); const bin = atob(url.split(',')[1]); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      saveBlob(new Blob([pdfFromJpeg(bytes, cv.width, cv.height)], { type: 'application/pdf' }), fileBase(t) + '.pdf'); } catch (e) { window.alert('Could not make the PDF. Try again.'); } };
     const form = (t) => {
       const photoFile = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'Teacher photo' }); const photoPrev = h('div', {});
       const showPhoto = (u) => photoPrev.replaceChildren(u ? h('img', { src: u, alt: 'Teacher photo', style: 'width:96px;height:120px;object-fit:cover;object-position:center top;border-radius:.5rem;border:1px solid #293346' }) : h('p', { class: 'hint' }, 'No photo yet.'));
-      showPhoto(''); if (t && t.hasPhoto) api('coachingTeacherPhotoGet', { teacherId: t.id }).then((r) => showPhoto(r.dataUrl)).catch(() => {});
-      photoFile.addEventListener('change', async () => { const p = photoFile.files && photoFile.files[0]; if (p) { try { showPhoto(await shrink(p)); } catch (e) { showPhoto(''); window.alert(failText(e)); } } });
+      const photoNote = h('p', { class: 'hint', role: 'status' }); let prepared = null;
+      const sizeNote = (w, ht) => { const m = Math.max(Number(w) || 0, Number(ht) || 0); photoNote.textContent = m ? 'Saved photo size: ' + w + ' × ' + ht + ' px.' + (m < 800 ? ' This photo is small, so the card and PDF cannot be sharp. Upload the original photo again to fix it.' : ' Sharp enough for the card and the PDF.') : 'This photo was saved in an old small size. Upload the original photo again for a sharp card and PDF.'; };
+      showPhoto(''); if (t && t.hasPhoto) { sizeNote(t.photoW, t.photoH); api('coachingTeacherPhotoGet', { teacherId: t.id, size: 'thumb' }).then((r) => { showPhoto(r.dataUrl); if (r.width) sizeNote(r.width, r.height); }).catch(() => {}); }
+      photoFile.addEventListener('change', async () => { const p = photoFile.files && photoFile.files[0]; if (p) { try { prepared = await prepPhoto(p); showPhoto(prepared.thumbUrl); photoNote.textContent = 'New photo ready: ' + prepared.width + ' × ' + prepared.height + ' px (kept at full quality, not enlarged).'; } catch (e) { prepared = null; showPhoto(''); window.alert(failText(e)); } } });
       const chk = (name, label, on) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name, value: 'yes', checked: on ? true : undefined }), label);
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.');
         const values = { name: fd.get('name'), email: fd.get('email'), mobile: fd.get('mobile'), notes: fd.get('notes'), highestQualification: fd.get('highestQualification'), qualificationSubject: fd.get('qualificationSubject'), otherQualifications: fd.get('otherQualifications'), address: fd.get('address'), experienceYears: fd.get('experienceYears'), joiningDate: fd.get('joiningDate'),
           deled: fd.get('deled') === 'yes', bed: fd.get('bed') === 'yes', med: fd.get('med') === 'yes', tet: fd.get('tet') === 'yes', subjects: [...fd.getAll('subjects[]'), ...String(fd.get('subjectsOther') || '').split(',')].map((x) => x.trim()).filter(Boolean) };
         try { const saved = await api('coachingTeacherSave', { teacherId: t ? t.id : '', values }); const pick = photoFile.files && photoFile.files[0];
-          if (pick) { try { await api('coachingTeacherPhotoSave', { teacherId: saved.teacherId, dataUrl: await shrink(pick) }); } catch (pe) { window.alert('The teacher was saved, but the photo was not: ' + failText(pe)); } }
+          if (pick) { try { await api('coachingTeacherPhotoSave', { teacherId: saved.teacherId, dataUrl: (prepared || (prepared = await prepPhoto(pick))).dataUrl, thumbUrl: prepared.thumbUrl, width: prepared.width, height: prepared.height }); } catch (pe) { window.alert('The teacher was saved, but the photo was not: ' + failText(pe)); } }
           draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, t ? 'Edit teacher' : 'Add teacher'),
         field('Teacher name', inp('name', 'text', t?.name, { maxlength: 80 }), 'name'),
         field('Login email', inp('email', 'email', t?.email, { maxlength: 120, ...(t ? { disabled: true } : {}) }), 'email'),
         field('Mobile (optional)', inp('mobile', 'tel', t?.mobile), 'mobile'),
-        h('h3', {}, 'Profile photo'), photoPrev, photoFile, h('p', { class: 'hint' }, 'PNG, JPEG or WebP. It is made small automatically.'),
+        h('h3', {}, 'Profile photo'), photoPrev, photoNote, photoFile, h('p', { class: 'hint' }, 'PNG, JPEG or WebP. Upload the original photo. It is kept sharp (up to 1600 px) and a small copy is made for lists.'),
         t && t.hasPhoto ? h('div', { class: 'actions' }, h('button', { type: 'button', onclick: async () => { try { await api('coachingTeacherPhotoSave', { teacherId: t.id, remove: true }); t.hasPhoto = false; showPhoto(''); } catch (er) { window.alert(failText(er)); } } }, 'Remove photo')) : null,
         h('h3', {}, 'Qualifications'),
         field('Highest qualification', qualBox(t?.highestQualification || ''), 'highestQualification'),
@@ -162,7 +159,7 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
         h('fieldset', { 'data-field': 'subjects' }, h('legend', {}, 'Subjects this teacher teaches'), h('div', { class: 'checks' }, [...new Set([...ALL_SUBJECTS, ...(t?.subjects || [])])].map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'subjects[]', value: o, checked: (t?.subjects || []).includes(o) ? true : undefined }), o))),
           h('input', { type: 'text', name: 'subjectsOther', maxlength: 120, placeholder: 'Other subjects, separated by commas', 'aria-label': 'Other subjects' }), h('span', { class: 'ferr', 'data-err': 'subjects' })),
         field('Notes (optional)', inp('notes', 'text', t?.notes, { maxlength: 200 }), 'notes'),
-        h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save teacher'), t ? h('button', { type: 'button', onclick: () => downloadPdf(t) }, 'Download PDF') : null, t ? h('button', { type: 'button', onclick: () => openCard(t) }, 'Card image') : null, h('button', { type: 'button', onclick: draw }, 'Cancel')));
+        h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save teacher'), t ? h('button', { type: 'button', onclick: () => openCard(t, 'pdf') }, 'Download PDF') : null, t ? h('button', { type: 'button', onclick: () => openCard(t) }, 'Card image') : null, h('button', { type: 'button', onclick: draw }, 'Cancel')));
       box.replaceChildren(f);
     };
     const assignClasses = (teachersList) => {

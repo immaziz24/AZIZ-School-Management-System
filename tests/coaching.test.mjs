@@ -118,7 +118,9 @@ test('teacher qualifications and photo are checked', () => {
   assert.ok(lib.checkTeacher({ ...base, experienceYears: '99' }).errors.experienceYears); assert.ok(lib.checkTeacher({ ...base, joiningDate: '2026-02-30' }).errors.joiningDate);
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(300)]);
   assert.equal(lib.checkPhoto('data:image/png;base64,' + png.toString('base64')).ok, true);
-  assert.ok(lib.checkPhoto('data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(90 * 1024)]).toString('base64')).error); assert.ok(lib.checkPhoto('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=').error);
+  assert.equal(lib.checkPhoto('data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(300 * 1024)]).toString('base64')).ok, true, 'a full-size master photo is accepted');
+  assert.ok(lib.checkPhoto('data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(90 * 1024)]).toString('base64'), 40 * 1024).error, 'a thumbnail must stay small');
+  assert.ok(lib.checkPhoto('data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(600 * 1024)]).toString('base64')).error); assert.ok(lib.checkPhoto('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=').error);
 });
 
 test('teacher profile PDF: a valid one-page file around one picture; the photo is placed from the top', async () => {
@@ -127,7 +129,7 @@ test('teacher profile PDF: a valid one-page file around one picture; the photo i
   assert.ok(out.startsWith('%PDF-1.4') && out.endsWith('%%EOF') && out.includes('/DCTDecode') && out.includes('/Count 1'));
   const offs = [...out.slice(out.indexOf('xref' + String.fromCharCode(10) + '0 6')).matchAll(/(\d{10}) 00000 n/g)].map((x) => Number(x[1]));
   assert.ok(offs.length === 5 && offs.every((o, i) => out.slice(o, o + String(i + 1).length + 7) === (i + 1) + ' 0 obj' + String.fromCharCode(10)));
-  const ui = readFileSync(new URL('../public/coaching-ui.mjs', import.meta.url), 'utf8'); assert.ok(ui.includes('py, img.width * k, img.height * k')); assert.ok(ui.includes('object-position:center top'));
+  const ui = readFileSync(new URL('../public/coaching-ui.mjs', import.meta.url), 'utf8'); const card = readFileSync(new URL('../public/teacher-card.mjs', import.meta.url), 'utf8'); assert.ok(card.includes('x + (w - img.width * k) / 2, y, img.width * k, img.height * k'), 'photo drawn from the top, not stretched'); assert.ok(ui.includes('object-position:center top')); assert.ok(!/blur/.test(card.slice(card.indexOf('function drawPhoto'), card.indexOf('function monogram'))), 'the photo is never blurred'); assert.ok(!ui.includes('320 /'), 'the old 320 px shrink is gone');
 });
 
 // ---- The premium teacher card: drawn with a recording stand-in for the canvas ----
@@ -151,10 +153,14 @@ test('teacher card: shows the centre name it is given, every saved field, and no
   assert.equal(cv.width, 1920); assert.equal(cv.height, 1080);
   const text = env.calls.map((c) => c.txt);
   for (const want of ['Munna Aziz', 'English Educator', 'SUNRISE TUTORIALS', '9126430090', 'munna@example.com', 'Graduate (B.A.) in English', 'B.Ed', 'English', 'Class 7', 'Educate', 'Inspire', 'Empower', 'Teacher Profile', 'Powered by AZIZ School Management System', 'azizschoolmanagementsystem.com']) assert.ok(text.includes(want), 'missing ' + want);
-  assert.ok(text.some((x) => x.includes('6 years of teaching experience')) && text.some((x) => x.includes('Sunrise Tutorials since Nov 2026')));
+  assert.ok(text.includes('TEACHING EXPERIENCE') && text.includes('6 years of teaching') && text.includes('MEMBER SINCE') && text.includes('November 2026'), 'experience and member-since are separate');
   assert.ok(!text.some((x) => /undefined|null|NaN/.test(x)), 'no placeholder text'); assert.ok(!text.some((x) => /AZIZ COACHING/i.test(x)), 'the centre name is never hard-coded');
   assert.ok(env.calls.every((c) => c.x >= 0 && c.x <= 1920 && c.y >= 0 && c.y <= 1080));
   const big = await paintTeacherCard({ teacher: full, centreName: 'Sunrise Tutorials', scale: 2 }); assert.equal(big.width, 3840); assert.equal(big.height, 2160);
+  env.calls.length = 0; await paintTeacherCard({ teacher: { name: 'Rina Das', joiningDate: '2026-04-01' }, centreName: 'X Centre', scale: 1 });
+  { const tx = env.calls.map((c) => c.txt); assert.ok(tx.includes('MEMBER SINCE') && !tx.includes('TEACHING EXPERIENCE'), 'a joining date is never shown as experience'); }
+  env.calls.length = 0; await paintTeacherCard({ teacher: full, centreName: 'Sunrise Tutorials', scale: 1, hideContact: true });
+  { const tx = env.calls.map((c) => c.txt); assert.ok(!tx.includes('9126430090') && !tx.includes('munna@example.com') && tx.includes('Munna Aziz'), 'public card hides mobile and email'); }
   env.calls.length = 0;
   await paintTeacherCard({ teacher: { name: 'Rina Das' }, centreName: 'Another Centre', scale: 1 });
   const bare = env.calls.map((c) => c.txt); assert.ok(bare.includes('Rina Das') && bare.includes('ANOTHER CENTRE'));
@@ -163,9 +169,26 @@ test('teacher card: shows the centre name it is given, every saved field, and no
   env.calls.length = 0; await paintTeacherCard({ teacher: { ...full, name: 'Dr. Mohammad Abdul Karim Chowdhury Al-Mahmud The Third' }, centreName: 'A very long coaching centre name that goes on and on and on and on and on and on and on forever', scale: 1 });
   assert.ok(env.calls.length > 10 && env.calls.every((c) => c.x <= 1920));
 });
+test('teacher A4 PDF: luxury pages, empty fields left out, long lists flow onto more pages, contact can be hidden', async () => {
+  const { paintTeacherPdfPages, pdfSections } = await import('../public/teacher-card.mjs'); const { pdfFromJpegs } = await import('../public/coaching-ui.mjs');
+  const env = fakeCanvasEnv();
+  const t = { id: 'T1', status: 'active', name: 'Munna Aziz', email: 'm@example.com', mobile: '9126430090', address: '12 Park Road', notes: 'Morning batches', highestQualification: 'Graduate (B.A.)', qualificationSubject: 'English', bed: true, subjects: ['English'], classes: ['Class 7'], experienceYears: 6, joiningDate: '2026-11-28', batches: [{ name: 'Morning A' }] };
+  const pages = await paintTeacherPdfPages({ teacher: t, centreName: 'Sunrise Tutorials', scale: 2, generated: '28 November 2026' });
+  assert.equal(pages[0].width, 2480); assert.equal(pages[0].height, 3508);
+  const text = env.calls.map((c) => c.txt);
+  for (const want of ['Munna Aziz', 'English Educator', 'SUNRISE TUTORIALS', 'ACADEMIC CREDENTIALS', 'TEACHING ASSIGNMENTS', 'CONTACT INFORMATION', 'ADMINISTRATIVE INFORMATION', 'Graduate (B.A.) in English', '6 years', 'November 2026', 'Morning A', '12 Park Road', 'Powered by AZIZ School Management System', 'azizschoolmanagementsystem.com', 'Generated on 28 November 2026']) assert.ok(text.includes(want), 'missing ' + want);
+  assert.ok(!text.some((x) => /undefined|null|NaN/.test(x)));
+  env.calls.length = 0; await paintTeacherPdfPages({ teacher: t, centreName: 'Sunrise Tutorials', scale: 1, hideContact: true });
+  { const tx = env.calls.map((c) => c.txt); assert.ok(!tx.includes('CONTACT INFORMATION') && !tx.includes('9126430090') && !tx.includes('12 Park Road')); }
+  assert.deepEqual(pdfSections({ name: 'Rina Das' }), [], 'a teacher with no details has no sections');
+  const many = { ...t, otherQualifications: 'Diploma. '.repeat(40), notes: 'Note. '.repeat(120), address: 'Road. '.repeat(60) };
+  const multi = await paintTeacherPdfPages({ teacher: many, centreName: 'Sunrise Tutorials', scale: 1 }); assert.ok(multi.length >= 2, 'long content flows onto another page instead of shrinking');
+  const pdf = Buffer.from(pdfFromJpegs([{ jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), w: 10, h: 10 }, { jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), w: 10, h: 10 }])).toString('latin1');
+  assert.match(pdf, /\/Count 2/); assert.equal((pdf.match(/\/Type \/Page /g) || []).length, 2); assert.ok(pdf.startsWith('%PDF-1.4') && pdf.trimEnd().endsWith('%%EOF'));
+});
 test('teacher card: preview and downloads are wired, the file is allowed by the web server, and no outside service is used', () => {
   const ui = read('public/coaching-ui.mjs'); const card = read('public/teacher-card.mjs');
-  for (const w of ['Download PNG', 'Download JPG', 'Download PDF', 'Close preview', 'High resolution (3840 × 2160)', "'coachingTeacherPhotoGet'", "'institutionLogoGet'"]) assert.ok(ui.includes(w), w);
+  for (const w of ['Preview Profile Card', 'Download Standard PNG', 'Download Ultra HD PNG', 'Download JPG', 'Preview PDF', 'Download A4 PDF', 'Close preview', 'Hide mobile and email', 'thumbUrl', 'createImageBitmap', '1600', 'imageSmoothingQuality', "'coachingTeacherPhotoGet'", "'institutionLogoGet'"]) assert.ok(ui.includes(w), w);
   assert.match(ui, /teacher-card\.mjs\?v=tcd-\d+/); assert.match(read('.htaccess'), /teacher-card\\\.mjs/);
   assert.ok(!/https?:\/\//.test(card.replace(/azizschoolmanagementsystem\.com/g, '')), 'no outside address in the card code'); assert.ok(!/innerHTML/.test(card));
 });
