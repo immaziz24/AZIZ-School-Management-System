@@ -2284,7 +2284,7 @@ async function route() {
   await guarded(async () => {
     if (name === 'schools' && parts[1] === 'register') await openRegister(decodeURIComponent(parts[2] || ''));
     else if (name === 'schools') await viewSchools();
-    else if (name === 'institutions') { const m = await import('./institutions-admin.mjs?v=p4-1'); await m.viewInstitutions({ h, show, toast, sub: parts[1] || '' }); }
+    else if (name === 'institutions') { const m = await import('./institutions-admin.mjs?v=p4-3'); await m.viewInstitutions({ h, show, toast, sub: parts[1] || '' }); }
     else if (name === 'school') await viewSchool(decodeURIComponent(parts[1] || ''));
     else if (name === 'owners') await viewOwners();
     else if (name === 'plans') await viewPlans();

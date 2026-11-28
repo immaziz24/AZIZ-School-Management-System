@@ -1727,6 +1727,8 @@ function checkLimits(v) {
   return { ok: Object.keys(errors).length === 0, errors, limits };
 }
 const checkReason = (r) => { const t = typeof r === 'string' ? r.trim() : ''; return t.length >= 5 && t.length <= 300 ? { ok: true, reason: t } : { ok: false, error: 'Write the reason (5 to 300 characters). It is saved in the audit log.' }; };
+// Changes do not need a reason (the owner works without distraction). A reason is still saved when one is typed; the change is always audited.
+const checkReasonOptional = (r) => { const t = typeof r === 'string' ? r.trim() : ''; return t.length <= 300 ? { ok: true, reason: t || 'No reason given' } : { ok: false, error: 'The reason is too long (300 characters at most).' }; };
 // Only the known switches for the type are kept, and only true or false.
 function cleanFeatures(type, obj) {
   const out = {}; for (const k of ADMIN_FEATURE_KEYS[type] || []) out[k] = !obj || obj[k] !== false && obj[k] !== 'false' && obj[k] !== 0;
@@ -2751,7 +2753,7 @@ exports.adminInstitutionDetail = onCall({ memory: '256MiB', timeoutSeconds: 60 }
 exports.adminInstitutionSetStatus = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const { uid, email } = await requirePlatformAdmin(request); const { tenantId, ref, inst } = await adminTenant(request.data);
   const status = (request.data || {}).status; if (!['active', 'suspended'].includes(status)) throw new HttpsError('invalid-argument', 'Choose suspend or reactivate.');
-  const why = checkReason((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  const why = checkReasonOptional((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
   if ((inst.status || 'active') === status) return { ok: true, unchanged: true };
   await adminAudit(uid, email, status === 'suspended' ? 'institution-suspended' : 'institution-reactivated', tenantId, why.reason, { before: inst.status || 'active', after: status });
   await ref.update({ status, statusReason: why.reason, statusChangedAt: Timestamp.now() });
@@ -2763,7 +2765,7 @@ exports.adminInstitutionSetStatus = onCall({ memory: '256MiB', timeoutSeconds: 6
 exports.adminInstitutionSetLimits = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const { uid, email } = await requirePlatformAdmin(request); const { tenantId, ref, inst } = await adminTenant(request.data);
   const c = checkLimits((request.data || {}).limits); if (!c.ok) throw new HttpsError('invalid-argument', Object.values(c.errors)[0], { errors: c.errors });
-  const why = checkReason((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  const why = checkReasonOptional((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
   if (inst.type === 'tuition' && c.limits.extraTeachers > 0) throw new HttpsError('invalid-argument', 'Tuition accounts have no extra teachers.', { errors: { extraTeachers: 'Tuition accounts have no extra teachers.' } });
   const version = (inst.entitlementVersion || 1) + 1; const before = inst.limits || {}; const limits = { ...before, ...c.limits };
   await adminAudit(uid, email, 'institution-limits-changed', tenantId, why.reason, { before, after: limits, version });
@@ -2778,7 +2780,7 @@ exports.adminInstitutionSetLimits = onCall({ memory: '256MiB', timeoutSeconds: 6
 // Control 07 (one account): switch individual free-plan features on or off for one account.
 exports.adminInstitutionSetFeatures = onCall({ memory: '256MiB', timeoutSeconds: 60 }, async (request) => {
   const { uid, email } = await requirePlatformAdmin(request); const { tenantId, ref, inst } = await adminTenant(request.data);
-  const why = checkReason((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  const why = checkReasonOptional((request.data || {}).reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
   const features = cleanFeatures(inst.type, (request.data || {}).features); const version = (inst.entitlementVersion || 1) + 1;
   await adminAudit(uid, email, 'institution-features-changed', tenantId, why.reason, { before: inst.features || {}, after: features, version });
   await db.runTransaction(async (tx) => {
@@ -2800,21 +2802,25 @@ exports.adminInstitutionPlanSave = onCall({ memory: '512MiB', timeoutSeconds: 12
   if (!INSTITUTION_TYPES.includes(type)) throw new HttpsError('invalid-argument', 'Choose Tuition or Coaching.');
   const c = checkLimits(data.limits); if (!c.ok) throw new HttpsError('invalid-argument', Object.values(c.errors)[0], { errors: c.errors });
   if (type === 'tuition' && c.limits.extraTeachers > 0) throw new HttpsError('invalid-argument', 'Tuition accounts have no extra teachers.', { errors: { extraTeachers: 'Tuition accounts have no extra teachers.' } });
-  const why = checkReason(data.reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
+  const why = checkReasonOptional(data.reason); if (!why.ok) throw new HttpsError('invalid-argument', why.error);
   const features = cleanFeatures(type, data.features); const ref = db.doc('platformConfig/institutionPlans');
   const prev = await ref.get(); const old = prev.exists ? prev.data()[type] || {} : {}; const version = Math.max(old.version || ENTITLEMENT_VERSION, ENTITLEMENT_VERSION) + 1;
   const limits = { ...FREE_PLANS[type].limits, ...c.limits };
-  await adminAudit(uid, email, 'free-plan-changed', '', why.reason, { type, version, limits, features, applyToExisting: data.applyToExisting === true });
+  await adminAudit(uid, email, 'free-plan-changed', '', why.reason, { type, version, limits, features, appliesToExisting: true });
   await ref.set({ [type]: { version, limits, features, setAt: Timestamp.now(), setBy: uid } }, { merge: true });
-  let applied = 0;
-  if (data.applyToExisting === true) {
-    const snap = await db.collection('institutions').where('type', '==', type).limit(500).get(); let batch = db.batch(); let n = 0;
+  // A change to the free plan reaches every existing account of this type at once, except accounts the administrator gave a custom quota.
+  let applied = 0; let last = null;
+  for (;;) {
+    let q = db.collection('institutions').where('type', '==', type).orderBy('__name__').limit(200); if (last) q = q.startAfter(last);
+    const snap = await q.get(); if (snap.empty) break;
+    let batch = db.batch(); let n = 0;
     for (const d of snap.docs) {
       if (d.data().limitsCustom === true) continue;
       batch.update(d.ref, { limits: { ...(d.data().limits || {}), ...limits }, features, entitlementVersion: version }); batch.set(d.ref.collection('config').doc('entitlements'), { limits, features, version, setAt: Timestamp.now(), setBy: uid }, { merge: true });
-      applied += 1; n += 2; if (n >= 400) { await batch.commit(); batch = db.batch(); n = 0; }
+      applied += 1; n += 1;
     }
     if (n) await batch.commit();
+    last = snap.docs[snap.docs.length - 1]; if (snap.size < 200) break;
   }
   return { ok: true, version, applied };
 });
@@ -3302,4 +3308,17 @@ exports.registerSchool = onCall({ memory: '256MiB', timeoutSeconds: 180 }, async
   if (String(made.v.invitationMethod || '').startsWith('Email')) { welcome = await queueWelcome(made.schoolId, { draftId }); steps.welcomeEmail = welcome.status; }
   await recordJob(draftId, { state: Object.values(steps).includes('failed') ? 'needs-retry' : 'provisioned', steps });
   return { schoolId: made.schoolId, alreadyRegistered: false, ownerEmail: made.ownerEmail, provisioned, counts, welcomeEmail: welcome.status, job: Object.values(steps).includes('failed') ? 'needs-retry' : 'provisioned' };
+});
+
+// ---- Speed gateway (Batch 121) ----
+// Every tuition and coaching screen used to call its own function, and each one went to sleep when unused, so the first click on each took
+// 3 to 5 seconds. This one function stays awake (minInstances: 1) and passes the call on to the same handler, in the same process, with the same
+// sign-in and the same checks. Only tuition, coaching and registration functions can be reached; school and admin functions never can.
+const GATEWAY_NAME = /^(tuition[A-Z]|coaching[A-Z]|institution(?!Api)[A-Z]|resolveMyInstitutions$|acceptTeacherInvite$|registerInstitution$|sendInstitutionVerification$|verifyInstitutionOtp$)/;
+exports.institutionApi = onCall({ memory: '512MiB', timeoutSeconds: 60, minInstances: 1, concurrency: 40 }, async (request) => {
+  const d = request.data || {};
+  const name = typeof d.fn === 'string' ? d.fn : '';
+  const target = GATEWAY_NAME.test(name) ? exports[name] : null;
+  if (!target || typeof target.run !== 'function' || !target.__endpoint || !target.__endpoint.callableTrigger) throw new HttpsError('unimplemented', 'Unknown action.');
+  return target.run({ ...request, data: d.args && typeof d.args === 'object' ? d.args : {} });
 });
