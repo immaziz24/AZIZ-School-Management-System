@@ -2,8 +2,8 @@
 // the restricted screen for a suspended account. The records themselves are read through server functions only.
 import { app } from './firebase-client.mjs';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { mountTuition } from './tuition-ui.mjs?v=tc-12';
-import { mountCoaching, coachingExtras } from './coaching-ui.mjs?v=tc-1';
+import { mountTuition } from './tuition-ui.mjs?v=tc-13';
+import { mountCoaching, coachingExtras } from './coaching-ui.mjs?v=tc-2';
 import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js';
 
 const auth = getAuth(app);
@@ -39,7 +39,8 @@ const CHECKLIST = {
   coaching: ['Create a batch', 'Add teachers', 'Invite teachers', 'Add students', 'Configure fees'],
 };
 const pathType = location.pathname.replace(/^\/|\/$/g, '');
-let current = 'Dashboard';
+// The section is kept in the address (for example #Settings), so refreshing the page stays where you were instead of jumping to the dashboard.
+let current = (() => { try { return decodeURIComponent(location.hash.slice(1).split('/')[0]) || 'Dashboard'; } catch { return 'Dashboard'; } })();
 let list = [];
 let chosen = 0;
 let joining = false;
@@ -108,6 +109,8 @@ function usageCard(label, used, limit) { return h('div', { class: 'card' }, h('s
 function render(mode) {
   const inst = list[chosen];
   const isTeacher = inst.role === 'teacher'; const nav = isTeacher ? NAV.teacher : NAV[inst.type];
+  if (!nav.includes(current)) current = 'Dashboard';
+  try { const seg = decodeURIComponent(location.hash.slice(1).split('/')[0]); if (seg !== current) history.replaceState(null, '', '#' + encodeURIComponent(current)); } catch { /* keep the address */ }
   const layout = h('div', { class: 'layout' });
   const side = h('nav', { class: 'side', 'aria-label': 'Sections' }, nav.map((n) => h('button', { type: 'button', ...(n === current ? { 'aria-current': 'page' } : {}), onclick: () => { current = n; render(); } }, n)));
   const body = h('main', {});

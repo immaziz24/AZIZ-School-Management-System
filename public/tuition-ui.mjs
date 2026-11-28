@@ -1,6 +1,6 @@
 // Tuition and coaching shared screens (Phase 2): dashboard numbers, students, batches, fees, payments, receipts, attendance, reports, settings.
 // Every record is read and written through server functions that check the signed-in owner; this file only draws screens.
-import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-1';
+import { mountSettings, subjectsCard, prefsOf, ALL_CLASSES, ALL_SUBJECTS } from './academic-ui.mjs?v=ac-2';
 const today = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 const money = (p) => '₹' + (Number(p || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: Number(p || 0) % 100 ? 2 : 0, maximumFractionDigits: 2 });
 const rupees = (p) => (Number(p || 0) / 100).toFixed(2).replace(/\.00$/, '');
@@ -9,7 +9,7 @@ const dmy = (s) => (s ? s.split('-').reverse().join('-') : '');
 const monthLabel = (c) => new Date(c + '-01T00:00:00Z').toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const GROUPS = [['All subjects', null], ['Science group', ['Mathematics', 'Science', 'Physics', 'Chemistry', 'Biology', 'Computer Science']],
+const GROUPS = [['All subjects', null], ['Science group', ['Mathematics', 'Science', 'Physical Science', 'Life Science', 'Physics', 'Chemistry', 'Biology', 'Computer Science']],
   ['Arts group', ['English', 'Bengali', 'Hindi', 'History', 'Geography', 'Civics', 'Sanskrit', 'Social Science']], ['Commerce group', ['Accountancy', 'Commerce', 'Economics', 'Mathematics', 'English']]];
 const subjectsOf = (r) => (Array.isArray(r?.subjects) && r.subjects.length ? r.subjects : String(r?.subject || '').split(',').map((x) => x.trim()).filter(Boolean));
 const subjectSummary = (r) => { const l = subjectsOf(r); return l.length > 4 ? l.length + ' subjects' : l.join(', '); };
