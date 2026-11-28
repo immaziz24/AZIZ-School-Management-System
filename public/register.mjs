@@ -12,6 +12,7 @@ const root = document.querySelector('#app');
 const STORE = 'aziz-free-registration';
 const CLASSES = ['Nursery', 'KG 1', 'KG 2', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12', 'College / Other'];
 const SUBJECTS = ['English', 'Bengali', 'Hindi', 'Mathematics', 'Science', 'Social Science', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'Accountancy', 'Commerce', 'Economics', 'Reasoning', 'General Knowledge'];
+const STATES = ['Andaman and Nicobar Islands', 'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chandigarh', 'Chhattisgarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jammu and Kashmir', 'Jharkhand', 'Karnataka', 'Kerala', 'Ladakh', 'Lakshadweep', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Puducherry', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal'].map((x) => [x, x]);
 const MODES = [['offline', 'Offline'], ['online', 'Online'], ['hybrid', 'Hybrid']];
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const PHONE = /^\+?[0-9][0-9 -]{6,17}$/;
@@ -50,8 +51,11 @@ const FIELDS = {
       { key: 'password', label: 'Password', type: 'password', req: true },
     ] },
     { title: 'Centre profile', fields: [
-      { key: 'address', label: 'Complete business address', type: 'text', req: true, min: 10 },
-      { key: 'pin', label: 'PIN code', type: 'text', req: true, pattern: /^[1-9][0-9]{5}$/, msg: 'Enter a six-digit PIN code.' },
+      { key: 'addr1', label: 'Address line 1', type: 'text', req: true, min: 4, max: 90, ac: 'address-line1', help: 'Shop, building or house number and street.' },
+      { key: 'addr2', label: 'Address line 2', type: 'text', max: 60, ac: 'address-line2', help: 'Area, locality or landmark. Optional.' },
+      { key: 'city', label: 'Town / City', type: 'text', req: true, min: 2, max: 40, ac: 'address-level2' },
+      { key: 'state', label: 'State', type: 'select', options: STATES, req: true },
+      { key: 'pin', label: 'PIN code', type: 'text', req: true, ac: 'postal-code', pattern: /^[1-9][0-9]{5}$/, msg: 'Enter a six-digit PIN code.' },
       { key: 'establishmentYear', label: 'Establishment year', type: 'number', help: 'Optional.' },
       { key: 'teacherEstimate', label: 'Number of teachers', type: 'number', help: 'Optional estimate. It does not change your limits.' },
       { key: 'studentEstimate', label: 'Number of students', type: 'number', help: 'Optional estimate. It does not change your limits.' },
@@ -86,6 +90,7 @@ function fieldError(f, v) {
   if (f.key === 'mobile' && !PHONE.test(t)) return 'Enter a mobile number with country code.';
   if (f.key === 'password' && String(t).length < 8) return 'Use at least 8 characters.';
   if (f.min && String(t).length < f.min) return f.label + ' is too short.';
+  if (f.max && String(t).length > f.max) return f.label + ' is too long.';
   if (f.pattern && !f.pattern.test(String(t))) return f.msg || 'Check this value.';
   if (f.type === 'number' && (!Number.isInteger(Number(t)) || Number(t) < 0)) return 'Enter a whole number.';
   return '';
@@ -155,7 +160,7 @@ function fieldEl(f) {
     const toggle = h('button', { type: 'button', class: 'btn', 'aria-label': 'Show or hide the password', onclick: () => { input.type = input.type === 'password' ? 'text' : 'password'; toggle.textContent = input.type === 'password' ? 'Show' : 'Hide'; } }, 'Show');
     return h('div', {}, h('label', { for: id }, f.label, mark), h('div', { class: 'pwrow' }, input, toggle), h('p', { class: 'help' }, 'At least 8 characters. It is kept only by Firebase sign-in, never by AZIZ.'), err);
   }
-  const input = h('input', { type: f.type === 'number' ? 'number' : f.type, id, value: S.values[f.key] ?? '', inputmode: f.type === 'number' ? 'numeric' : undefined, autocomplete: f.key === 'email' ? 'email' : f.key === 'mobile' ? 'tel' : 'off',
+  const input = h('input', { type: f.type === 'number' ? 'number' : f.type, id, value: S.values[f.key] ?? '', inputmode: f.type === 'number' ? 'numeric' : undefined, autocomplete: f.ac || (f.key === 'email' ? 'email' : f.key === 'mobile' ? 'tel' : 'off'), maxlength: f.max || undefined,
     oninput: () => { S.values[f.key] = input.value; } });
   return h('div', {}, h('label', { for: id }, f.label, mark, input), help, err);
 }
@@ -172,6 +177,7 @@ async function next() {
   S.errors = {}; S.note = '';
   for (const f of step.fields) { const m = f.key === 'password' ? fieldError(f, { password: S.password }) : fieldError(f, S.values); if (m) S.errors[f.key] = m; }
   if (Object.keys(S.errors).length) { S.note = 'Please fix the highlighted fields.'; draw(); root.querySelector('.err:not(:empty)')?.scrollIntoView({ block: 'center' }); return; }
+  if (S.type === 'coaching' && S.values.addr1) S.values.address = [S.values.addr1, S.values.addr2, S.values.city, S.values.state].map((x) => String(x || '').trim()).filter(Boolean).join(', ');
   if (S.step < steps.length - 1) { S.step += 1; draw(); return; }
   S.busy = true; draw();
   try { await createAccount(); } catch (error) { S.note = friendly(error); } finally { S.busy = false; }
