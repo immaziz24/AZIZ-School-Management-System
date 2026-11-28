@@ -112,8 +112,8 @@ test('assign teachers to classes: owner-only, class checked, teacher reaches the
 
 test('teacher qualifications and photo are checked', () => {
   const base = { name: 'Rina Das', email: 'rina@example.com', subjects: ['Mathematics'] };
-  const ok = lib.checkTeacher({ ...base, highestQualification: 'M.Sc in Physics', bed: true, deled: 'yes', experienceYears: '6', joiningDate: '2026-04-01', address: 'Kolkata' });
-  assert.equal(ok.ok, true); assert.equal(ok.clean.bed, true); assert.equal(ok.clean.deled, true); assert.equal(ok.clean.med, false); assert.equal(ok.clean.experienceYears, 6); assert.equal(ok.clean.highestQualification, 'M.Sc in Physics');
+  const ok = lib.checkTeacher({ ...base, highestQualification: 'Post Graduate (M.Sc.)', qualificationSubject: 'Physics', bed: true, deled: 'yes', experienceYears: '6', joiningDate: '2026-04-01', address: 'Kolkata' });
+  assert.equal(ok.ok, true); assert.equal(ok.clean.bed, true); assert.equal(ok.clean.deled, true); assert.equal(ok.clean.med, false); assert.equal(ok.clean.experienceYears, 6); assert.equal(ok.clean.highestQualification, 'Post Graduate (M.Sc.)'); assert.equal(ok.clean.qualificationSubject, 'Physics');
   assert.equal(lib.checkTeacher(base).clean.experienceYears, null);
   assert.ok(lib.checkTeacher({ ...base, experienceYears: '99' }).errors.experienceYears); assert.ok(lib.checkTeacher({ ...base, joiningDate: '2026-02-30' }).errors.joiningDate);
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(300)]);

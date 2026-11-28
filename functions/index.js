@@ -1672,7 +1672,7 @@ function checkTeacher(v) {
   if (mobile && !PHONE_OK.test(mobile)) errors.mobile = 'Mobile must be a valid number.'; c.mobile = mobile.slice(0, 20);
   c.subjects = subjectList(v);
   // Qualifications: the highest degree, the teaching training the owner wants on record, and a few plain details.
-  cleanText(v, 'highestQualification', 'Highest qualification', 0, 80, errors, c); cleanText(v, 'otherQualifications', 'Other qualifications', 0, 150, errors, c); cleanText(v, 'address', 'Address', 0, 200, errors, c);
+  cleanText(v, 'highestQualification', 'Highest qualification', 0, 80, errors, c); cleanText(v, 'qualificationSubject', 'Subject of higher education', 0, 80, errors, c); cleanText(v, 'otherQualifications', 'Other qualifications', 0, 150, errors, c); cleanText(v, 'address', 'Address', 0, 200, errors, c);
   for (const k of ['deled', 'bed', 'med', 'tet']) c[k] = v[k] === true || v[k] === 'yes' || v[k] === 'on';
   const exp = v.experienceYears === undefined || v.experienceYears === null ? '' : String(v.experienceYears).trim();
   if (exp === '') c.experienceYears = null; else if (!/^[0-9]{1,2}$/.test(exp) || Number(exp) > 60) { errors.experienceYears = 'Enter the years of experience from 0 to 60.'; c.experienceYears = null; } else c.experienceYears = Number(exp);
@@ -2559,7 +2559,7 @@ exports.coachingTeacherList = onCall({ memory: '256MiB', timeoutSeconds: 30 }, a
   const ctx = await requireCoaching(request, request.data, ['owner'], 'teachers');
   const [t, b] = await Promise.all([ctx.col('teachers').limit(100).get(), ctx.col('batches').where('status', '==', 'active').limit(100).get()]);
   const assigned = {}; b.docs.forEach((d) => (d.data().teacherIds || []).forEach((id) => { (assigned[id] = assigned[id] || []).push({ id: d.id, name: d.data().name }); }));
-  return { items: t.docs.map((d) => ({ id: d.id, name: d.data().name, email: d.data().email, mobile: d.data().mobile, subjects: d.data().subjects || [], classes: d.data().classes || [], notes: d.data().notes || '', highestQualification: d.data().highestQualification || '', otherQualifications: d.data().otherQualifications || '', address: d.data().address || '', deled: d.data().deled === true, bed: d.data().bed === true, med: d.data().med === true, tet: d.data().tet === true, experienceYears: d.data().experienceYears ?? null, joiningDate: d.data().joiningDate || '', hasPhoto: d.data().hasPhoto === true, status: d.data().status, batches: assigned[d.id] || [] })).sort((x, y) => (x.name < y.name ? -1 : 1)) };
+  return { items: t.docs.map((d) => ({ id: d.id, name: d.data().name, email: d.data().email, mobile: d.data().mobile, subjects: d.data().subjects || [], classes: d.data().classes || [], notes: d.data().notes || '', highestQualification: d.data().highestQualification || '', qualificationSubject: d.data().qualificationSubject || '', otherQualifications: d.data().otherQualifications || '', address: d.data().address || '', deled: d.data().deled === true, bed: d.data().bed === true, med: d.data().med === true, tet: d.data().tet === true, experienceYears: d.data().experienceYears ?? null, joiningDate: d.data().joiningDate || '', hasPhoto: d.data().hasPhoto === true, status: d.data().status, batches: assigned[d.id] || [] })).sort((x, y) => (x.name < y.name ? -1 : 1)) };
 });
 
 // Called by a teacher after their email is verified. If the owner invited that email, the account becomes a teacher of that centre.
