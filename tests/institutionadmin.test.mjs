@@ -7,7 +7,7 @@ const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 const src = read('functions/index.js');
 const blocks = ['institution rules', 'tuition rules', 'coaching rules', 'institution admin rules'].map((n) => { const m = src.match(new RegExp('// --- ' + n + ' begin[\\s\\S]*?// --- ' + n + ' end'));
   assert.ok(m, n + ' block missing'); return m[0].replace(/\/\/ --- [a-z ]+ (begin|end)[^\n]*/g, ''); });
-const lib = new Function('HttpsError', 'nodeCrypto', 'FieldValue', blocks.join('\n') + '\n; return { checkLimits, checkReason, cleanFeatures, activityState, summarizeInstitutions, estimateRecords, institutionEntitlements, buildInstitutionRecords, ADMIN_FEATURE_KEYS };')(class extends Error {}, {}, {});
+const lib = new Function('HttpsError', 'nodeCrypto', 'FieldValue', blocks.join('\n') + '\n; return { checkLimits, checkReason, checkReasonOptional, cleanFeatures, activityState, summarizeInstitutions, estimateRecords, institutionEntitlements, buildInstitutionRecords, ADMIN_FEATURE_KEYS };')(class extends Error {}, {}, {});
 const bodyOf = (name) => { const i = src.indexOf('exports.' + name + ' = '); assert.ok(i > 0, name + ' missing'); const j = src.indexOf('\nexports.', i + 10); return src.slice(i, j > 0 ? j : undefined); };
 const ADMIN_CALLS = ['adminInstitutionList', 'adminInstitutionDetail', 'adminInstitutionSetStatus', 'adminInstitutionSetLimits', 'adminInstitutionSetFeatures', 'adminInstitutionPlanGet', 'adminInstitutionPlanSave', 'adminInstitutionSetConversion', 'adminInstitutionCost', 'adminInstitutionPrivateAccess'];
 
@@ -91,7 +91,7 @@ test('free accounts stay out of school revenue: school billing code never reads 
 });
 
 test('the Super Admin page: new menu item, admin-only route, whitelisted module, no innerHTML, no secrets', () => {
-  const html = read('public/admin.html'); assert.match(html, /data-r="institutions" href="#\/institutions"/); assert.match(html, /admin\.mjs\?v=batch-107/);
+  const html = read('public/admin.html'); assert.match(html, /data-r="institutions" href="#\/institutions"/); assert.match(html, /admin\.mjs\?v=batch-\d+/);
   const admin = read('public/admin.mjs'); assert.match(admin, /name === 'institutions'/); assert.doesNotMatch(admin.match(/ROUTE_PERM = [^\n]*/)[0], /institutions/);
   const ui = read('public/institutions-admin.mjs'); assert.doesNotMatch(ui, /innerHTML/); assert.doesNotMatch(ui, /apiKey|secret/i);
   for (const n of [...ADMIN_CALLS.filter((x) => x !== 'adminInstitutionPlanGet'), 'adminInstitutionPlanGet']) assert.ok(ui.includes("'" + n + "'"), n);
@@ -100,4 +100,10 @@ test('the Super Admin page: new menu item, admin-only route, whitelisted module,
 
 test('firestore.rules is untouched by this phase', () => {
   const rules = read('firestore.rules'); for (const w of ['adminInstitution', 'institutionPlans', 'teacherInvites']) assert.doesNotMatch(rules, new RegExp(w));
+});
+
+test('changes need no reason, but one is kept when typed; private records still need one', () => {
+  assert.equal(lib.checkReasonOptional('').ok, true); assert.equal(lib.checkReasonOptional('').reason, 'No reason given'); assert.equal(lib.checkReasonOptional(' Fee help ').reason, 'Fee help'); assert.equal(lib.checkReasonOptional('x'.repeat(301)).ok, false);
+  for (const n of ['adminInstitutionSetStatus', 'adminInstitutionSetLimits', 'adminInstitutionSetFeatures', 'adminInstitutionPlanSave']) assert.match(bodyOf(n), /checkReasonOptional/, n);
+  assert.doesNotMatch(bodyOf('adminInstitutionPrivateAccess'), /checkReasonOptional/); assert.match(bodyOf('adminInstitutionPrivateAccess'), /checkReason\(/);
 });

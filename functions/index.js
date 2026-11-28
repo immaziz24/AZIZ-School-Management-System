@@ -1481,6 +1481,11 @@ function checkInstitution(type, values, nowYear = new Date().getUTCFullYear()) {
   const classes = listOf(v.classes, 20, 40); const subjects = listOf(v.subjects, 25, 40);
   if (!classes.length) errors.classes = 'Choose at least one class.'; clean.classes = classes;
   if (!subjects.length) errors.subjects = 'Choose at least one subject.'; clean.subjects = subjects;
+  // Subjects for each class (set once in Settings; the student form fills them in when a class is chosen). Only chosen classes are kept.
+  const csIn = v.classSubjects && typeof v.classSubjects === 'object' && !Array.isArray(v.classSubjects) ? v.classSubjects : {};
+  const classSubjects = {};
+  for (const c of classes) { if (c === '__proto__' || /^__.*__$/.test(c) || c.includes('/') || !Object.prototype.hasOwnProperty.call(csIn, c)) continue; const l = listOf(csIn[c], 25, 40); if (l.length) classSubjects[c] = l; }
+  clean.classSubjects = classSubjects;
   if (!TEACHING_MODES.includes(v.teachingMode)) errors.teachingMode = 'Choose offline, online or hybrid.'; clean.teachingMode = TEACHING_MODES.includes(v.teachingMode) ? v.teachingMode : '';
   if (v.termsAccepted !== true) errors.termsAccepted = 'Accept the terms and privacy policy to continue.'; clean.termsAccepted = v.termsAccepted === true;
   if (type === 'tuition') {

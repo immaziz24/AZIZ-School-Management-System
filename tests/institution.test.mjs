@@ -120,3 +120,20 @@ test('every page file referenced by the portal and the form exists', () => {
   assert.match(portal, /Account restricted/); assert.match(portal, /resolveMyInstitutions/);
   for (const n of ['Students', 'Batches', 'Fees', 'Attendance', 'Reports', 'Settings', 'Teachers', 'Timetable', 'Examinations', 'Announcements']) assert.ok(portal.includes("'" + n + "'"), n);
 });
+
+test('subjects for each class: only chosen classes are kept, cleaned, and unsafe keys are dropped', () => {
+  const ok = lib.checkInstitution('coaching', { ...coaching, classes: ['Class 8', 'Class 9'], classSubjects: { 'Class 8': ['English', ' Maths ', 'English'], 'Class 9': 'Physics,Chemistry', 'Class 10': ['History'], __proto__x: ['A'] } });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(Object.keys(ok.clean.classSubjects).sort(), ['Class 8', 'Class 9']);
+  assert.deepEqual(ok.clean.classSubjects['Class 9'], ['Physics', 'Chemistry']);
+  assert.ok(ok.clean.classSubjects['Class 8'].includes('Maths'));
+  const bad = lib.checkInstitution('coaching', { ...coaching, classes: ['__x__', 'a/b', 'Class 8'], classSubjects: { '__x__': ['E'], 'a/b': ['E'], 'Class 8': ['E'] } });
+  assert.deepEqual(Object.keys(bad.clean.classSubjects), ['Class 8']);
+  assert.deepEqual(lib.checkInstitution('coaching', coaching).clean.classSubjects, {});
+  assert.deepEqual(lib.checkInstitution('coaching', { ...coaching, classSubjects: 'oops' }).clean.classSubjects, {});
+});
+
+test('the student form fills subjects from the class and Settings has a subjects-for-each-class section', () => {
+  const ui = read('public/tuition-ui.mjs');
+  assert.match(ui, /useClass/); assert.match(ui, /linkClass\(classSel/); assert.match(ui, /Subjects for each class/); assert.match(ui, /values\.classSubjects = kept/);
+});

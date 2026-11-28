@@ -82,14 +82,15 @@ export function mountTuition({ section, inst, call, h, body, go }) {
           'No batches yet. Add your first batch.'));
     };
     const form = (b) => {
+      const classSel = choiceSelect('className', 'classes', b?.className, 'Choose a class');
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.');
         const values = withOther({ name: fd.get('name'), className: fd.get('className'), classNameOther: fd.get('classNameOther'), subjects: [...fd.getAll('subjects[]'), ...String(fd.get('subjectsOther') || '').split(',')].map((x) => x.trim()).filter(Boolean), days: fd.getAll('days'), startTime: fd.get('startTime'), endTime: fd.get('endTime'), fee: fd.get('fee') });
         try { await api('tuitionBatchSave', { batchId: b ? b.id : '', values }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, b ? 'Edit batch' : 'New batch'),
         field('Batch name', inp('name', 'text', b?.name, { maxlength: 60, placeholder: 'Class 10 Maths – Morning' }), 'name'),
-        field('Class', choiceSelect('className', 'classes', b?.className, 'Choose a class'), 'className'), settingsHint('classes or subjects'),
-        subjectPicker(subjectsOf(b), true),
+        field('Class', classSel, 'className'), settingsHint('classes or subjects'),
+        linkClass(classSel, subjectPicker(subjectsOf(b), true)),
         h('fieldset', {}, h('legend', {}, 'Days'), WEEKDAYS.map((d) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'days', value: d, checked: b?.days?.includes(d) ? true : undefined }), d)), h('span', { class: 'ferr', 'data-err': 'days' })),
         h('div', { class: 'two' }, field('Starts', inp('startTime', 'time', b?.startTime), 'startTime'), field('Ends', inp('endTime', 'time', b?.endTime), 'endTime')),
         isCoaching ? field('Monthly fee for this batch (₹, optional)', inp('fee', 'text', b?.feePaise ? rupees(b.feePaise) : '', { inputmode: 'decimal', placeholder: 'For example 1500' }), 'fee') : null,
@@ -113,13 +114,27 @@ export function mountTuition({ section, inst, call, h, body, go }) {
   // Many subjects: tick the boxes, or press a group button to tick a set at once (then change any box). Own subjects can be typed.
   const subjectPicker = (current, required) => {
     const mine = profile.subjects || []; const options = [...new Set([...mine, ...ALL_SUBJECTS, ...current])];
-    const boxes = options.map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'subjects[]', value: o, checked: current.includes(o) ? true : undefined }), o));
-    const wrap = h('fieldset', { 'data-field': 'subjects' }, h('legend', {}, (required ? 'Subjects (tick one or more)' : 'Subjects (optional, tick any)') + (mine.length ? ' · "All my subjects" ticks the subjects saved in your Settings' : '')),
+    const map = profile.classSubjects || {};
+    const box = (o, on) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 'subjects[]', value: o, checked: on ? true : undefined }), o);
+    const main = h('div', { class: 'checks' }, options.map((o) => box(o, current.includes(o))));
+    const restBox = h('div', { class: 'checks' }); const more = h('details', { style: 'display:none' }, h('summary', {}, 'More subjects'), restBox);
+    const note = h('p', { class: 'hint' });
+    const wrap = h('fieldset', { 'data-field': 'subjects' }, h('legend', {}, (required ? 'Subjects (tick one or more)' : 'Subjects (optional, tick any)')), note,
       h('div', { class: 'actions' }, GROUPS.map(([label, list]) => h('button', { type: 'button', onclick: () => wrap.querySelectorAll('input[type=checkbox]').forEach((c) => { c.checked = list === null ? (mine.length ? mine.includes(c.value) : true) : list.includes(c.value); }) }, label === 'All subjects' && mine.length ? 'All my subjects' : label)),
         h('button', { type: 'button', onclick: () => wrap.querySelectorAll('input[type=checkbox]').forEach((c) => { c.checked = false; }) }, 'Clear')),
-      h('div', { class: 'checks' }, boxes), h('input', { type: 'text', name: 'subjectsOther', maxlength: 120, placeholder: 'Other subjects, separated by commas', 'aria-label': 'Other subjects' }), h('span', { class: 'ferr', 'data-err': 'subjects' }));
+      main, more, h('input', { type: 'text', name: 'subjectsOther', maxlength: 120, placeholder: 'Other subjects, separated by commas', 'aria-label': 'Other subjects' }), h('span', { class: 'ferr', 'data-err': 'subjects' }));
+    // Choosing a class fills in the subjects saved for that class in Settings; the rest stay one tap away under "More subjects".
+    wrap.useClass = (cls) => {
+      const list = Object.prototype.hasOwnProperty.call(map, cls) ? map[cls] : null;
+      if (!list || !list.length) { note.textContent = ''; return; }
+      const rest = options.filter((o) => !list.includes(o));
+      main.replaceChildren(...list.map((o) => box(o, true))); restBox.replaceChildren(...rest.map((o) => box(o, false))); more.style.display = rest.length ? '' : 'none';
+      note.textContent = 'Subjects for ' + cls + ' filled in from Settings. Untick any this student does not take.';
+    };
     return wrap;
   };
+  // Links a class dropdown to a subject picker so a class change refreshes the subjects.
+  const linkClass = (classSpan, picker) => { const s = classSpan.querySelector('select'); if (s) s.addEventListener('change', () => picker.useClass(s.value)); return picker; };
   const collectSubjects = (fd, values) => { values.subjects = [...fd.getAll('subjects[]'), ...String(fd.get('subjectsOther') || '').split(',')].map((x) => x.trim()).filter(Boolean); delete values['subjects[]']; delete values.subjectsOther; return values; };
   const withOther = (values) => { for (const k of ['className', 'subject']) { if (values[k] === '__other') values[k] = String(values[k + 'Other'] || '').trim(); delete values[k + 'Other']; } return values; };
   const settingsHint = (what) => h('span', { class: 'hint' }, 'Missing one? Add more ' + what + ' in ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); go('Settings'); } }, 'Settings'), '.');
@@ -169,13 +184,14 @@ export function mountTuition({ section, inst, call, h, body, go }) {
       } catch (e) { out.replaceChildren(h('div', { class: 'actions' }, h('button', { type: 'button', onclick: draw }, '← Back')), h('p', { class: 'err' }, failText(e))); }
     };
     const form = (s) => {
+      const classSel = choiceSelect('className', 'classes', s?.className, 'Choose a class');
       const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
         e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = collectSubjects(fd, withOther(Object.fromEntries(fd.entries())));
         try { await api('tuitionStudentSave', { studentId: s ? s.id : '', values, feeEffectiveFrom: values.feeEffectiveFrom || '' }); batchCache = null; draw(); } catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
         h('h2', {}, s ? 'Edit student' : 'New student'),
-        h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', choiceSelect('className', 'classes', s?.className, 'Choose a class'), 'className')),
+        h('div', { class: 'two' }, field('Student name', inp('name', 'text', s?.name, { maxlength: 80 }), 'name'), field('Class', classSel, 'className')),
         h('div', { class: 'two' }, field('School name (optional)', inp('schoolName', 'text', s?.schoolName, { maxlength: 100 }), 'schoolName'), field('Batch', sel('batchId', bl.map((b) => ({ value: b.id, label: b.name })), s?.batchId || '', 'No batch yet'), 'batchId')),
-        subjectPicker(subjectsOf(s), false),
+        linkClass(classSel, subjectPicker(subjectsOf(s), false)),
         h('div', { class: 'two' }, field('Guardian name', inp('guardianName', 'text', s?.guardianName, { maxlength: 80 }), 'guardianName'), field('Guardian mobile', inp('guardianMobile', 'tel', s?.guardianMobile, { placeholder: '+91 98300 12345' }), 'guardianMobile')),
         h('div', { class: 'two' }, field('Student mobile (optional)', inp('studentMobile', 'tel', s?.studentMobile), 'studentMobile'), h('span')),
         field('Address (optional)', inp('address', 'text', s?.address, { maxlength: 200 }), 'address'),
@@ -337,20 +353,36 @@ export function mountTuition({ section, inst, call, h, body, go }) {
   }
   function settings() {
     const tuition = inst.type === 'tuition';
+    // Subjects for each class: set once here, then the student form fills them in whenever that class is chosen.
+    const cs = {}; for (const [k, v] of Object.entries(profile.classSubjects || {})) cs[k] = [...v];
+    const csBox = h('div', {});
+    const drawCs = () => {
+      const split = (name) => String(f.querySelector('[name="' + name + '"]')?.value || '').split(',').map((x) => x.trim()).filter(Boolean);
+      const classes = [...new Set([...[...f.querySelectorAll('input[name="classes[]"]:checked')].map((i) => i.value), ...split('classes-other')])].slice(0, 20);
+      const subjectsNow = [...f.querySelectorAll('input[name="subjects[]"]:checked')].map((i) => i.value);
+      const opts = [...new Set([...ALL_SUBJECTS, ...subjectsNow, ...split('subjects-other'), ...(profile.subjects || []), ...Object.values(cs).flat()])];
+      csBox.replaceChildren(h('h3', {}, 'Subjects for each class'), h('p', { class: 'hint' }, 'Tick the subjects each class studies. When you add a student and choose the class, these subjects are filled in for you. Change them here any time.'),
+        ...(classes.length ? classes.map((c) => h('fieldset', {}, h('legend', {}, c),
+          h('div', { class: 'checks' }, opts.map((o) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', value: o, checked: (cs[c] || []).includes(o) ? true : undefined, onchange: (e) => { const l = new Set(cs[c] || []); if (e.target.checked) l.add(o); else l.delete(o); cs[c] = [...l]; } }), o))),
+          h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => { for (const k of classes) cs[k] = [...(cs[c] || [])]; drawCs(); } }, 'Copy these to all classes'), h('button', { type: 'button', onclick: () => { cs[c] = []; drawCs(); } }, 'Clear')))) : [h('p', { class: 'hint' }, 'Tick your classes above first.')]));
+    };
     const f = h('form', { class: 'formcard', novalidate: true, onsubmit: async (e) => {
       e.preventDefault(); const fd = new FormData(f); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); const values = Object.fromEntries(fd.entries());
       for (const kind of ['classes', 'subjects']) values[kind] = [...fd.getAll(kind + '[]'), ...String(fd.get(kind + '-other') || '').split(',')].map((x) => x.trim().slice(0, 40)).filter((x, i, a) => x && a.indexOf(x) === i).slice(0, kind === 'classes' ? 20 : 25);
       delete values['classes-other']; delete values['subjects-other'];
+      const kept = {}; for (const c of values.classes) { if (cs[c] && cs[c].length) kept[c] = cs[c].slice(0, 25); }
+      values.classSubjects = kept; values.subjects = [...new Set([...values.subjects, ...Object.values(kept).flat()])].slice(0, 25);
       try { const r = await api('institutionProfileSave', { values }); inst.name = r.name; Object.assign(profile, values); say(msg, 'Saved.', true); }
       catch (er) { showErrors(f, fieldErrors(er)); say(msg, failText(er)); } } },
       h('h2', {}, 'Profile'), h('p', { class: 'hint' }, 'Sign-in email: ' + (profile.email || '')),
       ...(tuition ? [field('Tuition name', inp('tuitionName', 'text', profile.tuitionName), 'tuitionName'), field('Your name', inp('fullName', 'text', profile.fullName), 'fullName'), field('Address or locality', inp('locality', 'text', profile.locality), 'locality')]
         : [field('Centre name', inp('centreName', 'text', profile.centreName), 'centreName'), field('Owner name', inp('ownerName', 'text', profile.ownerName), 'ownerName'), field('Address', inp('address', 'text', profile.address), 'address'), field('PIN code', inp('pin', 'text', profile.pin), 'pin')]),
-      field('Mobile', inp('mobile', 'tel', profile.mobile), 'mobile'), picker('classes', 'Classes you teach', ALL_CLASSES, 'Other classes, separated by commas'), picker('subjects', 'Subjects you teach', ALL_SUBJECTS, 'Other subjects, separated by commas'),
+      field('Mobile', inp('mobile', 'tel', profile.mobile), 'mobile'), picker('classes', 'Classes you teach', ALL_CLASSES, 'Other classes, separated by commas'), picker('subjects', 'Subjects you teach', ALL_SUBJECTS, 'Other subjects, separated by commas'), csBox,
       field('Teaching mode', sel('teachingMode', ['offline', 'online', 'hybrid'], profile.teachingMode), 'teachingMode'),
       h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save profile')),
       h('p', { class: 'hint' }, 'To export or delete your data, write to support@azizschoolmanagementsystem.com from your registered email.'));
-    body.append(f);
+    f.addEventListener('change', (e) => { const n = e.target && e.target.name; if (n === 'classes[]' || n === 'classes-other' || n === 'subjects-other') drawCs(); });
+    drawCs(); body.append(f);
   }
 
   const screens = isTeacher ? { Batches: batches, Attendance: attendance } : { Dashboard: dashboard, Students: () => students(false), Batches: batches, Fees: fees, Attendance: attendance, Reports: reports, Settings: settings };
