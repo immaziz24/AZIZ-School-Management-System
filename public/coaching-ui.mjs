@@ -41,13 +41,13 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
   async function teachers() {
     const box = h('div', {}, loading()); body.append(box); const st = { tab: 'list' };
     const draw = async () => {
-      box.replaceChildren(h('div', { class: 'tabs' }, [['list', 'Teachers'], ['assign', 'Assign to batches']].map(([k, l]) => h('button', { type: 'button', ...(st.tab === k ? { 'aria-current': 'true' } : {}), onclick: () => { st.tab = k; draw(); } }, l))), loading());
-      try { const [t, b] = await Promise.all([api('coachingTeacherList'), batchesFull()]); const out = st.tab === 'list' ? list(t.items) : assign(t.items, b); box.replaceChildren(box.firstChild, out); } catch (e) { box.replaceChildren(h('p', { class: 'err' }, failText(e))); }
+      box.replaceChildren(h('div', { class: 'tabs' }, [['list', 'Teachers'], ['classes', 'Assign to classes'], ['assign', 'Assign to batches']].map(([k, l]) => h('button', { type: 'button', ...(st.tab === k ? { 'aria-current': 'true' } : {}), onclick: () => { st.tab = k; draw(); } }, l))), loading());
+      try { const [t, b] = await Promise.all([api('coachingTeacherList'), batchesFull()]); const out = st.tab === 'list' ? list(t.items) : st.tab === 'classes' ? assignClasses(t.items) : assign(t.items, b); box.replaceChildren(box.firstChild, out); } catch (e) { box.replaceChildren(h('p', { class: 'err' }, failText(e))); }
     };
     const batchesFull = async () => (await api('tuitionBatchList')).items.filter((b) => b.status === 'active');
     const list = (items) => h('div', {}, h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'button', onclick: () => form(null) }, 'Add teacher')),
       h('p', { class: 'hint' }, 'A teacher logs in at azizschoolmanagementsystem.com/coaching with the email you enter here: "Teacher? Create your login".'),
-      table(['Name', 'Email', 'Mobile', 'Subjects', 'Batches', 'Status', ''], items.map((t) => h('tr', {}, h('td', {}, t.name), h('td', {}, t.email), h('td', {}, t.mobile || ''), h('td', {}, t.subjects.length > 4 ? t.subjects.length + ' subjects' : t.subjects.join(', ')), h('td', {}, t.batches.map((x) => x.name).join(', ') || '-'),
+      table(['Name', 'Email', 'Mobile', 'Subjects', 'Classes', 'Batches', 'Status', ''], items.map((t) => h('tr', {}, h('td', {}, t.name), h('td', {}, t.email), h('td', {}, t.mobile || ''), h('td', {}, t.subjects.length > 4 ? t.subjects.length + ' subjects' : t.subjects.join(', ')), h('td', {}, (t.classes || []).join(', ') || '-'), h('td', {}, t.batches.map((x) => x.name).join(', ') || '-'),
         h('td', {}, t.status === 'invited' ? 'Invited' : t.status === 'active' ? 'Active' : 'Switched off'),
         h('td', { class: 'row-actions' }, h('button', { type: 'button', onclick: () => form(t) }, 'Edit'), h('button', { type: 'button', onclick: async () => { try { await api('coachingTeacherStatus', { teacherId: t.id, status: t.status === 'inactive' ? 'active' : 'inactive' }); draw(); } catch (e) { window.alert(failText(e)); } } }, t.status === 'inactive' ? 'Switch on' : t.status === 'invited' ? 'Cancel invite' : 'Switch off')))), 'No teachers yet. Add your first teacher.'));
     const form = (t) => {
@@ -64,6 +64,23 @@ export function mountCoaching({ section, inst, call, h, body, go }) {
         field('Notes (optional)', inp('notes', 'text', t?.notes, { maxlength: 200 }), 'notes'),
         h('p', { class: 'msg err', role: 'alert' }), h('div', { class: 'actions' }, h('button', { class: 'gold', type: 'submit' }, 'Save teacher'), h('button', { type: 'button', onclick: draw }, 'Cancel')));
       box.replaceChildren(f);
+    };
+    const assignClasses = (teachersList) => {
+      const classes = (inst.profile && inst.profile.classes) || []; const usable = teachersList.filter((t) => t.status !== 'inactive');
+      const how = h('details', { class: 'formcard', open: 'open' }, h('summary', {}, h('b', {}, 'How to assign teachers to classes')),
+        h('ol', {}, h('li', {}, 'Add your teachers first in the Teachers tab. A teacher who is switched off cannot be chosen.'),
+          h('li', {}, 'Find the class below, for example Class 7, and tick every teacher who teaches that class.'),
+          h('li', {}, 'Press Save on that class. Each class is saved on its own.'),
+          h('li', {}, 'The teacher now sees every batch of that class, its students and its attendance, and the class shows against their name in the Teachers list.'),
+          h('li', {}, 'To remove a teacher from a class, untick the name and press Save again.')),
+        h('p', { class: 'hint' }, 'You can also assign a teacher to one batch only, using the Assign to batches tab. A teacher sees a batch if either way includes it. Your classes come from Settings → Academic Setup → Classes offered.'));
+      if (!classes.length) return h('div', {}, how, h('p', { class: 'empty' }, 'Choose your classes first in Settings → Academic Setup.'));
+      if (!usable.length) return h('div', {}, how, h('p', { class: 'empty' }, 'Add a teacher first.'));
+      return h('div', {}, how, ...classes.map((cls) => {
+        const f = h('form', { class: 'formcard', onsubmit: async (e) => { e.preventDefault(); const msg = f.querySelector('.msg'); say(msg, 'Saving.'); try { await api('coachingAssignClasses', { className: cls, teacherIds: new FormData(f).getAll('t') }); say(msg, 'Saved.', true); } catch (er) { say(msg, failText(er)); } } },
+          h('h3', {}, cls), h('div', { class: 'checks' }, usable.map((t) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', name: 't', value: t.id, checked: (t.classes || []).includes(cls) ? true : undefined }), t.name))),
+          h('p', { class: 'msg err', role: 'status' }), h('div', { class: 'actions' }, h('button', { type: 'submit' }, 'Save')));
+        return f; }));
     };
     const assign = (teachersList, batchList) => {
       const usable = teachersList.filter((t) => t.status !== 'inactive');
